@@ -39,7 +39,10 @@
         const v = getKey(LS_NOKEYBOARD);
         if (v === 'on')  return true;
         if (v === 'off') return false;
-        return !!(document.body && document.body.classList.contains('sc-tv'));
+        // Default: suppress the on-screen keyboard only when a hardware keyboard
+        // is actually connected (so remote-only TVs keep the on-screen keyboard).
+        try { if (window.CytubeNative && CytubeNative.hasHardwareKeyboard) return !!CytubeNative.hasHardwareKeyboard(); } catch (e) {}
+        return false;
     }
     let _lastKbSuppress = null;
     function applySoftKeyboard() {
@@ -3133,6 +3136,12 @@
                 width: 52px !important; height: 52px !important; font-size: 22px !important;
             }
             body.sc-tv :focus { outline: 3px solid rgba(255,255,255,0.8) !important; }
+            /* D-pad focus highlight (remote navigation) */
+            body.sc-tv .sc-tv-focus {
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(224,112,26,0.32) !important;
+                border-radius: 5px !important;
+            }
 
             /* TV: keep the settings modal inside the overscan-safe area and scrollable */
             body.sc-tv #sc-settings-overlay { padding: 6vh 8vw !important; box-sizing: border-box !important; }
@@ -3760,6 +3769,158 @@
     }
     if (document.readyState === 'complete') initCinematicChat();
     else window.addEventListener('load', initCinematicChat);
+
+    /* ==========================================================
+       TV REMOTE NAVIGATION — D-pad focus/spatial nav.
+       Native forwards remote keys to window.__scTvKey(dir); we move a focus
+       highlight between interactive elements and activate / close on OK / Back.
+    ========================================================== */
+    (function initTvNav() {
+        if (!_isTv) return;
+        let focusEl = null;
+
+        const isVisible = (el) => {
+            if (!el || !el.getBoundingClientRect) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 3 || r.height < 3) return false;
+            if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return false;
+            const cs = getComputedStyle(el);
+            // (opacity intentionally not checked — the left cluster fades in as we navigate)
+            return cs.visibility !== 'hidden' && cs.display !== 'none';
+        };
+
+        // Topmost interactive overlay (poster strip excluded so its toggle stays reachable)
+        const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card'];
+        const openOverlay = () => {
+            for (const id of OVERLAY_IDS) {
+                const o = document.getElementById(id);
+                if (o && isVisible(o) &&
+                    (id !== 'sc-np-card' || o.classList.contains('sc-np-visible')) &&
+                    (id !== 'sc-trivia-card' || o.classList.contains('sc-show'))) return o;
+            }
+            return null;
+        };
+
+        const MAIN_IDS = ['sc-chatmode-btn', 'sc-emote-proxy', 'sc-desync-btn', 'sc-settings-btn',
+            'sc-usercount-btn', 'sc-poll-btn', 'sc-poster-toggle', 'sc-trivia-btn', 'sc-chat-textarea'];
+        const FOCUS_SEL = 'button, a[href], input:not([type=hidden]), textarea, select, [tabindex]';
+
+        const makeFocusable = (el) => {
+            if (!el.hasAttribute('tabindex') && !/^(BUTTON|A|INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) el.tabIndex = -1;
+        };
+
+        function candidates() {
+            const ov = openOverlay();
+            if (ov) {
+                let list = [...ov.querySelectorAll(FOCUS_SEL)].filter(isVisible).filter(e => !e.disabled);
+                if (!list.length) list = [ov]; // a click-to-dismiss overlay (e.g. the now-playing card)
+                return { scope: ov, list };
+            }
+            return { scope: document, list: MAIN_IDS.map(id => document.getElementById(id)).filter(el => el && isVisible(el)) };
+        }
+
+        function setFocus(el) {
+            if (!el) return;
+            makeFocusable(el);
+            if (focusEl && focusEl !== el) focusEl.classList.remove('sc-tv-focus');
+            focusEl = el;
+            el.classList.add('sc-tv-focus');
+            try { el.focus({ preventScroll: true }); } catch (e) {}
+            try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
+        }
+
+        function move(dir) {
+            // Range slider: left/right adjusts the value instead of moving focus
+            if (focusEl && focusEl.type === 'range' && (dir === 'left' || dir === 'right')) {
+                const step = parseFloat(focusEl.step) || 1;
+                const min = focusEl.min !== '' ? parseFloat(focusEl.min) : -Infinity;
+                const max = focusEl.max !== '' ? parseFloat(focusEl.max) : Infinity;
+                let v = (parseFloat(focusEl.value) || 0) + (dir === 'right' ? step : -step);
+                focusEl.value = Math.max(min, Math.min(max, v));
+                focusEl.dispatchEvent(new Event('input', { bubbles: true }));
+                return;
+            }
+            const { scope, list } = candidates();
+            if (!list.length) return;
+            if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) { setFocus(list[0]); return; }
+
+            const cur = focusEl.getBoundingClientRect();
+            const cx = cur.left + cur.width / 2, cy = cur.top + cur.height / 2;
+            let best = null, bestScore = Infinity;
+            for (const el of list) {
+                if (el === focusEl) continue;
+                const r = el.getBoundingClientRect();
+                const dx = (r.left + r.width / 2) - cx, dy = (r.top + r.height / 2) - cy;
+                let primary, perp;
+                if (dir === 'left')       { if (dx > -4) continue; primary = -dx; perp = Math.abs(dy); }
+                else if (dir === 'right') { if (dx < 4)  continue; primary = dx;  perp = Math.abs(dy); }
+                else if (dir === 'up')    { if (dy > -4) continue; primary = -dy; perp = Math.abs(dx); }
+                else                      { if (dy < 4)  continue; primary = dy;  perp = Math.abs(dx); }
+                const score = primary + perp * 2;
+                if (score < bestScore) { bestScore = score; best = el; }
+            }
+            if (best) { setFocus(best); return; }
+            // No neighbour that way — scroll a scrollable region if we're in one
+            if (dir === 'up' || dir === 'down') {
+                const sc = (scope.querySelector && scope.querySelector('#sc-trivia-list, #sc-settings-modal, #messagebuffer')) ||
+                           document.getElementById('messagebuffer');
+                if (sc && sc.scrollHeight > sc.clientHeight) sc.scrollTop += (dir === 'down' ? 140 : -140);
+            }
+        }
+
+        function activate() {
+            if (!focusEl) { move('right'); return; }
+            if (focusEl.tagName === 'TEXTAREA' || focusEl.tagName === 'INPUT') {
+                if (focusEl.type === 'checkbox' || focusEl.type === 'range') focusEl.click();
+                else { try { focusEl.focus(); } catch (e) {} } // let the on-screen keyboard open (if not suppressed)
+                return;
+            }
+            focusEl.click();
+        }
+
+        function closeTop() {
+            const settings = document.getElementById('sc-settings-overlay');
+            if (settings && isVisible(settings)) {
+                const c = document.getElementById('sc-settings-cancel');
+                if (c) c.click(); else settings.remove();
+                focusEl = null; return true;
+            }
+            const modal = document.getElementById('sc-modal-overlay');
+            if (modal && isVisible(modal)) { (document.getElementById('sc-btn-cancel') || { click() { modal.remove(); } }).click(); focusEl = null; return true; }
+            const trivia = document.getElementById('sc-trivia-card');
+            if (trivia && trivia.classList.contains('sc-show')) { hideTriviaCard(); focusEl = null; return true; }
+            const np = document.getElementById('sc-np-card');
+            if (np && np.classList.contains('sc-np-visible')) { hideNowPlayingCard(); focusEl = null; return true; }
+            for (const id of ['sc-users-panel', 'sc-poll-panel']) {
+                const p = document.getElementById(id);
+                if (p && isVisible(p)) { p.style.display = 'none'; focusEl = null; return true; }
+            }
+            const poster = document.getElementById('sc-poster-strip');
+            if (poster && poster.classList.contains('sc-poster-visible')) {
+                const t = document.getElementById('sc-poster-toggle'); if (t) t.click(); else poster.classList.remove('sc-poster-visible');
+                focusEl = null; return true;
+            }
+            return false;
+        }
+
+        function revealChrome() {
+            document.body.classList.add('sc-leftzone');
+            document.body.classList.remove('sc-chrome-hidden');
+            if (typeof _topBarWake === 'function') _topBarWake();
+        }
+
+        window.__scTvKey = function (dir) {
+            try {
+                if (dir === 'back') {
+                    if (!closeTop()) { try { if (window.CytubeNative && CytubeNative.tvBack) CytubeNative.tvBack(); } catch (e) {} }
+                    return;
+                }
+                revealChrome();
+                if (dir === 'center') activate();
+                else move(dir);
+            } catch (e) { /* never let remote nav throw */ }
+        };
+    })();
 
     // Hide the native loading overlay (the Grindhouse splash).
     function _scSignalReady() {

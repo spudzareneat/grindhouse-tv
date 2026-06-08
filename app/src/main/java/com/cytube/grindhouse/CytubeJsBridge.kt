@@ -26,6 +26,13 @@ class CytubeJsBridge(
     @JavascriptInterface
     fun isTv(): Boolean = activity.isTvDevice()
 
+    /** Back pressed with nothing to close in-page → background the app. */
+    @JavascriptInterface
+    fun tvBack() { activity.tvBackground() }
+
+    @JavascriptInterface
+    fun hasHardwareKeyboard(): Boolean = activity.hasHardwareKeyboard()
+
     /** Suppress/allow the on-screen keyboard (physical keyboard keeps working). */
     @JavascriptInterface
     fun setSuppressKeyboard(on: Boolean) {

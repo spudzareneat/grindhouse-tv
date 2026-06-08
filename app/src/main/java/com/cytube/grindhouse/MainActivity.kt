@@ -20,6 +20,7 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -111,6 +112,39 @@ class MainActivity : AppCompatActivity() {
         webView.evaluateJavascript(code, null)
     }
 
+    /** Back with no overlay open → background the app (Netflix-style), don't exit hard. */
+    fun tvBackground() {
+        runOnUiThread { moveTaskToBack(true) }
+    }
+
+    // On TV, capture the remote's D-pad / OK / Back and drive the in-page focus
+    // navigation in JS. Skipped while the on-screen keyboard is up (so it can be
+    // navigated normally) and on non-TV devices.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (isTv && event.action == KeyEvent.ACTION_DOWN && ::webView.isInitialized) {
+            val imeUp = ViewCompat.getRootWindowInsets(webView)
+                ?.isVisible(WindowInsetsCompat.Type.ime()) ?: false
+            if (!imeUp) {
+                val dir = when (event.keyCode) {
+                    KeyEvent.KEYCODE_DPAD_UP -> "up"
+                    KeyEvent.KEYCODE_DPAD_DOWN -> "down"
+                    KeyEvent.KEYCODE_DPAD_LEFT -> "left"
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> "right"
+                    KeyEvent.KEYCODE_DPAD_CENTER,
+                    KeyEvent.KEYCODE_ENTER,
+                    KeyEvent.KEYCODE_NUMPAD_ENTER -> "center"
+                    KeyEvent.KEYCODE_BACK -> "back"
+                    else -> null
+                }
+                if (dir != null) {
+                    webView.evaluateJavascript("window.__scTvKey && window.__scTvKey('$dir')", null)
+                    return true
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     /** Toggle on-screen keyboard suppression (physical keyboard still works). */
     fun setKeyboardSuppressed(on: Boolean) {
         webView.suppressIme = on
@@ -186,6 +220,10 @@ class MainActivity : AppCompatActivity() {
 
     /** Authoritative TV check, exposed to the injected JS via the bridge. */
     fun isTvDevice(): Boolean = isTv
+
+    /** True when a physical keyboard is connected (drives the soft-keyboard default). */
+    fun hasHardwareKeyboard(): Boolean =
+        resources.configuration.keyboard != Configuration.KEYBOARD_NOKEYS
 
     fun enterPip() {
         if (isTv) return
