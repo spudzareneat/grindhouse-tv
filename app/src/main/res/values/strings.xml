@@ -1,0 +1,4 @@
+<resources>
+    <!-- app_name is defined per build type in app/build.gradle.kts
+         (resValue): "Grindhouse" for release, "Grindhouse Dev" for debug. -->
+</resources>
