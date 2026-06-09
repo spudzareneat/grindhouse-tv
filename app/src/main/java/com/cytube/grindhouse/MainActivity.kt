@@ -227,6 +227,9 @@ class MainActivity : AppCompatActivity() {
 
     fun enterPip() {
         if (isTv) return
+        // Switch to a video-only layout BEFORE the window is captured, so PiP shows
+        // just the movie (full-bleed) instead of the whole UI with black margins.
+        evalJs("document.body && document.body.classList.add('sc-pip')")
         val params = PictureInPictureParams.Builder()
             .setAspectRatio(Rational(16, 9))
             .build()
@@ -239,10 +242,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPictureInPictureModeChanged(isInPipMode: Boolean, newConfig: Configuration) {
         super.onPictureInPictureModeChanged(isInPipMode, newConfig)
-        val js = if (isInPipMode)
-            "document.getElementById('chatwrap')?.style.setProperty('display','none','important')"
-        else
-            "document.getElementById('chatwrap')?.style.removeProperty('display')"
-        webView.evaluateJavascript(js, null)
+        // Keep the full-bleed video while in PiP; restore the full UI when expanded.
+        evalJs("document.body && document.body.classList.toggle('sc-pip', $isInPipMode)")
+        if (!isInPipMode) {
+            // Don't pop the info card just because we came back from PiP.
+            evalJs("var c=document.getElementById('sc-np-card'); if(c)c.classList.remove('sc-np-visible');")
+        }
     }
 }

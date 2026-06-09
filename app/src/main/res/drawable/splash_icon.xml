@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Invisible splash icon: a solid square in the splash background colour, so the
+     native SplashScreen shows just the crimson screen (no default green robot)
+     before the full-screen loading poster overlay takes over. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/grindhouse_dark" />
+</shape>

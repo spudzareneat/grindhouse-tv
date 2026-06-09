@@ -1048,14 +1048,26 @@
             // first card; only auto-announce SUBSEQUENT films mid-session.
             _npData = movieData;
             if (_npCardEnabled() && _introDone) showNowPlayingCard(movieData, { autoHide: true });
-            // Update the title element with the clean TMDB title if available
+            // Update the title element with the clean TMDB title, wrapped in a
+            // dedicated clickable span so ONLY the title (not the rest of the
+            // header) opens the now-playing card.
             if (cleanTitle && titleEl) {
-                // No prefix — "Currently Playing:" label is hidden via CSS
                 const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : '');
-                // Only replace the text node, not the child elements (links etc.)
-                const textNode = [...titleEl.childNodes].find(n => n.nodeType === 3 && n.textContent.trim());
-                if (textNode) textNode.textContent = newText;
-                else titleEl.firstChild && (titleEl.firstChild.textContent = newText);
+                let span = titleEl.querySelector(':scope > #sc-title-text') || document.getElementById('sc-title-text');
+                if (!span) {
+                    span = document.createElement('span');
+                    span.id = 'sc-title-text';
+                    span.style.cursor = 'pointer';
+                    span.title = 'Movie info';
+                    span.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        if (_npData) showNowPlayingCard(_npData, { autoHide: false });
+                    });
+                    const textNode = [...titleEl.childNodes].find(n => n.nodeType === 3 && n.textContent.trim());
+                    if (textNode) textNode.parentNode.replaceChild(span, textNode);
+                    else titleEl.insertBefore(span, titleEl.firstChild);
+                }
+                span.textContent = newText;
             }
             // ── Icon links row (skipped entirely when links are disabled) ──────
             const currentRow = document.getElementById('sc-movie-links');
@@ -1155,10 +1167,17 @@
             setTimeout(initMediaWatcher, 600);
             return;
         }
+        let _lastMediaKey = '';
         socket.on('changeMedia', (data) => {
             try {
                 currentMediaSeconds = (data && typeof data.seconds === 'number') ? data.seconds : 0;
                 currentMediaType    = (data && data.type) ? data.type : '';
+                // Only treat this as a NEW film when the media actually changed —
+                // CyTube re-emits changeMedia on reconnect/resume (e.g. coming back
+                // from PiP), which must not re-trigger the lookup/announcement card.
+                const key = (data && (data.id || '')) + '|' + (data && (data.title || ''));
+                if (key === _lastMediaKey) return;
+                _lastMediaKey = key;
                 lastMovieTitle = '';                 // force a fresh lookup
                 setTimeout(triggerTitleInject, 350); // let the title DOM settle first
             } catch (e) {}
@@ -1334,11 +1353,7 @@
         const bindTitle = () => {
             const h = document.getElementById('videowrap-header');
             if (!h) return;
-            if (!h._scNpBound) {
-                h._scNpBound = true;
-                h.style.cursor = 'pointer';
-                h.addEventListener('click', () => { if (_npData) showNowPlayingCard(_npData, { autoHide: false }); });
-            }
+            // (The card opens from the title text itself — see #sc-title-text in injectMovieLinks.)
             // Small "Trivia" button next to the title (only once we have a movie with IMDb id)
             if (_npData && _npData.imdbId && !document.getElementById('sc-trivia-btn')) {
                 const btn = document.createElement('button');
@@ -1621,6 +1636,17 @@
                 wake();
             }
         });
+
+        // When the bar is faded, the first tap/click on it only wakes it — it does
+        // NOT trigger the title/trivia/links/coming-attractions. A second tap acts.
+        const HEADER_SEL = '#videowrap-header, #sc-top-bar, #sc-title-text, #sc-movie-links, #sc-trivia-btn, #sc-poster-toggle';
+        document.addEventListener('click', (e) => {
+            if (!bar.classList.contains('sc-bar-dim')) return;   // not faded → normal behaviour
+            if (!e.target.closest(HEADER_SEL)) return;           // tap wasn't on the header
+            e.preventDefault();
+            e.stopPropagation();
+            wake();
+        }, true); // capture phase: intercept before the element's own handler
     }
 
     function initPosterStrip() {
@@ -2149,8 +2175,7 @@
                 width: calc(19vw - 5px) !important; height: 28px !important;
                 z-index: 10003 !important;
                 background: rgba(0,0,0,0.7) !important;
-                border: 1px solid #3a3a3a !important;
-                border-bottom: none !important;   /* flow seamlessly into the chat panel */
+                border: none !important;
                 display: flex !important;
                 align-items: center !important;
                 justify-content: space-between !important;
@@ -2158,11 +2183,10 @@
                 box-sizing: border-box !important;
             }
             body.sc-vertical #sc-chat-header {
-                left: 5px !important;
-                right: 5px !important;
-                width: auto !important;
-                bottom: calc(42vh - 20px) !important;
-                top: auto !important;
+                left: 0 !important; right: 0 !important; width: auto !important;
+                bottom: calc(40vh - 40px) !important; top: auto !important;
+                height: 40px !important;
+                justify-content: flex-start !important; align-items: center !important; gap: 8px !important;
             }
             #sc-usercount-btn, #sc-poll-btn {
                 background: transparent !important;
@@ -2244,7 +2268,7 @@
             }
             #sc-poster-toggle.sc-bar-dim {
                 opacity: 0 !important;
-                pointer-events: none !important;
+                /* stays tap-targetable so the first tap can wake the bar, not act */
             }
             #sc-poster-toggle:hover { color: rgba(255,255,255,0.9) !important; }
             #sc-poster-toggle.sc-poster-toggle-active {
@@ -2577,7 +2601,7 @@
                 z-index: 9999 !important; background: rgba(0,0,0,0.7) !important;
                 overflow: hidden !important; padding: 0 !important; margin: 0 !important;
                 box-sizing: border-box !important;
-                border: 1px solid #3a3a3a !important; border-top: none !important;  /* match the header */
+                border: none !important;
                 display: flex !important; flex-direction: column !important;
             }
             /* One consistent 8px inset for everything in the chat column, so the
@@ -2646,6 +2670,13 @@
             }
 
             /* ===== SHARED CHAT ELEMENTS ===== */
+            /* No borders anywhere in the chat column except the message input box */
+            #chatwrap, #chatwrap *:not(#sc-chat-textarea),
+            #sc-chat-header, #sc-chat-header * {
+                border: none !important; box-shadow: none !important;
+            }
+            /* Vertical: header band shares the chat's background so there's no seam */
+            body.sc-vertical #sc-chat-header { background: rgba(0,0,0,0.85) !important; }
             #messagebuffer {
                 flex: 1 !important; height: auto !important;
                 width: 100% !important; box-sizing: border-box !important;
@@ -3013,9 +3044,9 @@
             /* App is always fullscreen — the toggle is redundant */
             #fs-toggle-btn { display: none !important; }
 
-            /* 44px touch / focus targets on all devices */
+            /* Compact control icons on phones (TV scales these up to 52px below) */
             #sc-desync-btn, #sc-emote-proxy, #sc-settings-btn {
-                width: 44px !important; height: 44px !important; font-size: 18px !important;
+                width: 36px !important; height: 36px !important; font-size: 15px !important;
                 -webkit-tap-highlight-color: transparent !important;
             }
             /* Prevent input zoom on mobile */
@@ -3026,15 +3057,20 @@
             body.sc-vertical #videowrap,
             body.sc-vertical #videowrap .embed-responsive,
             body.sc-vertical #ytapiplayer    { height: 60vh !important; }
-            body.sc-vertical #chatwrap       { height: calc(37vh - 28px) !important; }
-            body.sc-vertical #sc-chat-header { bottom: calc(37vh - 20px) !important; }
-            body.sc-vertical #sc-users-panel { bottom: calc(37vh) !important; }
-            body.sc-vertical #sc-poll-panel  { bottom: calc(37vh + 42px) !important; }
-            body.sc-vertical .video-js .vjs-control-bar { bottom: calc(40vh + 4px) !important; right: 80px !important; }
-            body.sc-vertical #sc-desync-btn   { bottom: calc(40vh + 2px) !important; right: 8px !important; }
-            body.sc-vertical #sc-emote-proxy  { bottom: calc(40vh + 2px) !important; right: 52px !important; }
-            body.sc-vertical #fs-toggle-btn   { bottom: calc(40vh + 2px) !important; right: 96px !important; }
-            body.sc-vertical #sc-settings-btn { bottom: calc(40vh + 2px) !important; right: 140px !important; }
+            body.sc-vertical #chatwrap       { height: calc(40vh - 40px) !important; }
+            body.sc-vertical #sc-users-panel { bottom: 40vh !important; }
+            body.sc-vertical #sc-poll-panel  { bottom: 40vh !important; }
+            /* Vertical: a single full-width control band flush under the video —
+               user count / poll on the left, control icons on the right, chat below. */
+            body.sc-vertical #sc-chatmode-btn {
+                bottom: calc(40vh - 38px) !important; right: 6px !important;
+                top: auto !important; left: auto !important; transform: none !important;
+                opacity: 1 !important; pointer-events: auto !important;
+            }
+            body.sc-vertical #sc-emote-proxy  { bottom: calc(40vh - 38px) !important; right: 48px !important; left: auto !important; }
+            body.sc-vertical #sc-desync-btn   { bottom: calc(40vh - 38px) !important; right: 90px !important; left: auto !important; }
+            body.sc-vertical #sc-settings-btn { bottom: calc(40vh - 38px) !important; right: 132px !important; left: auto !important; }
+            body.sc-vertical .video-js .vjs-control-bar { bottom: calc(40vh + 4px) !important; left: 4px !important; right: 4px !important; }
 
             /* ── KEYBOARD OPEN (sc-kb-open) ──────────────────── */
             /* edge-to-edge mode breaks adjustResize — vh never updates,
@@ -3050,9 +3086,9 @@
             }
             /* ── VERTICAL keyboard open ─────────────────────── */
             /* Hide floating buttons while typing */
+            body.sc-kb-open.sc-vertical #sc-chatmode-btn,
             body.sc-kb-open.sc-vertical #sc-desync-btn,
             body.sc-kb-open.sc-vertical #sc-emote-proxy,
-            body.sc-kb-open.sc-vertical #fs-toggle-btn,
             body.sc-kb-open.sc-vertical #sc-settings-btn,
             body.sc-kb-open #sc-top-bar,
             body.sc-kb-open #sc-chat-header {
@@ -3262,8 +3298,8 @@
                 -webkit-tap-highlight-color: transparent !important;
             }
             #sc-trivia-btn:hover { color: rgba(255,255,255,0.9) !important; }
-            #sc-trivia-btn.sc-bar-dim { opacity: 0 !important; pointer-events: none !important; }
-            body.sc-vertical #sc-trivia-btn { right: 92px !important; }
+            #sc-trivia-btn.sc-bar-dim { opacity: 0 !important; }
+            body.sc-vertical #sc-trivia-btn { right: 150px !important; }
             body.sc-tv #sc-trivia-btn { font-size: 12px !important; }
 
             #sc-trivia-card {
@@ -3327,6 +3363,32 @@
                 transition: box-shadow 1.6s ease !important;
             }
             body.sc-ambient-off #sc-ambient { display: none !important; }
+            /* Ambient glow is a TV-only cinematic touch — no edge glow on phones */
+            body:not(.sc-tv) #sc-ambient { display: none !important; }
+
+            /* ── PICTURE-IN-PICTURE: show ONLY the video, full-bleed ──────────────
+               html-prefixed so these win over the body.sc-vertical / .sc-horizontal
+               layout rules (which otherwise tie on specificity and come later). */
+            html body.sc-pip #videowrap,
+            html body.sc-pip #videowrap .embed-responsive,
+            html body.sc-pip #ytapiplayer,
+            html body.sc-pip #ytapiplayer iframe,
+            html body.sc-pip .video-js,
+            html body.sc-pip .vjs-tech {
+                position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+                width: 100vw !important; height: 100vh !important; z-index: 2147483647 !important;
+                margin: 0 !important; background: #000 !important;
+            }
+            html body.sc-pip #chatwrap, html body.sc-pip #sc-chat-header, html body.sc-pip #sc-ambient,
+            html body.sc-pip #sc-top-bar, html body.sc-pip #videowrap-header, html body.sc-pip #sc-movie-links,
+            html body.sc-pip #sc-movie-stats, html body.sc-pip #sc-poster-toggle, html body.sc-pip #sc-poster-strip,
+            html body.sc-pip #sc-trivia-btn, html body.sc-pip #sc-chatmode-btn, html body.sc-pip #sc-cluster-grip,
+            html body.sc-pip #sc-emote-proxy, html body.sc-pip #sc-desync-btn, html body.sc-pip #sc-settings-btn,
+            html body.sc-pip #sc-users-panel, html body.sc-pip #sc-poll-panel,
+            html body.sc-pip #sc-np-card, html body.sc-pip #sc-trivia-card,
+            html body.sc-pip #sc-mobile-input-row, html body.sc-pip .video-js .vjs-control-bar {
+                display: none !important;
+            }
 
             /* ── AUTO-HIDING CHROME (TV) ─────────────────────── */
             body.sc-tv .video-js .vjs-control-bar { transition: opacity 0.6s ease !important; }
@@ -3423,11 +3485,11 @@
                 position: fixed !important;
                 left: 10px !important; top: calc(50% - 60px) !important;
                 z-index: 20050 !important;
-                width: 44px !important; height: 44px !important; border-radius: 50% !important;
+                width: 36px !important; height: 36px !important; border-radius: 50% !important;
                 background: rgba(0,0,0,0.6) !important;
                 border: 1px solid rgba(255,255,255,0.25) !important;
                 color: rgba(255,255,255,0.9) !important; cursor: pointer !important;
-                font-size: 18px !important; line-height: 1 !important;
+                font-size: 15px !important; line-height: 1 !important;
                 display: flex !important; align-items: center !important; justify-content: center !important;
                 transition: opacity 0.6s ease, background 0.2s ease !important;
                 -webkit-tap-highlight-color: transparent !important;
