@@ -51,6 +51,10 @@ class CytubeJsBridge(
         activity.runOnUiThread { activity.openExternalUrl(url) }
     }
 
+    /** Base URL of the localhost Drive media proxy — JS rewrites Drive stream URLs onto this. */
+    @JavascriptInterface
+    fun gdProxyBase(): String = activity.gdProxyBase()
+
     /**
      * Native HTTP GET — bypasses WebView CORS so the script can validate API keys
      * (and reach APIs like DoesTheDogDie that don't send CORS headers).

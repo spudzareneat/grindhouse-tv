@@ -830,12 +830,26 @@
                             18:'video/mp4', 22:'video/mp4', 37:'video/mp4', 59:'video/mp4',
                             35:'video/flv', 34:'video/flv' };
 
+        // Route each stream through the native localhost media proxy (http://127.0.0.1:<port>/gd?u=…)
+        // so the WebView can SEEK against a real HTTP server — shouldInterceptRequest can only stream
+        // linearly, which left CyTube's sync-seek stuck on a spinner. 127.0.0.1 is a secure context,
+        // so this isn't mixed-content-blocked on the https page.
+        let _gdProxyBase = '';
+        try {
+            if (window.CytubeNative && typeof CytubeNative.gdProxyBase === 'function') {
+                _gdProxyBase = CytubeNative.gdProxyBase();
+            }
+        } catch (e) {}
+        function viaProxy(link) {
+            return _gdProxyBase ? (_gdProxyBase + encodeURIComponent(link)) : link;
+        }
+
         function mapLinks(links) {
             const videos = { 1080:[], 720:[], 480:[], 360:[] };
             Object.keys(links).forEach(function (itag) {
                 itag = parseInt(itag, 10);
                 if (!ITAG_QMAP.hasOwnProperty(itag)) return;
-                videos[ITAG_QMAP[itag]].push({ itag: itag, contentType: ITAG_CMAP[itag], link: links[itag] });
+                videos[ITAG_QMAP[itag]].push({ itag: itag, contentType: ITAG_CMAP[itag], link: viaProxy(links[itag]) });
             });
             return videos;
         }

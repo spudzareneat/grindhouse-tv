@@ -54,6 +54,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: NoImeWebView
     private var webViewUa: String = ""           // browser UA, reused for native Drive stream fetches
+    private var mediaProxy: LocalMediaProxy? = null  // localhost server that proxies Drive streams
     private lateinit var fullscreenContainer: FrameLayout
     private lateinit var prefs: SharedPreferences
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
@@ -107,6 +108,8 @@ class MainActivity : AppCompatActivity() {
         startLoadingPulse()
 
         setupWebView()
+        // Start the localhost Drive media proxy (setupWebView has populated webViewUa by now).
+        mediaProxy = LocalMediaProxy(webViewUa).also { it.start() }
         webView.loadUrl("https://cytu.be/r/420Grindhouse")
 
         // Safety net: never leave the loading overlay up forever (JS hides it once the
@@ -142,6 +145,9 @@ class MainActivity : AppCompatActivity() {
     fun evalJs(code: String) {
         webView.evaluateJavascript(code, null)
     }
+
+    /** Base URL of the localhost Drive media proxy; the injected JS rewrites stream URLs onto it. */
+    fun gdProxyBase(): String = "http://127.0.0.1:${mediaProxy?.port ?: 0}/gd?u="
 
     /**
      * Open a URL in an external web BROWSER (not the WebView, not another app). Used for DRM
@@ -254,21 +260,9 @@ class MainActivity : AppCompatActivity() {
                 pageLoaded = true
                 injectScript()
             }
-
-            // Google Drive video streams (the `videoplayback` URLs from get_video_info)
-            // won't play when fetched by Chromium's media stack, even though the bytes are
-            // reachable from this device's IP. Proxy them through a plain HttpURLConnection
-            // (same device IP, normalized headers) and stream the result back to the WebView.
-            override fun shouldInterceptRequest(
-                view: WebView,
-                request: android.webkit.WebResourceRequest
-            ): android.webkit.WebResourceResponse? {
-                val url = request.url.toString()
-                if (request.method == "GET" && url.contains("/videoplayback")) {
-                    return proxyDriveStream(url, request.requestHeaders)
-                }
-                return null
-            }
+            // Drive streams are no longer intercepted here — the injected JS points them at the
+            // localhost LocalMediaProxy instead, so the WebView can SEEK against a real HTTP server
+            // (shouldInterceptRequest can only stream linearly, which broke CyTube's sync-seek).
         }
 
         webView.webChromeClient = object : WebChromeClient() {
@@ -305,77 +299,6 @@ class MainActivity : AppCompatActivity() {
     private fun injectScript() {
         val script = assets.open("cytube_mobile.js").bufferedReader().readText()
         webView.evaluateJavascript(script, null)
-    }
-
-    /**
-     * Fetch a Google Drive `videoplayback` stream natively and hand the live stream to the
-     * WebView. Called on the WebView's background thread (shouldInterceptRequest), so blocking
-     * I/O is fine. We forward the Range header (so seeking works) and add permissive CORS
-     * headers. The connection is intentionally NOT disconnected — the WebView reads the
-     * InputStream until EOF, then closes it.
-     */
-    private fun proxyDriveStream(
-        url: String,
-        reqHeaders: Map<String, String>
-    ): android.webkit.WebResourceResponse? {
-        // Chromium's media requests send an open-ended "Range: bytes=0-", which Google may answer
-        // with a 302 to a signed CDN host. We follow redirects MANUALLY, re-attaching Range + the
-        // browser UA on every hop (and no cookies — get_video_info's DRIVE_STREAM/NID cookies cause
-        // a 403 on videoplayback).
-        val range = reqHeaders["Range"] ?: "bytes=0-"
-        // ALWAYS use the stripped browser UA. The WebView's own media-request User-Agent still
-        // carries the "wv"/"Version/4.0" markers, which Google's videoplayback 403s; the default
-        // Dalvik UA is rejected too. Only the clean Chrome UA gets the 302→206 success path.
-        val ua = webViewUa
-        var current = url
-        var hops = 0
-        return try {
-            while (true) {
-                val conn = (java.net.URL(current).openConnection() as java.net.HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    instanceFollowRedirects = false
-                    connectTimeout = 15000
-                    readTimeout = 20000
-                    setRequestProperty("Range", range)
-                    ua?.let { setRequestProperty("User-Agent", it) }
-                }
-                val code = conn.responseCode
-                if (code in 300..399 && hops < 6) {
-                    val loc = conn.getHeaderField("Location")
-                    conn.disconnect()
-                    if (loc.isNullOrEmpty()) {
-                        if (BuildConfig.DEBUG) android.util.Log.d("GrindhouseWeb", "[DriveProxy] $code with no Location")
-                        return null
-                    }
-                    current = java.net.URL(java.net.URL(current), loc).toString()
-                    hops++
-                    continue
-                }
-
-                if (BuildConfig.DEBUG) {
-                    android.util.Log.d("GrindhouseWeb",
-                        "[DriveProxy] final $code after $hops hop(s), host=${java.net.URL(current).host}")
-                }
-
-                val mime = conn.contentType?.substringBefore(';')?.trim()
-                    ?.takeIf { it.isNotEmpty() } ?: "video/mp4"
-                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                val respHeaders = HashMap<String, String>()
-                respHeaders["Access-Control-Allow-Origin"] = "*"
-                respHeaders["Accept-Ranges"] = "bytes"
-                conn.getHeaderField("Content-Range")?.let { respHeaders["Content-Range"] = it }
-                conn.getHeaderField("Content-Length")?.let { respHeaders["Content-Length"] = it }
-                conn.getHeaderField("Content-Type")?.let { respHeaders["Content-Type"] = it }
-                val reason = if (code == 206) "Partial Content" else if (code == 200) "OK" else "Error"
-                return android.webkit.WebResourceResponse(mime, null, code, reason, respHeaders, stream)
-            }
-            @Suppress("UNREACHABLE_CODE") null
-        } catch (e: Exception) {
-            if (BuildConfig.DEBUG) {
-                android.util.Log.d("GrindhouseWeb", "[DriveProxy] error: ${e.message}")
-            }
-            null
-        }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -443,5 +366,11 @@ class MainActivity : AppCompatActivity() {
             webView.resumeTimers()
             webView.onResume()
         }
+    }
+
+    override fun onDestroy() {
+        mediaProxy?.stop()
+        mediaProxy = null
+        super.onDestroy()
     }
 }
