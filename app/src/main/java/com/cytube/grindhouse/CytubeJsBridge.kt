@@ -45,6 +45,12 @@ class CytubeJsBridge(
         activity.runOnUiThread { activity.hideLoadingOverlay() }
     }
 
+    /** Open a URL outside the app (system browser / native YouTube app) — used for DRM titles. */
+    @JavascriptInterface
+    fun openExternal(url: String) {
+        activity.runOnUiThread { activity.openExternalUrl(url) }
+    }
+
     /**
      * Native HTTP GET — bypasses WebView CORS so the script can validate API keys
      * (and reach APIs like DoesTheDogDie that don't send CORS headers).

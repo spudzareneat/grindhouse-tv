@@ -18,3 +18,6 @@ local.properties
 keystore.properties
 *.keystore
 *.jks
+
+# Built APKs go to GitHub Releases, not the repo
+*.apk

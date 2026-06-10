@@ -6,6 +6,7 @@
        Keys are never hard-coded; the settings modal handles first-run.
     ========================================================== */
     const LS_TMDB       = 'sc_tmdb_key';
+    const LS_ONBOARDED  = 'sc_onboarded';  // set once the settings have been shown on first launch
     const LS_SPELLCHECK = 'sc_spellcheck'; // 'off' to disable, anything else = enabled
     const LS_CHAT_FONT  = 'sc_chat_fontsize';
     const LS_MOVIE_LINKS = 'sc_movie_links'; // 'off' to hide IMDb/Letterboxd/Wiki links
@@ -812,6 +813,92 @@
         });
     }
 
+    /* ==========================================================
+       GOOGLE DRIVE VIDEO SUPPORT
+       Some items in the playlist are Google Drive videos. CyTube can
+       play them but needs a privileged cross-origin fetch to
+       docs.google.com (normally supplied by a Tampermonkey userscript,
+       which we don't have in the app). We expose the same hooks CyTube
+       looks for — window.getGoogleDriveMetadata(id, cb) plus the
+       hasDriveUserscript / driveUserscriptVersion flags — backed by the
+       native HTTP bridge (CORS-free). Ported from
+       cytube-google-drive.user.js v1.7.0.
+    ========================================================== */
+    function initGoogleDrive() {
+        const ITAG_QMAP = { 37:1080, 46:1080, 22:720, 45:720, 59:480, 44:480, 35:480, 18:360, 43:360, 34:360 };
+        const ITAG_CMAP = { 43:'video/webm', 44:'video/webm', 45:'video/webm', 46:'video/webm',
+                            18:'video/mp4', 22:'video/mp4', 37:'video/mp4', 59:'video/mp4',
+                            35:'video/flv', 34:'video/flv' };
+
+        function mapLinks(links) {
+            const videos = { 1080:[], 720:[], 480:[], 360:[] };
+            Object.keys(links).forEach(function (itag) {
+                itag = parseInt(itag, 10);
+                if (!ITAG_QMAP.hasOwnProperty(itag)) return;
+                videos[ITAG_QMAP[itag]].push({ itag: itag, contentType: ITAG_CMAP[itag], link: links[itag] });
+            });
+            return videos;
+        }
+
+        function getVideoInfo(id, cb) {
+            const url = 'https://docs.google.com/get_video_info?authuser=&docid=' + id + '&sle=true&hl=en';
+            // Google binds the returned stream URL to the User-Agent that requested get_video_info
+            // (the `eaua` param). The native bridge would otherwise send a Dalvik UA, which poisons
+            // the stream (403 on playback). Send the browser UA — the same one the stream proxy uses.
+            nativeHttpGet(url, { 'Accept': '*/*', 'User-Agent': navigator.userAgent }).then(function (res) {
+                try {
+                    if (!res || res.status !== 200) {
+                        return cb('Google Drive request failed: HTTP ' + (res ? res.status : '?'));
+                    }
+                    const text = res.body || '';
+                    // Google sometimes redirects to a login page when cookies are missing.
+                    if (/accounts\.google\.com\/ServiceLogin/.test(text)) {
+                        return cb('Google Docs request failed: This video requires you be logged ' +
+                            'into a Google account. Open your Gmail in another tab and then refresh video.');
+                    }
+                    const data = {};
+                    text.split('&').forEach(function (kv) {
+                        const pair = kv.split('=');
+                        data[decodeURIComponent(pair[0])] = decodeURIComponent(pair[1] || '');
+                    });
+                    if (data.status === 'fail') {
+                        return cb('Google Drive request failed: ' +
+                            unescape(data.reason || '').replace(/\+/g, ' '));
+                    }
+                    if (!data.fmt_stream_map) {
+                        return cb('Google has removed the video streams associated with this item. ' +
+                            ' It can no longer be played.');
+                    }
+                    data.links = {};
+                    data.fmt_stream_map.split(',').forEach(function (item) {
+                        const pair = item.split('|');
+                        data.links[pair[0]] = pair[1];
+                    });
+                    data.videoMap = mapLinks(data.links);
+                    cb(null, data);
+                } catch (e) {
+                    cb('Google Drive parse error: ' + (e && e.message ? e.message : e));
+                }
+            }).catch(function (e) {
+                cb('Google Drive request failed: ' + (e && e.message ? e.message : 'network error'));
+            });
+        }
+
+        // Install the real implementation. The native document-start stub may have already
+        // set window.getGoogleDriveMetadata to a queueing shim and registered hasDriveUserscript
+        // before CyTube's scripts ran; we replace it here and drain anything it queued (e.g. the
+        // Drive video that was already loading when the app opened).
+        window.__gdRealMeta = getVideoInfo;
+        window.getGoogleDriveMetadata = getVideoInfo;
+        window.hasDriveUserscript = true;
+        window.driveUserscriptVersion = '1.7';
+        if (Array.isArray(window.__gdQueue) && window.__gdQueue.length) {
+            const queued = window.__gdQueue.splice(0);
+            queued.forEach(function (p) { getVideoInfo(p[0], p[1]); });
+        }
+        console.log('[CyTube SC] Google Drive metadata helper ready');
+    }
+
     // Returns 'valid' | 'invalid' | 'error'
     async function validateTmdbKey(key) {
         if (!key) return 'invalid';
@@ -1179,9 +1266,80 @@
                 if (key === _lastMediaKey) return;
                 _lastMediaKey = key;
                 lastMovieTitle = '';                 // force a fresh lookup
+                // New media: drop any DRM overlay, and (for YouTube) start watching for the
+                // no-Widevine failure that DRM "YouTube Movies" titles hit on this device.
+                clearTimeout(_drmCheckTimer);
+                hideDrmOverlay();
+                if (currentMediaType === 'yt') _drmCheckTimer = setTimeout(() => checkYtDrm(0), 1500);
                 setTimeout(triggerTitleInject, 350); // let the title DOM settle first
             } catch (e) {}
         });
+        // The video already playing at launch never fires changeMedia, so check it once.
+        setTimeout(() => { if (window.PLAYER && window.PLAYER.mediaType === 'yt') checkYtDrm(0); }, 2500);
+    }
+
+    /* ==========================================================
+       YOUTUBE DRM FALLBACK (YouTube Movies)
+       This WebView has no Widevine CDM, so DRM-protected YouTube
+       "Movies" titles fail with errorCode 'fmt.noneavailable'.
+       Detect that and show a friendly overlay that offers to open
+       the video externally (the native YouTube app/browser can
+       decrypt it). See [[google-drive-playback-debug]] sibling notes.
+    ========================================================== */
+    let _drmCheckTimer = null;
+
+    function openExternalUrl(url) {
+        try {
+            if (window.CytubeNative && typeof CytubeNative.openExternal === 'function') {
+                CytubeNative.openExternal(url);
+            } else {
+                window.open(url, '_blank');
+            }
+        } catch (e) {}
+    }
+
+    function hideDrmOverlay() {
+        const o = document.getElementById('sc-drm-overlay');
+        if (o) o.remove();
+    }
+
+    function showDrmOverlay(videoId, title) {
+        hideDrmOverlay();
+        const wrap = document.getElementById('videowrap') || document.body;
+        if (getComputedStyle(wrap).position === 'static') wrap.style.position = 'relative';
+        // Open the whole channel in a real browser (which has Widevine) rather than the bare
+        // YouTube app — that keeps the full Grindhouse room (synced video + chat) and the DRM
+        // title plays inside it.
+        const url = 'https://cytu.be/r/420Grindhouse';
+        const safeTitle = (title || 'This title').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+        const o = document.createElement('div');
+        o.id = 'sc-drm-overlay';
+        o.innerHTML =
+            '<div id="sc-drm-box">' +
+            '<div id="sc-drm-icon">🔒</div>' +
+            '<div id="sc-drm-title">' + safeTitle + ' can’t play in the app</div>' +
+            '<div id="sc-drm-msg">It’s a DRM-protected <b>YouTube Movies</b> title and the in-app player ' +
+            'can’t decrypt it. Open <b>Grindhouse</b> in your browser — it plays there, with the room ' +
+            'and chat still in sync.</div>' +
+            '<div id="sc-drm-actions"><button id="sc-drm-open" class="sc-drm-btn">Open Grindhouse in Browser</button></div>' +
+            '</div>';
+        wrap.appendChild(o);
+        const btn = document.getElementById('sc-drm-open');
+        if (btn) btn.addEventListener('click', () => openExternalUrl(url));
+    }
+
+    function checkYtDrm(tries) {
+        const p = window.PLAYER;
+        if (!p || p.mediaType !== 'yt') { hideDrmOverlay(); return; }
+        let vd = null;
+        try { vd = (p.yt && p.yt.getVideoData) ? p.yt.getVideoData() : null; } catch (e) {}
+        if (vd && vd.errorCode) {            // e.g. 'fmt.noneavailable' for un-decryptable DRM titles
+            showDrmOverlay(vd.video_id, vd.title);
+            return;
+        }
+        if ((tries || 0) < 10) {             // player may still be resolving — retry a few seconds
+            _drmCheckTimer = setTimeout(() => checkYtDrm((tries || 0) + 1), 1000);
+        }
     }
 
     /* ==========================================================
@@ -1408,51 +1566,72 @@
         if (old) old.remove();
 
         const tmdbVal  = getKey(LS_TMDB);
-        const firstRun = !tmdbVal;
+        // "First run" = the very first time the app is opened, not whether a key exists.
+        // The key is always optional; we only use this to show the intro copy once.
+        const firstRun = !localStorage.getItem(LS_ONBOARDED);
+        try { localStorage.setItem(LS_ONBOARDED, '1'); } catch (e) {}
 
         const overlay = document.createElement('div');
         overlay.id = 'sc-settings-overlay';
         overlay.innerHTML = `
             <div id="sc-settings-modal">
-                <div id="sc-settings-title">⚙ CyTube Script Settings</div>
-                ${firstRun ? '<div class="sc-settings-intro">First time setup — enter your API keys below. Both are optional but unlock extra features. You can update them any time via the ⚙ button.</div>' : ''}
+                <div id="sc-settings-title">⚙ Grindhouse Settings</div>
+                ${firstRun ? '<div class="sc-settings-intro">First-time setup — everything here is optional. Log in to chat, and enable TMDB for richer movie info. Reopen any time with the ⚙ button.</div>' : ''}
 
                 <div class="sc-settings-group">
-                    <label class="sc-settings-label">
-                        TMDB API Key
-                        <span class="sc-settings-note">Unlocks: IMDb/Letterboxd links, kill counts, DtDD stats</span>
+                    <label class="sc-settings-label">CyTube Account
+                        <span class="sc-settings-note">Opens the CyTube login page — your settings here are saved first</span>
                     </label>
-                    <div class="sc-settings-input-row">
-                        <input id="sc-input-tmdb" class="sc-settings-input" type="text"
-                            placeholder="Paste TMDB v3 key…" value="${tmdbVal}" spellcheck="false" />
-                        <button id="sc-test-tmdb" class="sc-settings-test" type="button">Test</button>
+                    <button id="sc-login-btn" class="sc-settings-btn-wide" type="button">Log in / Switch Account</button>
+                </div>
+
+                <div class="sc-settings-group sc-settings-divider">
+                    <label class="sc-settings-toggle-label">
+                        <span class="sc-toggle-row">
+                            <input type="checkbox" id="sc-input-tmdb-enable" ${tmdbVal ? 'checked' : ''} />
+                            <span class="sc-toggle-text">Enable TMDB features</span>
+                        </span>
+                        <span class="sc-settings-note">Movie posters, ratings, runtime, IMDb/Letterboxd links</span>
+                    </label>
+                    <div id="sc-tmdb-fields" class="${tmdbVal ? '' : 'sc-hidden'}">
+                        <div class="sc-settings-input-row">
+                            <input id="sc-input-tmdb" class="sc-settings-input" type="text"
+                                placeholder="Paste TMDB v3 key…" value="${tmdbVal}" spellcheck="false" />
+                            <button id="sc-test-tmdb" class="sc-settings-test" type="button">Test</button>
+                        </div>
+                        <span id="sc-test-tmdb-status" class="sc-settings-test-status"></span>
+                        <a class="sc-settings-link" href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener">
+                            Get a free TMDB key ↗
+                        </a>
                     </div>
-                    <span id="sc-test-tmdb-status" class="sc-settings-test-status"></span>
-                    <a class="sc-settings-link" href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener">
-                        Get a free TMDB key ↗
-                    </a>
                 </div>
 
                 <div class="sc-settings-group sc-settings-toggle-group">
                     <label class="sc-settings-toggle-label">
-                        <input type="checkbox" id="sc-input-spellcheck" ${spellCheckEnabled() ? 'checked' : ''} />
-                        <span>Grammar &amp; spell check popup</span>
+                        <span class="sc-toggle-row">
+                            <input type="checkbox" id="sc-input-spellcheck" ${spellCheckEnabled() ? 'checked' : ''} />
+                            <span class="sc-toggle-text">Grammar &amp; spell check popup</span>
+                        </span>
                         <span class="sc-settings-note">When off, messages send immediately without review</span>
                     </label>
                 </div>
 
                 <div class="sc-settings-group sc-settings-toggle-group">
                     <label class="sc-settings-toggle-label">
-                        <input type="checkbox" id="sc-input-nokb" ${softKeyboardDisabled() ? 'checked' : ''} />
-                        <span>Disable on-screen keyboard</span>
+                        <span class="sc-toggle-row">
+                            <input type="checkbox" id="sc-input-nokb" ${softKeyboardDisabled() ? 'checked' : ''} />
+                            <span class="sc-toggle-text">Disable on-screen keyboard</span>
+                        </span>
                         <span class="sc-settings-note">For physical keyboard users — tapping a text field won't pop up the Android keyboard</span>
                     </label>
                 </div>
 
                 <div class="sc-settings-group sc-settings-toggle-group">
                     <label class="sc-settings-toggle-label">
-                        <input type="checkbox" id="sc-input-movielinks" ${movieLinksEnabled() ? 'checked' : ''} />
-                        <span>Show movie links (IMDb / Letterboxd / Wiki)</span>
+                        <span class="sc-toggle-row">
+                            <input type="checkbox" id="sc-input-movielinks" ${movieLinksEnabled() ? 'checked' : ''} />
+                            <span class="sc-toggle-text">Show movie links (IMDb / Letterboxd / Wiki)</span>
+                        </span>
                         <span class="sc-settings-note">Adds clickable link badges next to the title — usually unneeded on a TV</span>
                     </label>
                 </div>
@@ -1470,40 +1649,51 @@
                 </div>
 
                 <div id="sc-settings-actions">
-                    ${!firstRun ? '<button id="sc-settings-cancel">Cancel</button>' : ''}
+                    <button id="sc-settings-cancel">${firstRun ? 'Skip for now' : 'Cancel'}</button>
                     <button id="sc-settings-save">Save</button>
                 </div>
                 <div id="sc-settings-status"></div>
-
-                <div style="border-top:1px solid rgba(255,255,255,0.1);padding-top:16px;margin-top:8px">
-                    <div style="font-size:13px;font-weight:600;color:#c0b0ff;margin-bottom:8px">CyTube Account</div>
-                    <button id="sc-login-btn" style="background:rgba(192,176,255,0.2);color:#c0b0ff;border:1px solid rgba(192,176,255,0.4);border-radius:6px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;width:100%">Login / Switch Account</button>
-                </div>
             </div>`;
 
         document.body.appendChild(overlay);
 
-        // Close on backdrop (only if not first run — first run requires at least dismissing)
-        if (!firstRun) {
-            overlay.addEventListener('click', e => {
-                if (e.target === overlay) overlay.remove();
+        // The TMDB key is optional — always allow closing (backdrop tap or Cancel/Skip).
+        overlay.addEventListener('click', e => {
+            if (e.target === overlay) overlay.remove();
+        });
+        document.getElementById('sc-settings-cancel').addEventListener('click', () => overlay.remove());
+
+        // Reveal/hide the TMDB key fields with the enable checkbox
+        const tmdbEnable = document.getElementById('sc-input-tmdb-enable');
+        const tmdbFields = document.getElementById('sc-tmdb-fields');
+        if (tmdbEnable && tmdbFields) {
+            tmdbEnable.addEventListener('change', () => {
+                tmdbFields.classList.toggle('sc-hidden', !tmdbEnable.checked);
+                if (tmdbEnable.checked) { const i = document.getElementById('sc-input-tmdb'); if (i) i.focus(); }
             });
-            document.getElementById('sc-settings-cancel').addEventListener('click', () => overlay.remove());
         }
 
+        // Persist the non-live settings (TMDB key + spellcheck). The toggles for keyboard,
+        // movie-links and font size already save themselves on change. Used by Save AND by
+        // Login, so navigating to the login page never loses what you just entered.
+        const persistSettings = () => {
+            const enabled = tmdbEnable && tmdbEnable.checked;
+            const input = document.getElementById('sc-input-tmdb');
+            setKey(LS_TMDB, (enabled && input) ? input.value.trim() : '');
+            const sc = document.getElementById('sc-input-spellcheck');
+            if (sc) setKey(LS_SPELLCHECK, sc.checked ? 'on' : 'off');
+            movieLinkCache = {};   // new key takes effect on the next title
+        };
+
         document.getElementById('sc-settings-save').addEventListener('click', () => {
-            const tmdb = document.getElementById('sc-input-tmdb').value.trim();
-            const spellcheck = document.getElementById('sc-input-spellcheck').checked;
-            setKey(LS_TMDB, tmdb);
-            setKey(LS_SPELLCHECK, spellcheck ? 'on' : 'off');
-            // Clear movie cache so new keys take effect on next title
-            movieLinkCache = {};
+            persistSettings();
             const status = document.getElementById('sc-settings-status');
             status.textContent = '✓ Saved';
             setTimeout(() => overlay.remove(), 800);
         });
 
         document.getElementById('sc-login-btn').addEventListener('click', () => {
+            persistSettings();     // don't lose entries when we navigate away to log in
             window.location.href = '/login?redirect=' + encodeURIComponent(window.location.pathname);
         });
 
@@ -2060,9 +2250,10 @@
         initChatHeader();
         initUserCount();
         initPollWatcher();
+        initGoogleDrive();
 
-        // First-run settings modal
-        if (!hasKey(LS_TMDB)) {
+        // First-run settings modal — only the very first launch, never forced again.
+        if (!localStorage.getItem(LS_ONBOARDED)) {
             setTimeout(openSettingsModal, 1200);
         }
 
@@ -2893,20 +3084,35 @@
                 text-decoration: none !important; align-self: flex-start !important;
             }
             .sc-settings-link:hover { color: #c0b0ff !important; text-decoration: underline !important; }
-            .sc-settings-toggle-group { border-top: 1px solid rgba(255,255,255,0.08) !important; padding-top: 12px !important; }
+            .sc-settings-toggle-group, .sc-settings-divider {
+                border-top: 1px solid rgba(255,255,255,0.08) !important; padding-top: 12px !important;
+            }
             .sc-settings-toggle-label {
-                display: flex !important; flex-direction: column !important; gap: 3px !important;
+                display: flex !important; flex-direction: column !important; gap: 4px !important;
                 cursor: pointer !important; font-size: 13px !important;
                 font-weight: 600 !important; color: rgba(255,255,255,0.85) !important;
             }
-            .sc-settings-toggle-label input[type="checkbox"] {
-                width: 16px !important; height: 16px !important;
-                margin: 0 8px 0 0 !important; cursor: pointer !important;
-                accent-color: #c0b0ff !important;
+            /* checkbox sits INLINE with its label; the note drops underneath */
+            .sc-toggle-row {
+                display: flex !important; align-items: center !important; gap: 9px !important;
             }
-            .sc-settings-toggle-label > span:first-of-type {
-                display: flex !important; align-items: center !important;
+            .sc-toggle-row input[type="checkbox"] {
+                width: 17px !important; height: 17px !important; margin: 0 !important;
+                flex: 0 0 auto !important; cursor: pointer !important; accent-color: #c0b0ff !important;
             }
+            .sc-toggle-text { line-height: 1.2 !important; }
+            #sc-tmdb-fields {
+                display: flex !important; flex-direction: column !important; gap: 6px !important;
+                margin: 8px 0 0 26px !important;
+            }
+            #sc-tmdb-fields.sc-hidden { display: none !important; }
+            .sc-settings-btn-wide {
+                background: rgba(192,176,255,0.2) !important; color: #c0b0ff !important;
+                border: 1px solid rgba(192,176,255,0.4) !important; border-radius: 6px !important;
+                padding: 9px 18px !important; font-size: 13px !important; font-weight: 600 !important;
+                cursor: pointer !important; width: 100% !important;
+            }
+            .sc-settings-btn-wide:hover { background: rgba(192,176,255,0.32) !important; }
             #sc-settings-actions {
                 display: flex !important; gap: 10px !important; justify-content: flex-end !important;
                 margin-top: 4px !important;
@@ -2979,6 +3185,34 @@
                 font-size: 12px !important; color: #90ffa0 !important;
                 text-align: center !important; min-height: 16px !important;
             }
+
+            /* DRM (YouTube Movies) fallback overlay — covers the dead YT iframe */
+            #sc-drm-overlay {
+                position: absolute !important; inset: 0 !important;
+                z-index: 60 !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                background: radial-gradient(ellipse at center, rgba(20,12,28,0.92), rgba(8,6,12,0.97)) !important;
+                font-family: 'Inter', system-ui, sans-serif !important;
+                padding: 24px !important; text-align: center !important;
+            }
+            #sc-drm-box { max-width: 560px !important; }
+            #sc-drm-icon { font-size: 40px !important; margin-bottom: 10px !important; }
+            #sc-drm-title {
+                font-size: 22px !important; font-weight: 700 !important; color: #fff !important;
+                margin-bottom: 10px !important; line-height: 1.25 !important;
+            }
+            #sc-drm-msg {
+                font-size: 14px !important; color: rgba(255,255,255,0.72) !important;
+                line-height: 1.5 !important; margin-bottom: 20px !important;
+            }
+            #sc-drm-msg b { color: #c0b0ff !important; }
+            .sc-drm-btn {
+                background: #c0b0ff !important; color: #1a1020 !important; border: none !important;
+                border-radius: 8px !important; padding: 12px 26px !important;
+                font-size: 15px !important; font-weight: 700 !important; cursor: pointer !important;
+                font-family: inherit !important;
+            }
+            .sc-drm-btn:focus { outline: 3px solid #fff !important; outline-offset: 2px !important; }
         `;
         document.head.appendChild(style);
     }
@@ -3543,21 +3777,10 @@
         if (document.body) obs.observe(document.body, { childList: true, subtree: true });
     })();
 
-    // TV: reload button + pause video when app goes to background
-    if (_isTv) {
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden) return;
-            document.querySelectorAll('video').forEach(v => { try { if (!v.paused) { v.pause(); v.src = ''; } } catch {} });
-            if (!document.getElementById('sc-reload-btn')) {
-                const btn = document.createElement('button');
-                btn.id = 'sc-reload-btn';
-                btn.textContent = '↻'; btn.title = 'Reload Video';
-                btn.style.cssText = 'position:fixed;bottom:5px;right:calc(20vw+200px);z-index:20002;background:rgba(0,0,0,0.7);color:white;border:1px solid rgba(255,255,255,0.3);border-radius:4px;padding:4px 10px;font-size:20px;cursor:pointer;';
-                btn.addEventListener('click', () => location.reload());
-                document.body.appendChild(btn);
-            }
-        });
-    }
+    // Backgrounding is handled natively now: the activity pauses the whole WebView
+    // (onPause + pauseTimers) when it's no longer visible, freezing video, JS and
+    // the chat socket so nothing runs in the background — and resumes on return.
+    // (No JS src-clearing/reload button, which would prevent the fast resume.)
 
     // Wire up send button once chat textarea exists
     function _scAddSendBtn() {
@@ -3706,6 +3929,14 @@
         const btn = document.getElementById('sc-chatmode-btn');
         if (btn) { btn.textContent = _CHAT_MODE_ICONS[mode] || '▦'; btn.title = 'Chat: ' + mode + ' (press C)'; }
         applyChatFontSize(getChatFontSize()); // input size depends on the mode (overlay = compact)
+        // The layout reflows on a mode change, which loses the scroll position —
+        // snap the chat back to the latest message once it settles.
+        const buf = document.getElementById('messagebuffer');
+        if (buf) {
+            const toBottom = () => { buf.scrollTop = buf.scrollHeight; };
+            requestAnimationFrame(() => requestAnimationFrame(toBottom));
+            [120, 320, 600].forEach(ms => setTimeout(toBottom, ms));
+        }
     }
     function cycleChatMode() {
         let cur = 'sidebar';
@@ -3863,7 +4094,10 @@
             return null;
         };
 
-        const MAIN_IDS = ['sc-chatmode-btn', 'sc-emote-proxy', 'sc-desync-btn', 'sc-settings-btn',
+        // 'sc-drm-open' first so it's the default focus when the DRM fallback is up; it's only a
+        // candidate while the overlay exists (getElementById is null otherwise). It lives in the main
+        // cluster — NOT OVERLAY_IDS — so the remote can still reach chat and the controls.
+        const MAIN_IDS = ['sc-drm-open', 'sc-chatmode-btn', 'sc-emote-proxy', 'sc-desync-btn', 'sc-settings-btn',
             'sc-usercount-btn', 'sc-poll-btn', 'sc-poster-toggle', 'sc-trivia-btn', 'sc-chat-textarea'];
         const FOCUS_SEL = 'button, a[href], input:not([type=hidden]), textarea, select, [tabindex]';
 

@@ -25,12 +25,35 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        // Runs before CyTube's own scripts. Declares the Drive userscript as present and
+        // queues any getGoogleDriveMetadata call until cytube_mobile.js installs the real
+        // implementation (which drains __gdQueue). CyTube's backoffRetry waits indefinitely
+        // for the deferred callback, so the queued call resolves cleanly once we're ready.
+        private const val DRIVE_EARLY_STUB = """
+            (function(){
+              if (window.__gdEarly) return;
+              window.__gdEarly = true;
+              window.__gdQueue = [];
+              window.hasDriveUserscript = true;
+              window.driveUserscriptVersion = '1.7';
+              window.getGoogleDriveMetadata = function(id, cb){
+                if (typeof window.__gdRealMeta === 'function') { window.__gdRealMeta(id, cb); }
+                else { window.__gdQueue.push([id, cb]); }
+              };
+            })();
+        """
+    }
+
     private lateinit var webView: NoImeWebView
+    private var webViewUa: String = ""           // browser UA, reused for native Drive stream fetches
     private lateinit var fullscreenContainer: FrameLayout
     private lateinit var prefs: SharedPreferences
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
@@ -51,6 +74,14 @@ class MainActivity : AppCompatActivity() {
             !pageLoaded && System.currentTimeMillis() - splashStart < 8000L
         }
         super.onCreate(savedInstanceState)
+
+        // Ensure native HttpURLConnection requests send NO cookies: Google's videoplayback
+        // returns 403 when presented the DRIVE_STREAM/NID cookies that get_video_info sets, but
+        // works fine cookie-less. Install an empty, non-storing cookie handler so nothing leaks
+        // from metadata lookups into the stream proxy.
+        java.net.CookieHandler.setDefault(
+            java.net.CookieManager(null, java.net.CookiePolicy.ACCEPT_NONE)
+        )
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val insetsController = WindowInsetsControllerCompat(window, window.decorView)
@@ -112,6 +143,41 @@ class MainActivity : AppCompatActivity() {
         webView.evaluateJavascript(code, null)
     }
 
+    /**
+     * Open a URL in an external web BROWSER (not the WebView, not another app). Used for DRM
+     * "YouTube Movies" titles: a real browser has Widevine, so opening the channel page there plays
+     * the title inside the full synced Grindhouse room. CATEGORY_BROWSABLE biases toward a browser.
+     */
+    fun openExternalUrl(url: String) {
+        val uri = android.net.Uri.parse(url)
+        // Prefer a Widevine-capable browser so DRM titles actually play: Chrome and Firefox
+        // (GeckoView) have Widevine; system-WebView-based browsers (e.g. TV Bro) do NOT, so we
+        // don't want the user landing there. Try the good ones directly, then fall back to the
+        // system's default/chooser, then a clear error.
+        for (pkg in listOf("com.android.chrome", "org.mozilla.firefox")) {
+            try {
+                val i = android.content.Intent(android.content.Intent.ACTION_VIEW, uri).apply {
+                    setPackage(pkg)
+                    addCategory(android.content.Intent.CATEGORY_BROWSABLE)
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (i.resolveActivity(packageManager) != null) { startActivity(i); return }
+            } catch (e: Exception) { /* not installed / can't handle — try next */ }
+        }
+        try {
+            startActivity(
+                android.content.Intent(android.content.Intent.ACTION_VIEW, uri).apply {
+                    addCategory(android.content.Intent.CATEGORY_BROWSABLE)
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(
+                this, "No web browser is installed to open the channel", android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     /** Back with no overlay open → background the app (Netflix-style), don't exit hard. */
     fun tvBackground() {
         runOnUiThread { moveTaskToBack(true) }
@@ -169,13 +235,39 @@ class MainActivity : AppCompatActivity() {
                 .replace(Regex("Version/\\S+\\s"), "")
                 .replace(" wv", "")
         }
+        // Reused by the Drive stream proxy: Google's videoplayback 403s non-browser UAs
+        // (the default Dalvik UA), so native fetches must present this browser UA.
+        webViewUa = webView.settings.userAgentString
 
         webView.addJavascriptInterface(CytubeJsBridge(this, prefs), "CytubeNative")
+
+        // Tell CyTube the Drive userscript is present BEFORE its own scripts run, so the
+        // currently-playing Drive video isn't rejected during the race before our main
+        // script injects (which only happens at onPageFinished). Early calls are queued and
+        // drained by the real implementation in cytube_mobile.js. No native bridge needed here.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            WebViewCompat.addDocumentStartJavaScript(webView, DRIVE_EARLY_STUB, setOf("*"))
+        }
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
                 pageLoaded = true
                 injectScript()
+            }
+
+            // Google Drive video streams (the `videoplayback` URLs from get_video_info)
+            // won't play when fetched by Chromium's media stack, even though the bytes are
+            // reachable from this device's IP. Proxy them through a plain HttpURLConnection
+            // (same device IP, normalized headers) and stream the result back to the WebView.
+            override fun shouldInterceptRequest(
+                view: WebView,
+                request: android.webkit.WebResourceRequest
+            ): android.webkit.WebResourceResponse? {
+                val url = request.url.toString()
+                if (request.method == "GET" && url.contains("/videoplayback")) {
+                    return proxyDriveStream(url, request.requestHeaders)
+                }
+                return null
             }
         }
 
@@ -195,12 +287,95 @@ class MainActivity : AppCompatActivity() {
                 customViewCallback?.onCustomViewHidden()
                 customViewCallback = null
             }
+
+            // Mirror page console output to logcat (debug builds) so we can debug the
+            // injected script from `adb logcat -s GrindhouseWeb`.
+            override fun onConsoleMessage(msg: android.webkit.ConsoleMessage): Boolean {
+                if (BuildConfig.DEBUG) {
+                    android.util.Log.d(
+                        "GrindhouseWeb",
+                        "${msg.message()} (${msg.sourceId()}:${msg.lineNumber()})"
+                    )
+                }
+                return true
+            }
         }
     }
 
     private fun injectScript() {
         val script = assets.open("cytube_mobile.js").bufferedReader().readText()
         webView.evaluateJavascript(script, null)
+    }
+
+    /**
+     * Fetch a Google Drive `videoplayback` stream natively and hand the live stream to the
+     * WebView. Called on the WebView's background thread (shouldInterceptRequest), so blocking
+     * I/O is fine. We forward the Range header (so seeking works) and add permissive CORS
+     * headers. The connection is intentionally NOT disconnected — the WebView reads the
+     * InputStream until EOF, then closes it.
+     */
+    private fun proxyDriveStream(
+        url: String,
+        reqHeaders: Map<String, String>
+    ): android.webkit.WebResourceResponse? {
+        // Chromium's media requests send an open-ended "Range: bytes=0-", which Google may answer
+        // with a 302 to a signed CDN host. We follow redirects MANUALLY, re-attaching Range + the
+        // browser UA on every hop (and no cookies — get_video_info's DRIVE_STREAM/NID cookies cause
+        // a 403 on videoplayback).
+        val range = reqHeaders["Range"] ?: "bytes=0-"
+        // ALWAYS use the stripped browser UA. The WebView's own media-request User-Agent still
+        // carries the "wv"/"Version/4.0" markers, which Google's videoplayback 403s; the default
+        // Dalvik UA is rejected too. Only the clean Chrome UA gets the 302→206 success path.
+        val ua = webViewUa
+        var current = url
+        var hops = 0
+        return try {
+            while (true) {
+                val conn = (java.net.URL(current).openConnection() as java.net.HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    instanceFollowRedirects = false
+                    connectTimeout = 15000
+                    readTimeout = 20000
+                    setRequestProperty("Range", range)
+                    ua?.let { setRequestProperty("User-Agent", it) }
+                }
+                val code = conn.responseCode
+                if (code in 300..399 && hops < 6) {
+                    val loc = conn.getHeaderField("Location")
+                    conn.disconnect()
+                    if (loc.isNullOrEmpty()) {
+                        if (BuildConfig.DEBUG) android.util.Log.d("GrindhouseWeb", "[DriveProxy] $code with no Location")
+                        return null
+                    }
+                    current = java.net.URL(java.net.URL(current), loc).toString()
+                    hops++
+                    continue
+                }
+
+                if (BuildConfig.DEBUG) {
+                    android.util.Log.d("GrindhouseWeb",
+                        "[DriveProxy] final $code after $hops hop(s), host=${java.net.URL(current).host}")
+                }
+
+                val mime = conn.contentType?.substringBefore(';')?.trim()
+                    ?.takeIf { it.isNotEmpty() } ?: "video/mp4"
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val respHeaders = HashMap<String, String>()
+                respHeaders["Access-Control-Allow-Origin"] = "*"
+                respHeaders["Accept-Ranges"] = "bytes"
+                conn.getHeaderField("Content-Range")?.let { respHeaders["Content-Range"] = it }
+                conn.getHeaderField("Content-Length")?.let { respHeaders["Content-Length"] = it }
+                conn.getHeaderField("Content-Type")?.let { respHeaders["Content-Type"] = it }
+                val reason = if (code == 206) "Partial Content" else if (code == 200) "OK" else "Error"
+                return android.webkit.WebResourceResponse(mime, null, code, reason, respHeaders, stream)
+            }
+            @Suppress("UNREACHABLE_CODE") null
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) {
+                android.util.Log.d("GrindhouseWeb", "[DriveProxy] error: ${e.message}")
+            }
+            null
+        }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -247,6 +422,26 @@ class MainActivity : AppCompatActivity() {
         if (!isInPipMode) {
             // Don't pop the info card just because we came back from PiP.
             evalJs("var c=document.getElementById('sc-np-card'); if(c)c.classList.remove('sc-np-visible');")
+        }
+    }
+
+    // When the app is no longer visible (Home pressed, or PiP dismissed) freeze the
+    // WebView completely — pauses video, all JS/timers, and lets the chat socket go
+    // idle so nothing runs in the background. onStop is NOT called while in PiP, so
+    // PiP keeps playing. Everything resumes (and re-syncs) when the app returns.
+    override fun onStop() {
+        super.onStop()
+        if (::webView.isInitialized) {
+            webView.onPause()
+            webView.pauseTimers()
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (::webView.isInitialized) {
+            webView.resumeTimers()
+            webView.onResume()
         }
     }
 }

@@ -19,8 +19,8 @@ android {
         applicationId = "com.grindhouse.cytube"
         minSdk = 29
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.3"
+        versionCode = 5
+        versionName = "1.4"
     }
 
     signingConfigs {
@@ -65,4 +65,5 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.core:core-splashscreen:1.0.1")
+    implementation("androidx.webkit:webkit:1.11.0")
 }

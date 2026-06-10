@@ -4,6 +4,18 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Android 11+ package visibility: see/launch installed web browsers (used to open the
+         channel externally for DRM "YouTube Movies" titles). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+        <package android:name="com.android.chrome" />
+        <package android:name="org.mozilla.firefox" />
+    </queries>
+
     <!-- Install on both phones and TVs: neither touchscreen nor leanback is required -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
