@@ -72,8 +72,14 @@
         return window.screen.height > window.screen.width;
     }
     function applyMonitorLayout() {
-        document.body.classList.toggle('sc-vertical', isVerticalMonitor());
-        document.body.classList.toggle('sc-horizontal', !isVerticalMonitor());
+        const wasVert = document.body.classList.contains('sc-vertical');
+        const isVert = isVerticalMonitor();
+        document.body.classList.toggle('sc-vertical', isVert);
+        document.body.classList.toggle('sc-horizontal', !isVert);
+        if (wasVert !== isVert) {
+            const buf = document.getElementById('messagebuffer');
+            if (buf) setTimeout(() => { buf.scrollTop = buf.scrollHeight; }, 200);
+        }
     }
     function startMonitorWatcher() {
         applyMonitorLayout();
@@ -521,6 +527,7 @@
         btn.id = 'sc-desync-btn';
         btn.textContent = '⟳';
         btn.title = 'Free watch — click to watch freely, click again to re-sync';
+        btn.dataset.tvLabel = 'Free Watch';
         document.body.appendChild(btn);
 
         let desynced = false;
@@ -607,6 +614,10 @@
        and forward clicks to the original so CyTube's picker still opens.
     ========================================================== */
 
+    // VHS cassette SVG — stripped white background, fill:currentColor so CSS controls colour.
+    // Source: vecteezy_black-vector-icon-of-vhs-video-cassette-tape-on-isolated-on_5567997.svg
+    const _VHS_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5628 3728" fill="currentColor" aria-hidden="true"><g transform="matrix(1.3333333,0,0,-1.3333333,0,3728)"><g transform="scale(0.1)"><g transform="scale(2.31715)"><path d="m 16300,9657.36 v -335.45 c -157.2,180.66 -390.4,294.66 -648.5,294.66 H 2567.81 c -260.88,0 -494.75,-115.91 -651.51,-298.23 v 339.02 c 0,353.34 291.56,640.74 649.98,640.74 H 15650 c 358.5,0 650,-287.4 650,-640.74"/></g><g transform="scale(1.06574)"><path d="m 11418,14609.4 h 187.4 V 16300 c -2170.61,-146.3 -3886.11,-1953.4 -3886.11,-4161.2 0,-2207.82 1715.5,-4015.03 3886.11,-4161.31 v 1924.59 c -132.5,17.26 -261.1,46.72 -384.9,86.79 -79.8,26.13 -165.5,-18.86 -189.4,-99.46 l -34.2,-114.57 c -29.3,-98.71 -147.7,-138.87 -231.1,-78.26 l -763.8,555.02 c -83.41,60.6 -81.81,185.5 3.1,244.1 l 98.6,68 c 69.3,47.7 85.5,143.1 36.1,211 -260.06,357.1 -413.47,796.9 -413.47,1272.5 v 1.6 c 0,83.3 -68.31,150.7 -151.73,148.6 l -121.51,-3.1 c -103.15,-2.5 -177.72,97.6 -145.84,195.6 l 291.75,898 c 31.81,98.1 151.07,135.2 232.89,72.5 l 95.24,-72.8 c 66.71,-51.1 162.37,-37.3 211.77,30.6 265.9,366 643.9,645.2 1083.3,787.6 79.8,25.9 122.4,112.7 94.5,191.8 l -39.7,112.8 c -34.3,97.1 37.8,199 141,199"/></g><g transform="scale(2.08529)"><path d="m 14313.8,8330.5 v -864 h 95.9 c 52.6,0 89.5,-52.03 71.9,-101.72 l -20.2,-57.59 c -14.3,-40.47 7.4,-84.83 48.2,-98.07 224.6,-72.79 417.8,-215.46 553.8,-402.53 25.2,-34.67 74,-41.72 108.2,-15.63 l 48.6,37.26 c 41.8,31.98 102.8,12.99 119.1,-37.12 l 149.1,-458.88 c 16.3,-50.11 -21.9,-101.33 -74.6,-100.04 l -62.1,1.63 c -42.6,1.01 -77.6,-33.37 -77.5,-76 v -0.82 c 0,-243.04 -78.5,-467.75 -211.3,-650.32 -25.3,-34.67 -17,-83.49 18.4,-107.85 l 50.5,-34.76 c 43.3,-29.88 44.1,-93.76 1.5,-124.74 l -390.4,-283.6 c -42.6,-31.03 -103.1,-10.5 -118.1,39.99 l -17.4,58.51 c -12.3,41.19 -56.1,64.16 -96.9,50.88 -63.2,-20.53 -129,-35.58 -196.7,-44.41 v -983.6 c 1109.4,74.76 1986.2,998.37 1986.2,2126.75 0,1128.34 -876.8,2051.9 -1986.2,2126.66"/></g><g transform="scale(2.31715)"><path d="m 15169.1,3729.71 c 0,-505.24 -409.6,-914.79 -914.8,-914.79 h -1098.8 c -277.4,0 -502.4,224.93 -502.4,502.38 v 4531.45 c 0,277.42 225,502.4 502.4,502.4 h 1098.9 c 487.9,0 886.5,-381.98 913.3,-863.17 0.9,-17.09 1.4,-34.26 1.4,-51.57 z m -3232.9,-341.07 c 0,-340.98 -276.4,-617.4 -617.4,-617.4 H 6900.45 c -340.98,0 -617.4,276.42 -617.4,617.4 v 4388.71 c 0,340.99 276.42,617.41 617.4,617.41 h 4418.35 c 341,0 617.4,-276.42 617.4,-617.41 z M 5566.1,3317.3 c 0,-277.45 -224.93,-502.38 -502.39,-502.38 H 3964.9 c -505.22,0 -914.78,409.55 -914.78,914.79 v 3706.7 c 0,505.18 409.56,914.74 914.73,914.74 h 1098.86 c 264.47,0 481.2,-204.38 500.96,-463.77 0.95,-12.76 1.43,-25.62 1.43,-38.63 z m 10732.5,5385.84 c -24.1,387.6 -346.1,694.52 -739.8,694.52 H 2660.51 c -409.41,0 -741.25,-331.89 -741.25,-741.25 V 2509.63 c 0,-409.38 331.84,-741.21 741.25,-741.21 H 15558.8 c 409.4,0 741.2,331.83 741.2,741.21 v 6146.78 c 0,15.73 -0.5,31.3 -1.4,46.73"/></g></g></g></svg>';
+
     function relocateEmoteButton() {
         if (document.getElementById('sc-emote-proxy')) return;
         const original = document.getElementById('emotelistbtn');
@@ -614,8 +625,9 @@
 
         const proxy = document.createElement('button');
         proxy.id = 'sc-emote-proxy';
-        proxy.textContent = '▦';
+        proxy.innerHTML = _VHS_SVG;
         proxy.title = 'Emotes';
+        proxy.dataset.tvLabel = 'Emotes';
         proxy.setAttribute('aria-label', 'Emote Picker');
 
         proxy.addEventListener('click', e => {
@@ -623,13 +635,12 @@
             original.click();
         });
 
-        document.body.appendChild(proxy);
-
-        // Style the original emotelistbtn to look like our proxy too
-        if (!original.dataset.pickerApplied) {
-            original.textContent = '▦';
-            original.dataset.pickerApplied = 'true';
-        }
+        // Must go inside the chat input row. If it isn't ready yet, bail and let
+        // the bootObserver retry on the next DOM mutation — don't fall back to body
+        // because without position:fixed it would be invisible there.
+        const inputRow = document.getElementById('sc-mobile-input-row');
+        if (!inputRow) return;
+        inputRow.appendChild(proxy);
     }
 
     const applyInputMode = () => {
@@ -1769,6 +1780,7 @@
         btn.id = 'sc-settings-btn';
         btn.textContent = '⚙';
         btn.title = 'Script Settings (API keys)';
+        btn.dataset.tvLabel = 'Settings';
         btn.addEventListener('click', openSettingsModal);
         document.body.appendChild(btn);
     }
@@ -1780,6 +1792,8 @@
     // Global wake/dim control — exposed so initPosterStrip can call wake()
     let _topBarWake = null;
     let _topBarIsOpen = false;
+    let _leftZoneReveal  = null;  // expose so video-tap can trigger both chrome systems together
+    let _rightZoneReveal = null;  // vertical-mode right-edge drawer
 
     function initTopBar() {
         // Gradient overlay — pointer-events:none so it never blocks clicks
@@ -1802,10 +1816,12 @@
         const dim = () => {
             if (_topBarIsOpen || !playing) return;
             getDimEls().forEach(el => el.classList.add('sc-bar-dim'));
+            document.body.classList.add('sc-video-dimmed');
         };
 
         const wake = () => {
             getDimEls().forEach(el => el.classList.remove('sc-bar-dim'));
+            document.body.classList.remove('sc-video-dimmed');
             clearTimeout(idleTimer);
             if (!_topBarIsOpen && playing) idleTimer = setTimeout(dim, 3500);
         };
@@ -1833,6 +1849,15 @@
         bindVideoEvents();
         new MutationObserver(bindVideoEvents)
             .observe(document.body, { childList: true, subtree: true });
+
+        // For iframe-based players (YouTube/Twitch) no <video> element is accessible,
+        // so treat iframe insertion into #videowrap as "playing started".
+        const onIframeAppear = () => {
+            if (!playing && document.querySelector('#videowrap iframe')) onVideoPlay();
+        };
+        const vw = document.getElementById('videowrap');
+        if (vw) new MutationObserver(onIframeAppear).observe(vw, { childList: true, subtree: true });
+        onIframeAppear();
 
         // Mouse near top of video area wakes the bar
         document.addEventListener('mousemove', (e) => {
@@ -2121,6 +2146,16 @@
         const header = document.createElement('div');
         header.id = 'sc-chat-header';
         document.body.appendChild(header);
+
+        // Collapse/cycle button on the far-right of the chat header — the most
+        // discoverable affordance for "close the chat panel from the chat side"
+        const colBtn = document.createElement('button');
+        colBtn.id = 'sc-chat-collapse-btn';
+        colBtn.title = 'Cycle chat layout (C)';
+        colBtn.dataset.tvLabel = 'Toggle Chat';
+        colBtn.textContent = '›';
+        colBtn.addEventListener('click', () => { if (typeof cycleChatMode === 'function') cycleChatMode(); });
+        header.appendChild(colBtn);
     }
 
     function initUserCount() {
@@ -2298,6 +2333,24 @@
             body { background-image: none !important; background: #000 !important; }
             .modal, .popover, .dropdown-menu { z-index: 20001 !important; }
             .modal-dialog { margin: 0 auto !important; }
+
+            /* Video tap-to-wake interceptor.
+               z-index 10000 = above the video (9999) but below all controls (10001+).
+               pointer-events:none normally so video controls work; flips to auto only
+               when the top bar is dimmed (sc-video-dimmed on body), intercepting the
+               first tap to reveal chrome. Works for iframes (YouTube/Drive) where
+               document-level click listeners never receive iframe taps. */
+            #sc-video-tap {
+                position: fixed !important; top: 0 !important; left: 0 !important;
+                width: 79vw !important; height: 100vh !important;
+                z-index: 10000 !important; pointer-events: none !important;
+                -webkit-tap-highlight-color: transparent !important;
+                cursor: pointer !important;
+            }
+            body.sc-vertical #sc-video-tap { width: 100vw !important; height: 55vh !important; }
+            body.sc-chat-hidden #sc-video-tap { width: 100vw !important; height: 100vh !important; }
+            body.sc-chat-overlay.sc-horizontal #sc-video-tap { width: 100vw !important; }
+            body.sc-video-dimmed #sc-video-tap { pointer-events: auto !important; }
             #resize-video-smaller, #resize-video-larger { display: none !important; }
             /* Remove pause and fullscreen from video.js control bar */
             .video-js .vjs-play-control { display: none !important; }
@@ -2340,7 +2393,8 @@
                 transition: opacity 1.5s ease !important;
                 opacity: 1 !important;
             }
-            body.sc-vertical #sc-top-bar { width: 100vw !important; }
+            /* Vertical: title bar is a solid strip — no gradient overlay needed */
+            body.sc-vertical #sc-top-bar { display: none !important; }
             #sc-top-bar.sc-bar-dim { opacity: 0 !important; }
 
             /* Header — dark background fades out with gradient when dimmed */
@@ -2362,13 +2416,29 @@
                 top: 0 !important; left: 0 !important;
                 z-index: 10002 !important;
                 pointer-events: auto !important;
-                transition: background 1.5s ease !important;
+                transition: background 1.5s ease, color 1.5s ease, text-shadow 1.5s ease !important;
             }
-            /* When dimmed: background fades away, title stays via text-shadow */
             #videowrap-header.sc-bar-dim {
                 background: transparent !important;
+                color: rgba(255,255,255,0.32) !important;
+                text-shadow: none !important;
             }
-            body.sc-vertical #videowrap-header { width: 100vw !important; }
+            /* Vertical: header is a real title bar above the video, not an overlay */
+            body.sc-vertical #videowrap-header {
+                width: 100vw !important;
+                height: 36px !important; line-height: 36px !important;
+                padding: 0 8px !important;
+                background: rgba(12,10,20,0.92) !important;
+                border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+                z-index: 10003 !important;
+                text-shadow: none !important;
+            }
+            /* Title bar dims text but keeps its solid background */
+            body.sc-vertical #videowrap-header.sc-bar-dim {
+                background: rgba(12,10,20,0.92) !important;
+                color: rgba(255,255,255,0.35) !important;
+                text-shadow: none !important;
+            }
             /* Hide the "Currently Playing:" prefix label */
             /* Hide CyTube's original usercount */
             #usercount { display: none !important; }
@@ -2387,12 +2457,19 @@
                 padding: 0 8px !important;
                 box-sizing: border-box !important;
             }
+            /* Vertical: chat header repositioned into the left side of the control band */
             body.sc-vertical #sc-chat-header {
-                left: 0 !important; right: 0 !important; width: auto !important;
-                bottom: calc(40vh - 40px) !important; top: auto !important;
-                height: 40px !important;
-                justify-content: flex-start !important; align-items: center !important; gap: 8px !important;
+                display: flex !important;
+                position: fixed !important;
+                left: 0 !important; right: auto !important; width: auto !important;
+                top: 50vh !important; height: 44px !important; bottom: auto !important;
+                background: transparent !important;
+                z-index: 10001 !important;
+                padding: 0 12px !important;
+                border: none !important; box-shadow: none !important;
             }
+            /* Collapse button not needed in vertical — chatmode btn in band handles it */
+            body.sc-vertical #sc-chat-collapse-btn { display: none !important; }
             #sc-usercount-btn, #sc-poll-btn {
                 background: transparent !important;
                 border: none !important;
@@ -2407,9 +2484,31 @@
                 transition: color 0.2s !important;
                 line-height: 28px !important;
             }
+            body.sc-vertical #sc-usercount-btn,
+            body.sc-vertical #sc-poll-btn {
+                line-height: 44px !important;
+                height: 44px !important;
+                padding: 0 8px !important;
+                -webkit-appearance: none !important;
+                appearance: none !important;
+            }
             #sc-usercount-btn:hover, #sc-poll-btn:hover { color: rgba(255,255,255,0.9) !important; }
             #sc-usercount-btn.sc-users-active,
             #sc-poll-btn.sc-poll-btn-active { color: white !important; }
+
+            /* Collapse/cycle button — far right of chat header */
+            #sc-chat-collapse-btn {
+                background: none !important; border: none !important;
+                color: rgba(255,255,255,0.4) !important;
+                font-size: 18px !important; font-weight: 300 !important;
+                cursor: pointer !important; padding: 0 4px !important;
+                line-height: 1 !important; margin-left: auto !important;
+                order: 999 !important; flex-shrink: 0 !important;
+                transition: color 0.2s !important;
+                -webkit-tap-highlight-color: transparent !important;
+            }
+            #sc-chat-collapse-btn:hover { color: rgba(255,255,255,0.9) !important; }
+            body.sc-tv #sc-chat-collapse-btn { font-size: 26px !important; padding: 0 6px !important; }
 
             /* Users panel — drops down from usercount, same style as poll panel */
             #sc-users-panel {
@@ -2435,7 +2534,7 @@
             }
             body.sc-vertical #sc-users-panel {
                 top: auto !important;
-                bottom: calc(42vh) !important;
+                bottom: calc(50vh - 44px) !important;
                 right: 5px !important;
                 width: calc(100vw - 5px) !important;
                 max-height: 40vh !important;
@@ -2501,8 +2600,8 @@
                 backdrop-filter: blur(4px) !important;
             }
             body.sc-vertical .video-js .vjs-control-bar {
-                bottom: calc(42vh + 15px) !important;
-                right: 160px !important;
+                bottom: 4px !important;
+                right: 4px !important;
                 left: 4px !important;
             }
 
@@ -2767,7 +2866,7 @@
                 right: 46px !important;
             }
 
-            #fs-toggle-btn, #sc-emote-proxy {
+            #fs-toggle-btn {
                 position: fixed !important;
                 z-index: 20002 !important;
                 background: rgba(255,255,255,0.08) !important;
@@ -2784,10 +2883,34 @@
                 justify-content: center !important;
                 transition: color 0.3s ease, background 0.3s ease !important;
             }
-            #fs-toggle-btn:hover, #sc-emote-proxy:hover {
+            #fs-toggle-btn:hover {
                 color: white !important;
                 background: rgba(255,255,255,0.22) !important;
             }
+            /* Emote button — absolute inside the input row, overlapping the textarea's
+               right edge. Takes zero flex space; textarea gets matching padding-right. */
+            #sc-mobile-input-row { position: relative !important; }
+            #sc-emote-proxy {
+                position: absolute !important;
+                right: 6px !important; top: 50% !important;
+                transform: translateY(-50%) !important;
+                z-index: 1 !important;
+                background: none !important; border: none !important;
+                color: rgba(255,255,255,0.4) !important;
+                cursor: pointer !important; padding: 4px !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                -webkit-tap-highlight-color: transparent !important;
+                transition: color 0.2s ease !important;
+            }
+            /* Portrait: shift left to clear the send button */
+            body.sc-vertical #sc-emote-proxy { right: calc(44px + 14px) !important; }
+            /* Overlay mode: chat is too compact for an emote icon */
+            body.sc-chat-overlay #sc-emote-proxy { display: none !important; }
+            #sc-emote-proxy:hover { color: rgba(255,255,255,0.85) !important; }
+            #sc-emote-proxy svg { width: 20px !important; height: auto !important; display: block !important; }
+            body.sc-tv #sc-emote-proxy svg { width: 26px !important; }
+            /* Stop text running behind the icon */
+            #sc-chat-textarea { padding-right: 34px !important; }
             #fs-toggle-btn:focus { outline: none !important; }
 
             /* ===== HORIZONTAL LAYOUT (widescreen) ===== */
@@ -2819,25 +2942,22 @@
             body.sc-horizontal #sc-send-btn { display: none !important; }
             body.sc-horizontal #sc-mobile-input-row { padding: 4px 0 !important; }
             body.sc-horizontal #leftcontrols { display: none !important; }
-            /* Horizontal: buttons bottom-right of video */
-            body.sc-horizontal #sc-emote-proxy {
-                bottom: 6px !important; right: calc(20vw + 6px) !important;
-            }
             body.sc-horizontal #fs-toggle-btn {
                 bottom: 6px !important; right: calc(20vw + 70px) !important;
             }
 
-            /* ===== VERTICAL LAYOUT (portrait monitor) ===== */
+            /* ===== VERTICAL LAYOUT (portrait) — YouTube-style stack =====
+               Title strip (36px) → video (ends at 50vh) → control band (44px) → chat */
             body.sc-vertical #videowrap {
-                position: fixed !important; top: 0 !important; left: 0 !important;
-                width: 100vw !important; height: 55vh !important;
+                position: fixed !important; top: 36px !important; left: 0 !important;
+                width: 100vw !important; height: calc(50vh - 36px) !important;
                 z-index: 9999 !important; background: black !important;
                 border: none !important; outline: none !important;
                 box-shadow: none !important;
             }
             body.sc-vertical #videowrap .embed-responsive,
             body.sc-vertical #ytapiplayer {
-                width: 100vw !important; height: 55vh !important;
+                width: 100vw !important; height: calc(50vh - 36px) !important;
                 border: none !important;
                 margin: 0 !important;
                 padding: 0 !important;
@@ -2853,8 +2973,8 @@
             }
             body.sc-vertical #chatwrap {
                 position: fixed !important; bottom: 0 !important; left: 0 !important;
-                width: 100vw !important; height: calc(42vh - 28px) !important;
-                z-index: 9999 !important; background: rgba(0,0,0,0.85) !important;
+                width: 100vw !important; height: calc(50vh - 44px) !important;
+                z-index: 9999 !important; background: rgba(16,14,24,0.97) !important;
                 overflow: hidden !important; padding: 0 5px !important;
                 display: flex !important; flex-direction: column !important;
             }
@@ -2864,11 +2984,7 @@
                leftcontrols hides its own internal layout; we show a proxy row instead. */
             body.sc-vertical #leftcontrols { display: none !important; }
 
-            /* fs + emote buttons: right-pinned, sitting exactly on the chat top edge */
-            body.sc-vertical #sc-emote-proxy {
-                bottom: 43vh !important;
-                right: 8px !important; left: auto !important;
-            }
+            /* fs button: right-pinned, sitting exactly on the chat top edge */
             body.sc-vertical #fs-toggle-btn {
                 bottom: 43vh !important;
                 right: 84px !important; left: auto !important;
@@ -3293,32 +3409,83 @@
             #fs-toggle-btn { display: none !important; }
 
             /* Compact control icons on phones (TV scales these up to 52px below) */
-            #sc-desync-btn, #sc-emote-proxy, #sc-settings-btn {
+            #sc-desync-btn, #sc-settings-btn {
                 width: 36px !important; height: 36px !important; font-size: 15px !important;
                 -webkit-tap-highlight-color: transparent !important;
             }
             /* Prevent input zoom on mobile */
             #sc-chat-textarea { font-size: 16px !important; }
 
-            /* ── VERTICAL (portrait phone) ───────────────────── */
-            /* Video gets 60vh — stays large even when keyboard shrinks the viewport */
+            /* ── VERTICAL (portrait phone): YouTube-style stack ─── */
+            /* Title strip (36px) → video (50vh total) → ctrl band (44px) → chat */
             body.sc-vertical #videowrap,
             body.sc-vertical #videowrap .embed-responsive,
-            body.sc-vertical #ytapiplayer    { height: 60vh !important; }
-            body.sc-vertical #chatwrap       { height: calc(40vh - 40px) !important; }
-            body.sc-vertical #sc-users-panel { bottom: 40vh !important; }
-            body.sc-vertical #sc-poll-panel  { bottom: 40vh !important; }
-            /* Vertical: a single full-width control band flush under the video —
-               user count / poll on the left, control icons on the right, chat below. */
+            body.sc-vertical #ytapiplayer    { height: calc(50vh - 36px) !important; }
+            body.sc-vertical #chatwrap       { height: calc(50vh - 44px) !important; }
+            body.sc-vertical #sc-users-panel { bottom: calc(50vh - 44px) !important; }
+            body.sc-vertical #sc-poll-panel  { bottom: calc(50vh - 44px) !important; }
+            /* Three buttons sit inside the control band — evenly spaced from the right */
             body.sc-vertical #sc-chatmode-btn {
-                bottom: calc(40vh - 38px) !important; right: 6px !important;
-                top: auto !important; left: auto !important; transform: none !important;
+                bottom: auto !important; top: calc(50vh + 4px) !important;
+                right: 8px !important; left: auto !important; transform: none !important;
                 opacity: 1 !important; pointer-events: auto !important;
             }
-            body.sc-vertical #sc-emote-proxy  { bottom: calc(40vh - 38px) !important; right: 48px !important; left: auto !important; }
-            body.sc-vertical #sc-desync-btn   { bottom: calc(40vh - 38px) !important; right: 90px !important; left: auto !important; }
-            body.sc-vertical #sc-settings-btn { bottom: calc(40vh - 38px) !important; right: 132px !important; left: auto !important; }
-            body.sc-vertical .video-js .vjs-control-bar { bottom: calc(40vh + 4px) !important; left: 4px !important; right: 4px !important; }
+            body.sc-vertical #sc-desync-btn {
+                bottom: auto !important; top: calc(50vh + 4px) !important;
+                right: 52px !important; left: auto !important;
+                opacity: 1 !important; pointer-events: auto !important;
+            }
+            body.sc-vertical #sc-settings-btn {
+                bottom: auto !important; top: calc(50vh + 4px) !important;
+                right: 96px !important; left: auto !important;
+                opacity: 1 !important; pointer-events: auto !important;
+            }
+            body.sc-vertical .video-js .vjs-control-bar { bottom: 4px !important; left: 4px !important; right: 4px !important; }
+
+            /* Control band element — dark strip between video and chat */
+            #sc-vert-ctrl-band { display: none !important; }
+            body.sc-vertical #sc-vert-ctrl-band {
+                display: block !important;
+                position: fixed !important; left: 0 !important; right: 0 !important;
+                top: 50vh !important; height: 44px !important;
+                background: rgba(8,6,12,0.95) !important;
+                z-index: 10000 !important;
+                border-top: 1px solid rgba(255,255,255,0.10) !important;
+                border-bottom: 1px solid rgba(255,255,255,0.07) !important;
+            }
+            /* Right-zone slide drawer — buttons hidden off-screen right, revealed on edge swipe */
+            body.sc-vertical #sc-chatmode-btn,
+            body.sc-vertical #sc-desync-btn,
+            body.sc-vertical #sc-settings-btn {
+                opacity: 0 !important; pointer-events: none !important;
+                transform: translateX(16px) !important;
+                transition: opacity 0.25s ease, transform 0.25s ease !important;
+            }
+            body.sc-vertical.sc-rightzone #sc-chatmode-btn,
+            body.sc-vertical.sc-rightzone #sc-desync-btn,
+            body.sc-vertical.sc-rightzone #sc-settings-btn {
+                opacity: 1 !important; pointer-events: auto !important;
+                transform: translateX(0) !important;
+            }
+            /* Grip — thin pill on the right edge of the control band */
+            #sc-vert-ctrl-grip { display: none !important; }
+            body.sc-vertical #sc-vert-ctrl-grip {
+                display: block !important;
+                position: fixed !important; right: 0 !important; top: 50vh !important;
+                width: 4px !important; height: 44px !important;
+                background: rgba(255,255,255,0.22) !important;
+                z-index: 10002 !important; cursor: pointer !important;
+                border-radius: 2px 0 0 2px !important;
+                transition: width 0.15s ease, background 0.2s ease !important;
+            }
+            body.sc-vertical #sc-vert-ctrl-grip:active { background: rgba(255,255,255,0.5) !important; width: 6px !important; }
+            body.sc-vertical.sc-rightzone #sc-vert-ctrl-grip { opacity: 0 !important; pointer-events: none !important; }
+
+            /* Hide ctrl band, grip, and buttons while keyboard is up */
+            body.sc-kb-open.sc-vertical #sc-vert-ctrl-band,
+            body.sc-kb-open.sc-vertical #sc-vert-ctrl-grip {
+                opacity: 0 !important; pointer-events: none !important;
+            }
 
             /* ── KEYBOARD OPEN (sc-kb-open) ──────────────────── */
             /* edge-to-edge mode breaks adjustResize — vh never updates,
@@ -3336,7 +3503,6 @@
             /* Hide floating buttons while typing */
             body.sc-kb-open.sc-vertical #sc-chatmode-btn,
             body.sc-kb-open.sc-vertical #sc-desync-btn,
-            body.sc-kb-open.sc-vertical #sc-emote-proxy,
             body.sc-kb-open.sc-vertical #sc-settings-btn,
             body.sc-kb-open #sc-top-bar,
             body.sc-kb-open #sc-chat-header {
@@ -3356,7 +3522,6 @@
             }
             /* Lift floating buttons above the keyboard */
             body.sc-kb-open.sc-horizontal #sc-desync-btn,
-            body.sc-kb-open.sc-horizontal #sc-emote-proxy,
             body.sc-kb-open.sc-horizontal #fs-toggle-btn,
             body.sc-kb-open.sc-horizontal #sc-settings-btn {
                 bottom: calc(var(--sc-kb-h) + 6px) !important;
@@ -3367,7 +3532,6 @@
                Hidden until the mouse moves to the left side (sc-leftzone),
                then revealed and clickable; fades out again afterwards. */
             body.sc-horizontal #sc-chatmode-btn,
-            body.sc-horizontal #sc-emote-proxy,
             body.sc-horizontal #sc-desync-btn,
             body.sc-horizontal #sc-settings-btn {
                 left: 10px !important; right: auto !important; bottom: auto !important;
@@ -3377,7 +3541,6 @@
             }
             /* Slide/fade in when the mouse reaches the left edge (or the grip) */
             body.sc-horizontal.sc-leftzone #sc-chatmode-btn,
-            body.sc-horizontal.sc-leftzone #sc-emote-proxy,
             body.sc-horizontal.sc-leftzone #sc-desync-btn,
             body.sc-horizontal.sc-leftzone #sc-settings-btn {
                 opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
@@ -3400,15 +3563,13 @@
             /* Hide the grip once the cluster is open */
             body.sc-leftzone #sc-cluster-grip { opacity: 0 !important; pointer-events: none !important; }
             /* Vertical positions (44px buttons, 56px pitch) */
-            body.sc-horizontal #sc-chatmode-btn { top: calc(50% - 112px) !important; }
-            body.sc-horizontal #sc-emote-proxy  { top: calc(50% - 56px)  !important; }
+            body.sc-horizontal #sc-chatmode-btn { top: calc(50% - 56px) !important; }
             body.sc-horizontal #sc-desync-btn   { top: 50% !important; }
-            body.sc-horizontal #sc-settings-btn { top: calc(50% + 56px)  !important; }
+            body.sc-horizontal #sc-settings-btn { top: calc(50% + 56px) !important; }
             /* TV — bigger buttons, wider pitch */
-            body.sc-tv.sc-horizontal #sc-chatmode-btn { top: calc(50% - 128px) !important; }
-            body.sc-tv.sc-horizontal #sc-emote-proxy  { top: calc(50% - 64px)  !important; }
+            body.sc-tv.sc-horizontal #sc-chatmode-btn { top: calc(50% - 64px) !important; }
             body.sc-tv.sc-horizontal #sc-desync-btn   { top: 50% !important; }
-            body.sc-tv.sc-horizontal #sc-settings-btn { top: calc(50% + 64px)  !important; }
+            body.sc-tv.sc-horizontal #sc-settings-btn { top: calc(50% + 64px) !important; }
             /* Seek bar (raw video only) spans the video, stopping at the chat edge */
             body.sc-horizontal .video-js .vjs-control-bar { left: 4px !important; right: calc(19vw + 12px) !important; }
 
@@ -3416,7 +3577,7 @@
             body.sc-tv #messagebuffer { font-size: 18px !important; }
             body.sc-tv #sc-chat-textarea { font-size: 18px !important; }
             body.sc-tv #sc-desync-btn, body.sc-tv #fs-toggle-btn,
-            body.sc-tv #sc-emote-proxy, body.sc-tv #sc-settings-btn {
+            body.sc-tv #sc-settings-btn {
                 width: 52px !important; height: 52px !important; font-size: 22px !important;
             }
             body.sc-tv :focus { outline: 3px solid rgba(255,255,255,0.8) !important; }
@@ -3426,6 +3587,17 @@
                 box-shadow: 0 0 0 5px rgba(224,112,26,0.32) !important;
                 border-radius: 5px !important;
             }
+            /* TV caption — label that appears beside the D-pad focused element */
+            body.sc-tv #sc-tv-caption {
+                position: fixed !important; z-index: 30001 !important;
+                background: rgba(0,0,0,0.82) !important; color: #fff !important;
+                font-size: 12px !important; font-weight: 700 !important;
+                padding: 5px 14px !important; border-radius: 6px !important;
+                pointer-events: none !important; white-space: nowrap !important;
+                opacity: 0 !important; transition: opacity 0.15s ease !important;
+                letter-spacing: 0.06em !important; text-transform: uppercase !important;
+            }
+            body.sc-tv #sc-tv-caption.sc-show { opacity: 1 !important; }
 
             /* TV: keep the settings modal inside the overscan-safe area and scrollable */
             body.sc-tv #sc-settings-overlay { padding: 6vh 8vw !important; box-sizing: border-box !important; }
@@ -3547,7 +3719,8 @@
             }
             #sc-trivia-btn:hover { color: rgba(255,255,255,0.9) !important; }
             #sc-trivia-btn.sc-bar-dim { opacity: 0 !important; }
-            body.sc-vertical #sc-trivia-btn { right: 150px !important; }
+            /* Trivia button hidden in vertical — title bar is too narrow */
+            body.sc-vertical #sc-trivia-btn { display: none !important; }
             body.sc-tv #sc-trivia-btn { font-size: 12px !important; }
 
             #sc-trivia-card {
@@ -3631,7 +3804,7 @@
             html body.sc-pip #sc-top-bar, html body.sc-pip #videowrap-header, html body.sc-pip #sc-movie-links,
             html body.sc-pip #sc-movie-stats, html body.sc-pip #sc-poster-toggle, html body.sc-pip #sc-poster-strip,
             html body.sc-pip #sc-trivia-btn, html body.sc-pip #sc-chatmode-btn, html body.sc-pip #sc-cluster-grip,
-            html body.sc-pip #sc-emote-proxy, html body.sc-pip #sc-desync-btn, html body.sc-pip #sc-settings-btn,
+            html body.sc-pip #sc-desync-btn, html body.sc-pip #sc-settings-btn,
             html body.sc-pip #sc-users-panel, html body.sc-pip #sc-poll-panel,
             html body.sc-pip #sc-np-card, html body.sc-pip #sc-trivia-card,
             html body.sc-pip #sc-mobile-input-row, html body.sc-pip .video-js .vjs-control-bar {
@@ -3661,6 +3834,20 @@
             body.sc-chat-hidden.sc-vertical #videowrap,
             body.sc-chat-hidden.sc-vertical #videowrap .embed-responsive,
             body.sc-chat-hidden.sc-vertical #ytapiplayer { height: 100vh !important; }
+            /* chat-hidden vertical: suppress the ctrl band (no black bar mid-screen); slide buttons from bottom-right */
+            body.sc-chat-hidden.sc-vertical #sc-vert-ctrl-band { display: none !important; }
+            body.sc-chat-hidden.sc-vertical #sc-vert-ctrl-grip {
+                top: auto !important; bottom: 0 !important;
+            }
+            body.sc-chat-hidden.sc-vertical #sc-chatmode-btn {
+                top: auto !important; bottom: 8px !important;
+            }
+            body.sc-chat-hidden.sc-vertical #sc-desync-btn {
+                top: auto !important; bottom: 8px !important;
+            }
+            body.sc-chat-hidden.sc-vertical #sc-settings-btn {
+                top: auto !important; bottom: 8px !important;
+            }
 
             /* Overlay: video full width, chat floats translucent over the right */
             /* ── OVERLAY: minimal chat in the top-right corner over full video ── */
@@ -3757,7 +3944,7 @@
             }
             #sc-newmsg-pill.sc-show { opacity: 1 !important; pointer-events: auto !important; }
             body.sc-horizontal #sc-newmsg-pill { right: calc(19vw + 16px) !important; bottom: 56px !important; }
-            body.sc-vertical   #sc-newmsg-pill { left: 50% !important; transform: translateX(-50%) !important; bottom: calc(40vh + 56px) !important; }
+            body.sc-vertical   #sc-newmsg-pill { left: 50% !important; transform: translateX(-50%) !important; bottom: calc(50vh - 44px + 12px) !important; }
             body.sc-tv #sc-newmsg-pill { font-size: 17px !important; padding: 10px 22px !important; }
 
             /* ── MENTION TOAST ───────────────────────────────── */
@@ -3820,12 +4007,11 @@
     (function() {
         if (!window.visualViewport || _isTv) return;
 
-        let maxVVH = window.visualViewport.height;
         let kbTimer = null;
         const INPUT_H = 56; // chat input bar height
 
         const onOpen = (vv) => {
-            const kbH  = maxVVH - vv.height;
+            const kbH  = Math.round(window.innerHeight - vv.height);
             const visH = vv.height;
             const isVert = document.body.classList.contains('sc-vertical');
 
@@ -3860,9 +4046,8 @@
 
         window.visualViewport.addEventListener('resize', () => {
             const vv = window.visualViewport;
-            maxVVH = Math.max(maxVVH, vv.height);
             clearTimeout(kbTimer);
-            if (maxVVH - vv.height > 120) {
+            if (window.innerHeight - vv.height > 120) {
                 onOpen(vv);
             } else {
                 kbTimer = setTimeout(onClose, 280);
@@ -3884,6 +4069,7 @@
 
     // ── Ambient glow: sample the video's colour and bleed it to the screen edges
     function initAmbientGlow() {
+        if (_isTv) return;
         const el = document.createElement('div');
         el.id = 'sc-ambient';
         document.body.appendChild(el);
@@ -3935,13 +4121,19 @@
     }
 
     // ── Chat layout modes: sidebar → overlay → hidden
-    const _CHAT_MODES = ['sidebar', 'overlay', 'hidden'];
-    const _CHAT_MODE_ICONS = { sidebar: '◨', overlay: '⧉', hidden: '▢' };
+    const _CHAT_MODES = ['sidebar', 'hidden'];
+    const _CHAT_MODE_ICONS = { sidebar: '▐', hidden: '⊠' };
     function applyChatMode(mode) {
-        _CHAT_MODES.forEach(m => document.body.classList.toggle('sc-chat-' + m, m === mode));
+        ['sidebar', 'overlay', 'hidden'].forEach(m => document.body.classList.toggle('sc-chat-' + m, m === mode));
         try { localStorage.setItem('sc_chat_mode', mode); } catch (e) {}
         const btn = document.getElementById('sc-chatmode-btn');
-        if (btn) { btn.textContent = _CHAT_MODE_ICONS[mode] || '▦'; btn.title = 'Chat: ' + mode + ' (press C)'; }
+        if (btn) {
+            btn.textContent = _CHAT_MODE_ICONS[mode] || '▐';
+            btn.title = 'Chat: ' + mode + ' (press C)';
+            btn.dataset.tvLabel = 'Chat: ' + mode.charAt(0).toUpperCase() + mode.slice(1);
+        }
+        const colBtn = document.getElementById('sc-chat-collapse-btn');
+        if (colBtn) colBtn.textContent = mode === 'hidden' ? '‹' : '›';
         applyChatFontSize(getChatFontSize()); // input size depends on the mode (overlay = compact)
         // The layout reflows on a mode change, which loses the scroll position —
         // snap the chat back to the latest message once it settles.
@@ -3960,6 +4152,7 @@
     function initChatModes() {
         let saved = 'sidebar';
         try { saved = localStorage.getItem('sc_chat_mode') || 'sidebar'; } catch (e) {}
+        if (!_CHAT_MODES.includes(saved)) saved = 'sidebar';
 
         // Always-visible floating button — lives on <body>, NOT in the chat header,
         // so it stays reachable even in Hidden mode.
@@ -4046,8 +4239,9 @@
     function initLeftZone() {
         let hideTimer = null;
         const THRESH = 120; // px from the left edge
-        const reveal = () => { clearTimeout(hideTimer); document.body.classList.add('sc-leftzone'); };
         const scheduleHide = (ms) => { clearTimeout(hideTimer); hideTimer = setTimeout(() => document.body.classList.remove('sc-leftzone'), ms); };
+        const reveal = (autoHideMs) => { clearTimeout(hideTimer); document.body.classList.add('sc-leftzone'); if (autoHideMs) scheduleHide(autoHideMs); };
+        _leftZoneReveal = reveal;
 
         if (!document.getElementById('sc-cluster-grip')) {
             const grip = document.createElement('div');
@@ -4066,12 +4260,64 @@
         // Touch: tap near the left edge to reveal for a few seconds
         document.addEventListener('touchstart', (e) => {
             const x = e.touches[0] ? e.touches[0].clientX : 1e9;
-            if (x <= THRESH) { reveal(); scheduleHide(3500); }
+            if (x <= THRESH) { reveal(3500); }
         }, { passive: true });
     }
 
+    // Dark strip between video and chat in vertical mode; buttons float on top via CSS.
+    function initVertControlBand() {
+        if (document.getElementById('sc-vert-ctrl-band')) return;
+        const band = document.createElement('div');
+        band.id = 'sc-vert-ctrl-band';
+        document.body.appendChild(band);
+    }
+
+    // Right-edge slide-out drawer for vertical mode (mirrors the left-zone in horizontal).
+    function initRightZone() {
+        let hideTimer = null;
+        const THRESH = 100; // px from right edge triggers reveal
+        const scheduleHide = (ms) => {
+            clearTimeout(hideTimer);
+            hideTimer = setTimeout(() => document.body.classList.remove('sc-rightzone'), ms);
+        };
+        const reveal = (ms) => {
+            clearTimeout(hideTimer);
+            document.body.classList.add('sc-rightzone');
+            if (ms) scheduleHide(ms);
+        };
+        _rightZoneReveal = reveal;
+
+        if (!document.getElementById('sc-vert-ctrl-grip')) {
+            const grip = document.createElement('div');
+            grip.id = 'sc-vert-ctrl-grip';
+            grip.title = 'Controls';
+            grip.addEventListener('click', () => reveal(3500));
+            document.body.appendChild(grip);
+        }
+
+        document.addEventListener('touchstart', (e) => {
+            if (!document.body.classList.contains('sc-vertical')) return;
+            const x = e.touches[0]?.clientX;
+            if (x != null && window.innerWidth - x <= THRESH) reveal(3500);
+        }, { passive: true });
+    }
+
+    // Transparent tap-catcher over the video — only pointer-events:auto when chrome is dimmed
+    // (sc-video-dimmed on body). A document-level click listener doesn't work here because
+    // YouTube/Drive embeds are iframes and their taps never bubble to the parent document.
+    function initVideoTapReveal() {
+        const tap = document.createElement('div');
+        tap.id = 'sc-video-tap';
+        tap.addEventListener('click', () => {
+            if (_topBarWake) _topBarWake();
+            if (_leftZoneReveal) _leftZoneReveal(4000);
+            if (_rightZoneReveal) _rightZoneReveal(4000);
+        });
+        document.body.appendChild(tap);
+    }
+
     function initCinematicChat() {
-        [initAmbientGlow, initChromeAutohide, initChatModes, initNewMessagePill, initMentionToast, initChatFont, initLeftZone]
+        [initAmbientGlow, initChromeAutohide, initChatModes, initNewMessagePill, initMentionToast, initChatFont, initLeftZone, initVideoTapReveal, initVertControlBand, initRightZone]
             .forEach(fn => { try { fn(); } catch (e) { console.warn('[Grindhouse] init failed:', fn.name, e); } });
     }
     if (document.readyState === 'complete') initCinematicChat();
@@ -4112,7 +4358,7 @@
         // candidate while the overlay exists (getElementById is null otherwise). It lives in the main
         // cluster — NOT OVERLAY_IDS — so the remote can still reach chat and the controls.
         const MAIN_IDS = ['sc-drm-open', 'sc-chatmode-btn', 'sc-emote-proxy', 'sc-desync-btn', 'sc-settings-btn',
-            'sc-usercount-btn', 'sc-poll-btn', 'sc-poster-toggle', 'sc-trivia-btn', 'sc-chat-textarea'];
+            'sc-usercount-btn', 'sc-poll-btn', 'sc-poster-toggle', 'sc-trivia-btn', 'sc-chat-collapse-btn', 'sc-chat-textarea'];
         const FOCUS_SEL = 'button, a[href], input:not([type=hidden]), textarea, select, [tabindex]';
 
         const makeFocusable = (el) => {
@@ -4137,6 +4383,22 @@
             el.classList.add('sc-tv-focus');
             try { el.focus({ preventScroll: true }); } catch (e) {}
             try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
+            // Caption label shown to the right of the focused button
+            let cap = document.getElementById('sc-tv-caption');
+            if (!cap) { cap = document.createElement('div'); cap.id = 'sc-tv-caption'; document.body.appendChild(cap); }
+            const rawLabel = el.dataset.tvLabel || el.title || '';
+            const capText = rawLabel.replace(/ ?[—–-].*$/, '').replace(/ \(press \w+\)$/i, '').trim();
+            if (capText) {
+                const r = el.getBoundingClientRect();
+                cap.textContent = capText;
+                cap.style.left = Math.min(window.innerWidth - 180, r.right + 12) + 'px';
+                cap.style.top = Math.max(4, r.top + (r.height - 26) / 2) + 'px';
+                cap.classList.add('sc-show');
+                clearTimeout(cap._t);
+                cap._t = setTimeout(() => cap.classList.remove('sc-show'), 2000);
+            } else {
+                cap.classList.remove('sc-show');
+            }
         }
 
         function move(dir) {
