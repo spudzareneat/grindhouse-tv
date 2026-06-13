@@ -11,12 +11,21 @@
     const LS_CHAT_FONT  = 'sc_chat_fontsize';
     const LS_MOVIE_LINKS = 'sc_movie_links'; // 'off' to hide IMDb/Letterboxd/Wiki links
     const LS_COUCH      = 'sc_couch_mode'; // 'on' = chat input grows big & readable while typing
+    const LS_WATCHALONG = 'sc_watch_along'; // 'on' = hide the chat input + guest login (read-only)
     const getKey   = id => localStorage.getItem(id) || '';
     const setKey   = (id, v) => localStorage.setItem(id, v.trim());
     const hasKey   = id => !!getKey(id);
     const spellCheckEnabled = () => getKey(LS_SPELLCHECK) !== 'off';
     const movieLinksEnabled = () => getKey(LS_MOVIE_LINKS) !== 'off';
     const couchModeEnabled  = () => getKey(LS_COUCH) === 'on';
+    const watchAlongEnabled = () => getKey(LS_WATCHALONG) === 'on';
+
+    // Watch-Only mode: hide the chat input and the guest-login box so the room is
+    // purely read-along. Works in both sidebar and overlay chat layouts (CSS-gated).
+    function applyWatchAlong() {
+        if (!document.body) return;
+        document.body.classList.toggle('sc-watchalong', watchAlongEnabled());
+    }
 
     // Couch Mode: while typing in the chat (sidebar layout) the input swells into a
     // large, easy-to-read compose box that overlaps the video. Body class gates the CSS.
@@ -1796,6 +1805,16 @@
                 </div>
 
                 <div class="sc-settings-group sc-settings-toggle-group">
+                    <label class="sc-settings-toggle-label">
+                        <span class="sc-toggle-row">
+                            <input type="checkbox" id="sc-input-watchalong" ${watchAlongEnabled() ? 'checked' : ''} />
+                            <span class="sc-toggle-text">Watch-Only Mode</span>
+                        </span>
+                        <span class="sc-settings-note">Hides the chat input and the guest-login box — just read along, no typing</span>
+                    </label>
+                </div>
+
+                <div class="sc-settings-group sc-settings-toggle-group">
                     <label class="sc-settings-label">
                         Chat font size
                         <span class="sc-settings-note" id="sc-font-val">${getChatFontSize()}px</span>
@@ -1902,6 +1921,13 @@
         if (couch) couch.addEventListener('change', () => {
             setKey(LS_COUCH, couch.checked ? 'on' : 'off');
             applyCouchMode();
+        });
+
+        // ── Watch-Only Mode toggle (applies immediately) ─────────────────────
+        const watchalong = document.getElementById('sc-input-watchalong');
+        if (watchalong) watchalong.addEventListener('change', () => {
+            setKey(LS_WATCHALONG, watchalong.checked ? 'on' : 'off');
+            applyWatchAlong();
         });
 
         // ── Movie-links toggle (applies on next media; clears current row now) ─
@@ -2420,8 +2446,105 @@
         bootObserver.observe(document.body, { childList: true, subtree: true });
     };
 
-    // Don't run the channel UI on the login page
-    if (window.location.pathname.startsWith('/login')) return;
+    // The channel UI doesn't run on the login page, but a remote-only TV still needs
+    // D-pad navigation to reach the username/password fields and the Login button —
+    // there's no pointer. Install a minimal, self-contained spatial nav, then stop.
+    if (window.location.pathname.startsWith('/login')) {
+        initLoginTvNav();
+        return;
+    }
+
+    // Self-contained D-pad navigation for the /login page. None of the channel UI
+    // (or its CSS, or the module-level _isTv) runs here, so this re-detects TV and
+    // injects just the focus-ring style it needs. The native layer forwards remote
+    // keys to window.__scTvKey(dir) exactly as it does for the channel.
+    function initLoginTvNav() {
+        let isTv = false;
+        try { if (window.CytubeNative && CytubeNative.isTv) isTv = !!CytubeNative.isTv(); } catch (e) {}
+        if (!isTv) isTv = window.screen.width >= 1280 && !('ontouchstart' in window) && navigator.maxTouchPoints === 0;
+        if (!isTv) return; // phones/keyboards navigate the form normally
+
+        const style = document.createElement('style');
+        style.textContent =
+            '.sc-tv-focus{outline:3px solid #e0701a !important;outline-offset:2px !important;' +
+            'box-shadow:0 0 0 5px rgba(224,112,26,0.32) !important;border-radius:5px !important;}';
+        (document.head || document.documentElement).appendChild(style);
+
+        let focusEl = null;
+        const isVisible = (el) => {
+            if (!el || !el.getBoundingClientRect) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 3 || r.height < 3) return false;
+            const cs = getComputedStyle(el);
+            return cs.visibility !== 'hidden' && cs.display !== 'none';
+        };
+        const FOCUS_SEL = 'input:not([type=hidden]), button, a[href], select, textarea, [tabindex]';
+        const candidates = () =>
+            [...document.querySelectorAll(FOCUS_SEL)].filter(isVisible).filter(e => !e.disabled);
+
+        function setFocus(el) {
+            if (!el) return;
+            if (focusEl && focusEl !== el) focusEl.classList.remove('sc-tv-focus');
+            focusEl = el;
+            el.classList.add('sc-tv-focus');
+            try { el.focus({ preventScroll: true }); } catch (e) {}
+            try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+        }
+
+        function move(dir) {
+            const list = candidates();
+            if (!list.length) return;
+            if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) { setFocus(list[0]); return; }
+            const cur = focusEl.getBoundingClientRect();
+            const cx = cur.left + cur.width / 2, cy = cur.top + cur.height / 2;
+            let best = null, bestScore = Infinity;
+            for (const el of list) {
+                if (el === focusEl) continue;
+                const r = el.getBoundingClientRect();
+                const dx = (r.left + r.width / 2) - cx, dy = (r.top + r.height / 2) - cy;
+                let primary, perp;
+                if (dir === 'left')       { if (dx > -4) continue; primary = -dx; perp = Math.abs(dy); }
+                else if (dir === 'right') { if (dx < 4)  continue; primary = dx;  perp = Math.abs(dy); }
+                else if (dir === 'up')    { if (dy > -4) continue; primary = -dy; perp = Math.abs(dx); }
+                else                      { if (dy < 4)  continue; primary = dy;  perp = Math.abs(dx); }
+                const score = primary + perp * 2;
+                if (score < bestScore) { bestScore = score; best = el; }
+            }
+            if (best) setFocus(best);
+        }
+
+        function activate() {
+            if (!focusEl) { move('down'); return; }
+            const tag = focusEl.tagName, type = (focusEl.type || '').toLowerCase();
+            // Text-like fields: focus to open the on-screen keyboard. Everything else
+            // (buttons, checkbox, submit) just clicks.
+            if ((tag === 'INPUT' && !/^(checkbox|radio|submit|button|reset)$/.test(type)) || tag === 'TEXTAREA') {
+                try { focusEl.focus(); } catch (e) {}
+            } else {
+                focusEl.click();
+            }
+        }
+
+        window.__scTvKey = function (dir) {
+            try {
+                if (dir === 'back') {
+                    if (history.length > 1) history.back();
+                    else { try { if (window.CytubeNative && CytubeNative.tvBack) CytubeNative.tvBack(); } catch (e) {} }
+                    return;
+                }
+                if (dir === 'center') activate();
+                else move(dir);
+            } catch (e) { /* never let remote nav throw */ }
+        };
+
+        // Land on the first text field (or first focusable) once the form is present.
+        const seed = () => {
+            const l = candidates();
+            if (l.length) setFocus(l.find(e => e.tagName === 'INPUT' && /^(text|password|email)$/i.test(e.type)) || l[0]);
+        };
+        if (document.readyState === 'complete' || document.readyState === 'interactive') seed();
+        else window.addEventListener('DOMContentLoaded', seed);
+    }
 
     waitForBody();
 
@@ -3883,6 +4006,16 @@
             }
             #sc-mobile-input-row #sc-chat-textarea { flex: 1 !important; }
 
+            /* ── WATCH-ONLY MODE — hide chat input + guest login ─ */
+            /* #sc-mobile-input-row wraps the textarea, send + emote buttons;
+               #chatline is CyTube's original input; #guestlogin is the guest box
+               that appears below the input when not signed in. Hidden in both the
+               sidebar and overlay chat layouts. messagebuffer reflows to fill. */
+            body.sc-watchalong #sc-mobile-input-row,
+            body.sc-watchalong #chatline,
+            body.sc-watchalong #guestlogin,
+            body.sc-watchalong #sc-emote-proxy { display: none !important; }
+
             /* ── NOW-PLAYING HERO CARD ───────────────────────── */
             #sc-np-card {
                 position: fixed !important; inset: 0 !important;
@@ -4575,7 +4708,7 @@
     }
 
     function initCinematicChat() {
-        [initAmbientGlow, initChromeAutohide, initChatModes, initNewMessagePill, initMentionToast, initChatFont, initLeftZone, initVideoTapReveal, initVertControlBand, initRightZone, applyCouchMode]
+        [initAmbientGlow, initChromeAutohide, initChatModes, initNewMessagePill, initMentionToast, initChatFont, initLeftZone, initVideoTapReveal, initVertControlBand, initRightZone, applyCouchMode, applyWatchAlong]
             .forEach(fn => { try { fn(); } catch (e) { console.warn('[Grindhouse] init failed:', fn.name, e); } });
     }
     if (document.readyState === 'complete') initCinematicChat();
