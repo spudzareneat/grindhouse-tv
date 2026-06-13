@@ -39,6 +39,12 @@ class CytubeJsBridge(
         activity.runOnUiThread { activity.setKeyboardSuppressed(on) }
     }
 
+    /** Track whether the chat textarea has focus so Enter isn't hijacked by TV nav. */
+    @JavascriptInterface
+    fun setChatInputFocused(active: Boolean) {
+        activity.chatInputFocused = active
+    }
+
     /** Hide the native loading overlay once the injected script has finished styling. */
     @JavascriptInterface
     fun onReady() {

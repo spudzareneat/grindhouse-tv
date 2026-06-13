@@ -68,6 +68,10 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var pageLoaded = false
     private val splashStart = System.currentTimeMillis()
 
+    // Set to true by JS bridge when the chat textarea has focus, so physical keyboard
+    // Enter passes through to the WebView instead of being intercepted as TV-nav "center".
+    @Volatile var chatInputFocused: Boolean = false
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         val splash = installSplashScreen()
@@ -202,9 +206,10 @@ class MainActivity : AppCompatActivity() {
                     KeyEvent.KEYCODE_DPAD_DOWN -> "down"
                     KeyEvent.KEYCODE_DPAD_LEFT -> "left"
                     KeyEvent.KEYCODE_DPAD_RIGHT -> "right"
-                    KeyEvent.KEYCODE_DPAD_CENTER,
+                    KeyEvent.KEYCODE_DPAD_CENTER -> "center"
+                    // Physical keyboard Enter — pass through to WebView when a text field has focus
                     KeyEvent.KEYCODE_ENTER,
-                    KeyEvent.KEYCODE_NUMPAD_ENTER -> "center"
+                    KeyEvent.KEYCODE_NUMPAD_ENTER -> if (!chatInputFocused) "center" else null
                     KeyEvent.KEYCODE_BACK -> "back"
                     else -> null
                 }

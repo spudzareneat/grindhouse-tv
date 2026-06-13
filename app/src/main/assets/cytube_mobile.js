@@ -10,11 +10,81 @@
     const LS_SPELLCHECK = 'sc_spellcheck'; // 'off' to disable, anything else = enabled
     const LS_CHAT_FONT  = 'sc_chat_fontsize';
     const LS_MOVIE_LINKS = 'sc_movie_links'; // 'off' to hide IMDb/Letterboxd/Wiki links
+    const LS_COUCH      = 'sc_couch_mode'; // 'on' = chat input grows big & readable while typing
     const getKey   = id => localStorage.getItem(id) || '';
     const setKey   = (id, v) => localStorage.setItem(id, v.trim());
     const hasKey   = id => !!getKey(id);
     const spellCheckEnabled = () => getKey(LS_SPELLCHECK) !== 'off';
     const movieLinksEnabled = () => getKey(LS_MOVIE_LINKS) !== 'off';
+    const couchModeEnabled  = () => getKey(LS_COUCH) === 'on';
+
+    // Couch Mode: while typing in the chat (sidebar layout) the input swells into a
+    // large, easy-to-read compose box that overlaps the video. Body class gates the CSS.
+    function applyCouchMode() {
+        if (!document.body) return;
+        document.body.classList.toggle('sc-couch', couchModeEnabled());
+        if (!couchModeEnabled())
+            document.body.classList.remove('sc-couch-typing', 'sc-couch-prep', 'sc-couch-settled');
+    }
+    let _couchIdleTimer = null;
+    let _couchSettleTimer = null;
+    let _couchPrepTimer = null;
+    function couchFontPx() { return getChatFontSize() + 3; } // a touch bigger than the user's size
+    function couchTypingOn() {
+        if (!couchModeEnabled() || !document.body.classList.contains('sc-chat-sidebar')) return;
+        couchIdleKick(); // (re)arm the 10s idle-revert on every keystroke
+        if (document.body.classList.contains('sc-couch-typing')) return; // already open
+        clearTimeout(_couchPrepTimer);
+        const ta = document.getElementById('sc-chat-textarea');
+        // Two-step open: establish the FIXED box at its collapsed size first, flush layout,
+        // THEN expand. Switching position(static→fixed) and animating size in the same frame
+        // gives the browser no clean start state — the width snaps and the open looks "off".
+        if (!document.body.classList.contains('sc-couch-prep')) {
+            document.body.classList.add('sc-couch-prep');
+            void document.body.offsetWidth; // force reflow so the collapsed-fixed box is the start
+        }
+        // Enlarge the font (custom size + 3) — set inline so it tracks the user's setting and
+        // animates from the normal size to the bigger one.
+        if (ta) ta.style.setProperty('font-size', couchFontPx() + 'px', 'important');
+        document.body.classList.add('sc-couch-typing'); // animate to the big box
+        // Frosted blur only after the grow settles — per-frame backdrop blur on a growing box
+        // is the main source of jank on older hardware.
+        clearTimeout(_couchSettleTimer);
+        _couchSettleTimer = setTimeout(() => document.body.classList.add('sc-couch-settled'), 420);
+        couchScrollBottom();
+    }
+    // Pin the message list to the bottom of its reserved space, so the latest messages ride
+    // up above the compose box instead of being hidden behind it.
+    function couchScrollBottom() {
+        const buf = document.getElementById('messagebuffer');
+        if (!buf) return;
+        const toBottom = () => { buf.scrollTop = buf.scrollHeight; };
+        requestAnimationFrame(toBottom);
+        [120, 300, 420].forEach(ms => setTimeout(toBottom, ms));
+    }
+    function couchTypingOff() {
+        clearTimeout(_couchIdleTimer);
+        clearTimeout(_couchSettleTimer);
+        document.body.classList.remove('sc-couch-settled');
+        const wasOpen = document.body.classList.contains('sc-couch-typing') ||
+                        document.body.classList.contains('sc-couch-prep');
+        if (!wasOpen) return;
+        document.body.classList.remove('sc-couch-typing'); // animate collapse back down
+        applyChatFontSize(getChatFontSize());              // restore the normal inline font (transitions down)
+        // Clear the inline height so the input returns to its ORIGINAL rows=2 baseline.
+        const ta = document.getElementById('sc-chat-textarea');
+        if (ta) ta.style.removeProperty('height');
+        couchScrollBottom();
+        // Drop the fixed positioning back to normal flow only AFTER the collapse animation,
+        // so position never snaps mid-animation (that's what made the motion look off).
+        clearTimeout(_couchPrepTimer);
+        _couchPrepTimer = setTimeout(() => document.body.classList.remove('sc-couch-prep'), 360);
+    }
+    // Revert the big box after 10s of no typing (re-armed on every keystroke).
+    function couchIdleKick() {
+        clearTimeout(_couchIdleTimer);
+        _couchIdleTimer = setTimeout(couchTypingOff, 10000);
+    }
 
     // Chat font size — user-set via the settings slider, applied to #messagebuffer
     function getChatFontSize() {
@@ -286,12 +356,18 @@
 
         document.body.appendChild(overlay);
 
+        // Keep physical-keyboard Enter routed to the WebView (Enter = Send) while the
+        // modal is open, instead of letting native treat it as a TV "center" press.
+        try { if (window.CytubeNative) CytubeNative.setChatInputFocused(true); } catch (e) {}
+        // Recompute the native Enter-routing flag once the modal is gone.
+        const closeModal = () => { overlay.remove(); setTimeout(syncNativeInputFocus, 0); };
+
         // Focus the Send button so keyboard events target the modal, not the textarea
         setTimeout(() => document.getElementById('sc-btn-send')?.focus(), 0);
 
-        overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); onCancel(); } });
-        document.getElementById('sc-btn-cancel').addEventListener('click', () => { overlay.remove(); onCancel(); });
-        document.getElementById('sc-btn-send').addEventListener('click', () => { overlay.remove(); onSend(workingText); });
+        overlay.addEventListener('click', e => { if (e.target === overlay) { closeModal(); onCancel(); } });
+        document.getElementById('sc-btn-cancel').addEventListener('click', () => { closeModal(); onCancel(); });
+        document.getElementById('sc-btn-send').addEventListener('click', () => { closeModal(); onSend(workingText); });
 
         // Enter on the modal triggers Send, Escape triggers Cancel.
         // Use keyup so the key is fully released before focus returns to
@@ -301,13 +377,13 @@
                 e.preventDefault();
                 e.stopPropagation();
                 overlay.removeEventListener('keydown', modalKeyHandler);
-                overlay.remove();
+                closeModal();
                 setTimeout(() => onSend(workingText), 50);
             } else if (e.key === 'Escape') {
                 e.preventDefault();
                 e.stopPropagation();
                 overlay.removeEventListener('keydown', modalKeyHandler);
-                overlay.remove();
+                closeModal();
                 onCancel();
             }
         };
@@ -317,6 +393,7 @@
         const cleanupObserver = new MutationObserver(() => {
             if (!document.getElementById('sc-modal-overlay')) {
                 cleanupObserver.disconnect();
+                syncNativeInputFocus();
             }
         });
         cleanupObserver.observe(document.body, { childList: true });
@@ -465,6 +542,18 @@
        CHAT TEXTAREA INSTALLATION
     ========================================================== */
 
+    // Tell native Kotlin whether the WebView should keep physical-keyboard Enter
+    // (so it sends/confirms) instead of routing it to the TV remote "center" action.
+    // True when the chat textarea has focus, OR when the spell-check review modal is
+    // open (it handles Enter = Send itself). Called on every focus/blur and modal change.
+    function syncNativeInputFocus() {
+        const a = document.activeElement;
+        const inField = !!a && (a.id === 'sc-chat-textarea' || a.tagName === 'TEXTAREA' || a.tagName === 'INPUT');
+        const modalOpen = !!document.getElementById('sc-modal-overlay');
+        try { if (window.CytubeNative) CytubeNative.setChatInputFocused(inField || modalOpen); } catch (e) {}
+    }
+    window.__scSyncInputFocus = syncNativeInputFocus;
+
     function installChatTextarea() {
         const originalInput = document.getElementById('chatline');
         if (!originalInput) return false;
@@ -486,8 +575,14 @@
         textarea.addEventListener('input', () => {
             tabCandidates = [];
             lastChatlineValue = originalInput.value;
-            textarea.style.height = 'auto';
-            textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+            // Couch Mode: typing (re)expands the big box and resets its 10s idle timer.
+            // The couch CSS forces the height, so skip the auto-grow math while it's active.
+            if (couchModeEnabled() && document.body.classList.contains('sc-chat-sidebar')) {
+                couchTypingOn();
+            } else {
+                textarea.style.height = 'auto';
+                textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+            }
         });
         textarea.addEventListener('keydown', e => {
             handleTabComplete(textarea, e);
@@ -497,9 +592,24 @@
                 if (!document.getElementById('sc-modal-overlay')) {
                     attemptSend(textarea, originalInput);
                 }
+                couchTypingOff(); // Enter submits → shrink back to the normal input
+            } else if (e.key === 'Escape') {
+                // Escape backs out of the big box without sending.
+                if (document.body.classList.contains('sc-couch-typing')) {
+                    e.preventDefault();
+                    couchTypingOff();
+                }
             }
         });
         originalInput.addEventListener('focus', () => textarea.focus());
+
+        // Tell native Kotlin when the textarea has focus so physical-keyboard Enter
+        // is passed through instead of being intercepted as TV remote "center" press.
+        // Defer blur a tick so focus can settle (e.g. onto the review modal) first.
+        // (Couch Mode opens on actual typing — see the input handler — not merely on focus,
+        // so that after an Enter-send the refocused input stays at its normal size.)
+        textarea.addEventListener('focus', syncNativeInputFocus);
+        textarea.addEventListener('blur', () => { setTimeout(syncNativeInputFocus, 0); couchTypingOff(); });
 
         const chatwrap = document.getElementById('chatwrap');
         if (chatwrap) {
@@ -507,6 +617,14 @@
                 if (e.target === chatwrap || e.target.id === 'messagebuffer') textarea.focus();
             });
         }
+
+        // Clicking anywhere outside the chat column while the big box is open shrinks it back
+        // (the box is a DOM child of #chatwrap, so clicks on the box itself don't count).
+        document.addEventListener('pointerdown', e => {
+            if (!document.body.classList.contains('sc-couch-typing')) return;
+            if (e.target.closest && e.target.closest('#chatwrap')) return;
+            textarea.blur();
+        }, true);
 
         startEmoteWatcher(originalInput, textarea);
         return true;
@@ -1553,14 +1671,20 @@
        USER COLOR SYSTEM
     ========================================================== */
 
+    // djb2-xor hash — better bit spread than the old additive hash, so similar names
+    // (e.g. "mike"/"mikey") don't land on near-identical hues.
     function hashString(str) {
-        let h = 0;
-        for (let i = 0; i < str.length; i++) { h = str.charCodeAt(i) + ((h << 5) - h); h |= 0; }
+        let h = 5381;
+        for (let i = 0; i < str.length; i++) { h = ((h << 5) + h) ^ str.charCodeAt(i); h |= 0; }
         return Math.abs(h);
     }
     function usernameToColor(u) {
-        const h = hashString(u);
-        return `hsl(${h % 360}, ${75 + (h % 15)}%, ${60 + (h % 10)}%)`;
+        // Your own name is always a fixed baby blue so it stands out at a glance.
+        try { if (window.CLIENT && CLIENT.name && u === CLIENT.name) return 'hsl(197, 90%, 78%)'; } catch (e) {}
+        // Golden-angle stepping (×137.508°) spreads hues as far apart as possible, so
+        // distinct usernames get visibly distinct colors instead of clustering.
+        const hue = (hashString(u) * 137.508) % 360;
+        return `hsl(${hue.toFixed(1)}, 72%, 70%)`;
     }
     function applyUserColors() {
         document.querySelectorAll('#messagebuffer [class*="chat-msg-"]').forEach(el => {
@@ -1662,6 +1786,16 @@
                 </div>
 
                 <div class="sc-settings-group sc-settings-toggle-group">
+                    <label class="sc-settings-toggle-label">
+                        <span class="sc-toggle-row">
+                            <input type="checkbox" id="sc-input-couch" ${couchModeEnabled() ? 'checked' : ''} />
+                            <span class="sc-toggle-text">Couch Mode</span>
+                        </span>
+                        <span class="sc-settings-note">When typing in sidebar chat, the input grows into a big, easy-to-read box over the video</span>
+                    </label>
+                </div>
+
+                <div class="sc-settings-group sc-settings-toggle-group">
                     <label class="sc-settings-label">
                         Chat font size
                         <span class="sc-settings-note" id="sc-font-val">${getChatFontSize()}px</span>
@@ -1707,7 +1841,9 @@
             setKey(LS_TMDB, (enabled && input) ? input.value.trim() : '');
             const sc = document.getElementById('sc-input-spellcheck');
             if (sc) setKey(LS_SPELLCHECK, sc.checked ? 'on' : 'off');
-            movieLinkCache = {};   // new key takes effect on the next title
+            movieLinkCache = {};   // flush so the re-lookup hits the network
+            lastMovieTitle = '';   // allow injectMovieLinks to re-run for the current title
+            triggerTitleInject();  // immediately re-fetch with the new key
         };
 
         document.getElementById('sc-settings-save').addEventListener('click', () => {
@@ -1761,6 +1897,13 @@
             applySoftKeyboard();
         });
 
+        // ── Couch Mode toggle (applies immediately) ──────────────────────────
+        const couch = document.getElementById('sc-input-couch');
+        if (couch) couch.addEventListener('change', () => {
+            setKey(LS_COUCH, couch.checked ? 'on' : 'off');
+            applyCouchMode();
+        });
+
         // ── Movie-links toggle (applies on next media; clears current row now) ─
         const mlinks = document.getElementById('sc-input-movielinks');
         if (mlinks) mlinks.addEventListener('change', () => {
@@ -1794,6 +1937,7 @@
     let _topBarIsOpen = false;
     let _leftZoneReveal  = null;  // expose so video-tap can trigger both chrome systems together
     let _rightZoneReveal = null;  // vertical-mode right-edge drawer
+    let _chromeWake = null;       // re-arms the TV chrome auto-hide (remote keys bypass DOM events)
 
     function initTopBar() {
         // Gradient overlay — pointer-events:none so it never blocks clicks
@@ -3599,6 +3743,117 @@
             }
             body.sc-tv #sc-tv-caption.sc-show { opacity: 1 !important; }
 
+            /* ── TV: slick chat input ─────────────────────────── */
+            body.sc-tv #sc-mobile-input-row { gap: 10px !important; padding: 6px 0 8px !important; }
+            body.sc-tv #sc-chat-textarea {
+                min-height: 50px !important;
+                background: rgba(255,255,255,0.07) !important;
+                border: 1.5px solid rgba(255,255,255,0.14) !important;
+                border-radius: 14px !important;
+                padding: 12px 16px !important;
+                caret-color: #e0701a !important;
+                transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease !important;
+            }
+            /* Typing focus: soft amber glow instead of the harsh white outline */
+            body.sc-tv #sc-chat-textarea:focus {
+                outline: none !important;
+                border-color: rgba(224,112,26,0.85) !important;
+                background: rgba(255,255,255,0.10) !important;
+                box-shadow: 0 0 0 1px rgba(224,112,26,0.30), 0 0 20px rgba(224,112,26,0.22) !important;
+            }
+            /* D-pad landing on the input uses the same glow, not the boxy ring */
+            body.sc-tv #sc-chat-textarea.sc-tv-focus {
+                outline: none !important;
+                border-color: rgba(224,112,26,0.85) !important;
+                box-shadow: 0 0 0 1px rgba(224,112,26,0.30), 0 0 20px rgba(224,112,26,0.22) !important;
+            }
+            body.sc-tv #sc-send-btn {
+                width: 50px !important; height: 50px !important; font-size: 20px !important;
+                background: rgba(255,255,255,0.09) !important;
+                border: 1.5px solid rgba(255,255,255,0.14) !important;
+                transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease !important;
+            }
+            body.sc-tv #sc-send-btn:focus,
+            body.sc-tv #sc-send-btn.sc-tv-focus {
+                outline: none !important;
+                border-color: rgba(224,112,26,0.85) !important;
+                background: rgba(224,112,26,0.18) !important;
+                box-shadow: 0 0 0 1px rgba(224,112,26,0.30), 0 0 20px rgba(224,112,26,0.22) !important;
+            }
+            body.sc-tv #sc-chat-textarea::placeholder { color: rgba(255,255,255,0.32) !important; }
+
+            /* ── COUCH MODE — input swells into a big readable compose box while typing ──
+               Active when the setting is on (body.sc-couch) and you're typing in the
+               horizontal sidebar layout. The box lifts out of the chat column over the video.
+
+               Open is a TWO-STEP move so it's smooth even on older TV hardware:
+               • body.sc-couch-prep  — pins the input as a FIXED box at its COLLAPSED size.
+                 JS flushes layout here so the browser has a clean start state.
+               • body.sc-couch-typing — then animates only width + height/padding to the big
+                 box. Because position is already fixed, nothing snaps; the box just grows.
+               We never transition "all" (it flashes through bad intermediate layout states),
+               and the costly frosted blur is switched on only AFTER the grow settles. */
+            body.sc-couch #sc-mobile-input-row {
+                transition: width 0.34s cubic-bezier(0.22, 1, 0.36, 1) !important;
+            }
+            body.sc-couch #sc-chat-textarea {
+                transition: min-height 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+                            max-height 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+                            font-size  0.34s cubic-bezier(0.22, 1, 0.36, 1),
+                            padding    0.34s cubic-bezier(0.22, 1, 0.36, 1),
+                            border-radius 0.34s ease,
+                            background-color 0.3s ease,
+                            backdrop-filter 0.25s ease,
+                            -webkit-backdrop-filter 0.25s ease !important;
+            }
+            body.sc-couch #messagebuffer {
+                transition: padding-bottom 0.34s cubic-bezier(0.22, 1, 0.36, 1) !important;
+            }
+            /* Lift the chat column's stacking context above the video (both sit at z-index
+               9999, with the video later in the DOM) so the fixed box can paint over it. */
+            body.sc-couch.sc-couch-prep.sc-horizontal #chatwrap {
+                z-index: 10010 !important; overflow: visible !important;
+            }
+            /* PREP: the input becomes a fixed box at (about) its normal collapsed footprint.
+               Explicit width avoids width:100% resolving to the whole viewport once fixed. */
+            body.sc-couch.sc-couch-prep.sc-horizontal #sc-mobile-input-row {
+                position: fixed !important;
+                right: 0 !important; bottom: 0 !important; left: auto !important; top: auto !important;
+                width: 19vw !important; z-index: 10011 !important;
+                margin: 0 !important; box-sizing: border-box !important;
+            }
+            body.sc-couch.sc-couch-prep.sc-horizontal #messagebuffer { padding-bottom: 56px !important; }
+            /* EXPANDED: grow width + add the panel gradient (position inherited from prep). */
+            body.sc-couch.sc-couch-typing.sc-horizontal #sc-mobile-input-row {
+                width: 46vw !important;
+                padding: 18px 20px 20px !important;
+                align-items: stretch !important;
+                background: linear-gradient(to top, rgba(0,0,0,0.72) 52%, rgba(0,0,0,0) 100%) !important;
+            }
+            body.sc-couch.sc-couch-typing.sc-horizontal #sc-chat-textarea {
+                min-height: 26vh !important; max-height: 26vh !important;
+                line-height: 1.45 !important;
+                padding: 16px 18px !important; border-radius: 16px !important;
+                background-color: rgba(14,14,18,0.62) !important;
+            }
+            /* Frosted blur (+ a touch more transparency) only once the box has finished
+               expanding — cheap during the grow, lush once it's settled. */
+            body.sc-couch.sc-couch-typing.sc-couch-settled.sc-horizontal #sc-chat-textarea {
+                background-color: rgba(14,14,18,0.55) !important;
+                backdrop-filter: blur(7px) !important;
+                -webkit-backdrop-filter: blur(7px) !important;
+            }
+            /* Bigger box on a TV viewed from the couch (font itself is set inline from JS). */
+            body.sc-couch.sc-couch-typing.sc-tv.sc-horizontal #sc-chat-textarea {
+                min-height: 30vh !important; max-height: 30vh !important;
+            }
+            /* Reserve space at the bottom of the chat so no messages sit BEHIND the
+               translucent box and bleed through it. They slide up as the box grows. */
+            body.sc-couch.sc-couch-typing.sc-horizontal #messagebuffer { padding-bottom: 34vh !important; }
+            body.sc-couch.sc-couch-typing.sc-tv.sc-horizontal #messagebuffer { padding-bottom: 38vh !important; }
+            /* Keep the compose box clean — drop the floating emote icon while it's open */
+            body.sc-couch-typing #sc-emote-proxy { opacity: 0 !important; pointer-events: none !important; }
+
             /* TV: keep the settings modal inside the overscan-safe area and scrollable */
             body.sc-tv #sc-settings-overlay { padding: 6vh 8vw !important; box-sizing: border-box !important; }
             body.sc-tv #sc-settings-modal {
@@ -4117,12 +4372,15 @@
         };
         ['mousemove', 'keydown', 'click', 'touchstart', 'wheel'].forEach(ev =>
             document.addEventListener(ev, show, { passive: true }));
+        // Remote D-pad keys are consumed by native and never fire DOM keydown, so the
+        // TV nav code re-arms this timer directly via _chromeWake on every remote press.
+        _chromeWake = show;
         timer = setTimeout(hide, 4000);
     }
 
     // ── Chat layout modes: sidebar → overlay → hidden
-    const _CHAT_MODES = ['sidebar', 'hidden'];
-    const _CHAT_MODE_ICONS = { sidebar: '▐', hidden: '⊠' };
+    const _CHAT_MODES = ['sidebar', 'overlay', 'hidden'];
+    const _CHAT_MODE_ICONS = { sidebar: '▐', overlay: '▣', hidden: '⊠' };
     function applyChatMode(mode) {
         ['sidebar', 'overlay', 'hidden'].forEach(m => document.body.classList.toggle('sc-chat-' + m, m === mode));
         try { localStorage.setItem('sc_chat_mode', mode); } catch (e) {}
@@ -4317,7 +4575,7 @@
     }
 
     function initCinematicChat() {
-        [initAmbientGlow, initChromeAutohide, initChatModes, initNewMessagePill, initMentionToast, initChatFont, initLeftZone, initVideoTapReveal, initVertControlBand, initRightZone]
+        [initAmbientGlow, initChromeAutohide, initChatModes, initNewMessagePill, initMentionToast, initChatFont, initLeftZone, initVideoTapReveal, initVertControlBand, initRightZone, applyCouchMode]
             .forEach(fn => { try { fn(); } catch (e) { console.warn('[Grindhouse] init failed:', fn.name, e); } });
     }
     if (document.readyState === 'complete') initCinematicChat();
@@ -4476,8 +4734,13 @@
         }
 
         function revealChrome() {
-            document.body.classList.add('sc-leftzone');
-            document.body.classList.remove('sc-chrome-hidden');
+            // Reveal the left cluster WITH an auto-hide timer (re-armed on every remote
+            // press) so it fades back out a few seconds after navigation stops. Raw
+            // classList.add left it stuck on, since remote keys don't fire DOM events.
+            if (typeof _leftZoneReveal === 'function') _leftZoneReveal(4000);
+            else document.body.classList.add('sc-leftzone');
+            if (typeof _chromeWake === 'function') _chromeWake();
+            else document.body.classList.remove('sc-chrome-hidden');
             if (typeof _topBarWake === 'function') _topBarWake();
         }
 
