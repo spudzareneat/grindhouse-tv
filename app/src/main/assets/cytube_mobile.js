@@ -861,6 +861,12 @@
     // Current media duration/type — from CyTube's socket, with a playlist fallback.
     let currentMediaSeconds = 0;
     let currentMediaType = '';
+    // Live playhead position, kept fresh by CyTube's mediaUpdate socket event so the
+    // remote-summoned progress card works for every media type (YouTube/Drive/raw).
+    let currentPlaybackTime = 0;
+    // Assigned by initTvNav (TV only) so other UI (e.g. the settings modal) can hand the
+    // remote's focus ring to a specific element. Null on phones / before nav init.
+    let _tvSetFocus = null;
     function parseTimeToSeconds(t) {
         const parts = String(t).trim().split(':').map(Number);
         if (!parts.length || parts.some(isNaN)) return 0;
@@ -870,6 +876,56 @@
         if (currentMediaSeconds > 0) return currentMediaSeconds;
         const el = document.querySelector('#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time');
         return el ? parseTimeToSeconds(el.textContent) : 0;
+    }
+    // Current playhead in seconds — the live <video> when present (raw/Drive), otherwise
+    // the last position CyTube broadcast via mediaUpdate (YouTube and other embeds).
+    function getCurrentPlaybackSeconds() {
+        const v = document.querySelector('#videowrap video');
+        if (v && isFinite(v.currentTime) && v.currentTime > 0) return v.currentTime;
+        return currentPlaybackTime;
+    }
+    function formatHMS(s) {
+        s = Math.max(0, Math.floor(s || 0));
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        const pad = n => String(n).padStart(2, '0');
+        return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+    }
+    // Summon the video.js control bar — the scrubber a mouse gets on hover — and let
+    // video.js's own inactivity timer fade it back out. Raw/Drive/video.js players only;
+    // a YouTube embed manages its own controls, so this no-ops there.
+    function wakeVideoControls() {
+        try {
+            const p = window.PLAYER && window.PLAYER.player;
+            if (p && typeof p.userActive === 'function') {
+                p.userActive(true);
+                if (typeof p.reportUserActivity === 'function') p.reportUserActivity();
+                return;
+            }
+        } catch (e) { /* fall through to class toggle */ }
+        const el = document.querySelector('#videowrap .video-js');
+        if (el) { el.classList.add('vjs-user-active'); el.classList.remove('vjs-user-inactive'); }
+    }
+    // Pin the scrubber up (it normally auto-fades) for as long as a title-bar item is
+    // selected on the remote; hide it again the moment focus moves off.
+    let _scrubHoldTimer = null;
+    function holdScrubber(on) {
+        if (on) {
+            wakeVideoControls();
+            // video.js fades after ~2s idle, so refresh activity well inside that window.
+            if (!_scrubHoldTimer) _scrubHoldTimer = setInterval(wakeVideoControls, 1000);
+            return;
+        }
+        if (!_scrubHoldTimer) return;   // we weren't holding — don't touch the controls
+        clearInterval(_scrubHoldTimer);
+        _scrubHoldTimer = null;
+        // We summoned the scrubber for the title bar; dismiss it now that focus has left.
+        // (video.js won't auto-fade a paused video, so hide it explicitly.)
+        try {
+            const p = window.PLAYER && window.PLAYER.player;
+            if (p && typeof p.userActive === 'function') p.userActive(false);
+        } catch (e) {}
+        const el = document.querySelector('#videowrap .video-js');
+        if (el) { el.classList.add('vjs-user-inactive'); el.classList.remove('vjs-user-active'); }
     }
 
     /* ==========================================================
@@ -1298,6 +1354,7 @@
                     span.id = 'sc-title-text';
                     span.style.cursor = 'pointer';
                     span.title = 'Movie info';
+                    span.dataset.noTvCaption = '1'; // title text is self-explanatory; no remote caption
                     span.addEventListener('click', (e) => {
                         e.stopPropagation();
                         if (_npData) showNowPlayingCard(_npData, { autoHide: false });
@@ -1426,8 +1483,81 @@
                 setTimeout(triggerTitleInject, 350); // let the title DOM settle first
             } catch (e) {}
         });
+        // Keep the live playhead fresh for the progress card (fires ~every second while
+        // the room is synced; the desync "free watch" toggle strips these listeners, which
+        // is fine — the synced position is meaningless then anyway).
+        socket.on('mediaUpdate', (data) => {
+            if (data && typeof data.currentTime === 'number') currentPlaybackTime = data.currentTime;
+        });
         // The video already playing at launch never fires changeMedia, so check it once.
         setTimeout(() => { if (window.PLAYER && window.PLAYER.mediaType === 'yt') checkYtDrm(0); }, 2500);
+    }
+
+    // Hover (pointer / keyboard-TV) or long-press (touch phone) a chat message to see
+    // when it was sent, in the viewer's LOCAL timezone. CyTube only renders the channel's
+    // clock time with no date, so we grab the epoch `time` straight off the chatMsg socket
+    // event instead of trying to parse the rendered DOM. [[tv-remote-navigation]]
+    function initChatTimestamps() {
+        if (typeof socket === 'undefined' || !socket || typeof socket.on !== 'function') {
+            setTimeout(initChatTimestamps, 600);
+            return;
+        }
+        const fmt = (ms) => {
+            try {
+                return new Date(ms).toLocaleString([], {
+                    weekday: 'short', month: 'short', day: 'numeric',
+                    hour: 'numeric', minute: '2-digit', second: '2-digit'
+                });
+            } catch (e) { return ''; }
+        };
+        // CyTube registered its own chatMsg handler long before our script injected, so by
+        // the time ours runs the message div is already the last child of #messagebuffer.
+        socket.on('chatMsg', (data) => {
+            try {
+                if (!data || typeof data.time !== 'number') return;
+                const buf = document.getElementById('messagebuffer');
+                const node = buf && buf.lastElementChild;
+                if (!node || node.dataset.scTs) return;
+                node.dataset.scTs = String(data.time);
+                node.title = 'Sent ' + fmt(data.time);   // native hover tooltip
+            } catch (e) {}
+        });
+
+        // Touch devices have no hover — long-press a message to reveal the same time in a
+        // small floating tip. Delegated on document so it survives messagebuffer rebuilds.
+        const showTip = (node, x, y) => {
+            const ts = node && node.dataset && node.dataset.scTs;
+            if (!ts) return;
+            let tip = document.getElementById('sc-chat-ts-tip');
+            if (!tip) {
+                tip = document.createElement('div');
+                tip.id = 'sc-chat-ts-tip';
+                tip.style.cssText =
+                    'position:fixed;z-index:2147483646;max-width:80vw;padding:6px 10px;' +
+                    'border-radius:8px;background:rgba(8,6,12,0.95);color:#fff;font-size:13px;' +
+                    'font-weight:600;pointer-events:none;box-shadow:0 4px 16px rgba(0,0,0,0.5);' +
+                    'border:1px solid rgba(255,255,255,0.15);transform:translateX(-50%);';
+                document.body.appendChild(tip);
+            }
+            tip.textContent = 'Sent ' + fmt(Number(ts));
+            tip.style.display = 'block';
+            tip.style.top = Math.max(8, y - 44) + 'px';
+            tip.style.left = Math.min(Math.max(x, 8), window.innerWidth - 8) + 'px';
+            clearTimeout(tip._hideT);
+            tip._hideT = setTimeout(() => { tip.style.display = 'none'; }, 2500);
+        };
+        let pressTimer = null;
+        document.addEventListener('touchstart', (e) => {
+            const node = e.target.closest && e.target.closest('#messagebuffer [class*="chat-msg-"]');
+            if (!node) return;
+            const t = e.touches[0];
+            const x = t.clientX, y = t.clientY;
+            pressTimer = setTimeout(() => showTip(node, x, y), 500);
+        }, { passive: true });
+        const cancelPress = () => clearTimeout(pressTimer);
+        document.addEventListener('touchend', cancelPress, { passive: true });
+        document.addEventListener('touchmove', cancelPress, { passive: true });
+        document.addEventListener('touchcancel', cancelPress, { passive: true });
     }
 
     /* ==========================================================
@@ -1513,7 +1643,34 @@
     let _npData = null;          // latest movie data for the card
     let _introDone = false;      // startup intro card has run (see initIntroSequence)
     let _npHideTimer = null;
+    let _npProgTimer = null;
     let _npWatcherInit = false;
+
+    // Refresh the now-playing card's elapsed / total / remaining readout in place.
+    function _renderNpProgress() {
+        const card = document.getElementById('sc-np-card');
+        if (!card) { clearInterval(_npProgTimer); return; }
+        const wrap    = card.querySelector('#sc-np-progress');
+        const fill    = card.querySelector('#sc-np-prog-fill');
+        const elapsedEl = card.querySelector('#sc-np-prog-elapsed');
+        const totalEl   = card.querySelector('#sc-np-prog-total');
+        const remainEl  = card.querySelector('#sc-np-prog-remain');
+        if (!wrap || !fill) return;
+
+        const dur = getCurrentMediaSeconds();
+        if (dur > 0) {
+            const elapsed = Math.min(getCurrentPlaybackSeconds(), dur);
+            const pct = Math.max(0, Math.min(100, (elapsed / dur) * 100));
+            fill.style.width = pct + '%';
+            elapsedEl.textContent = formatHMS(elapsed);
+            totalEl.textContent   = formatHMS(dur);
+            remainEl.textContent  = '−' + formatHMS(dur - elapsed) + ' left';
+            wrap.style.display = '';
+        } else {
+            // No known duration (live stream / unidentified) — nothing useful to show.
+            wrap.style.display = 'none';
+        }
+    }
 
     // Currently TV-only so the tuned mobile layout is untouched.
     // Flip to `true` to enable the card on phones too.
@@ -1537,6 +1694,14 @@
                         <div id="sc-np-meta"></div>
                         <div id="sc-np-overview"></div>
                         <div id="sc-np-chips"></div>
+                        <div id="sc-np-progress">
+                            <div id="sc-np-prog-bar"><div id="sc-np-prog-fill"></div></div>
+                            <div id="sc-np-prog-times">
+                                <span id="sc-np-prog-elapsed">0:00</span>
+                                <span id="sc-np-prog-remain"></span>
+                                <span id="sc-np-prog-total">0:00</span>
+                            </div>
+                        </div>
                     </div>
                 </div>`;
             document.body.appendChild(card);
@@ -1578,6 +1743,13 @@
 
         card.classList.add('sc-np-visible');
 
+        // Live elapsed / total / remaining bar — refreshes while the card is up.
+        // This is the remote-friendly stand-in for hovering a scrubber: summon the
+        // card (title button / 'i') and the progress updates in place.
+        _renderNpProgress();
+        clearInterval(_npProgTimer);
+        _npProgTimer = setInterval(_renderNpProgress, 500);
+
         clearTimeout(_npHideTimer);
         if (opts.autoHide) {
             // Only auto-hide if the video is actually playing
@@ -1591,6 +1763,7 @@
         const card = document.getElementById('sc-np-card');
         if (card) card.classList.remove('sc-np-visible');
         clearTimeout(_npHideTimer);
+        clearInterval(_npProgTimer);
     }
 
     /* ==========================================================
@@ -1847,7 +2020,13 @@
         if (tmdbEnable && tmdbFields) {
             tmdbEnable.addEventListener('change', () => {
                 tmdbFields.classList.toggle('sc-hidden', !tmdbEnable.checked);
-                if (tmdbEnable.checked) { const i = document.getElementById('sc-input-tmdb'); if (i) i.focus(); }
+                // Use the TV nav's focus setter (not raw .focus()) so the remote's focus
+                // ring tracks the key field — otherwise a later "right" navigates from the
+                // stale checkbox (nothing to its right) instead of landing on Test.
+                if (tmdbEnable.checked) {
+                    const i = document.getElementById('sc-input-tmdb');
+                    if (i) { if (_tvSetFocus) _tvSetFocus(i); else i.focus(); }
+                }
             });
         }
 
@@ -2173,6 +2352,7 @@
         toggleBtn.id = 'sc-poster-toggle';
         toggleBtn.textContent = "Coming Attractions";
         toggleBtn.title = 'Show/hide weekend lineup';
+        toggleBtn.dataset.noTvCaption = '1'; // button text is self-explanatory; no remote caption
         toggleBtn.addEventListener('click', () => {
             const visible = strip.classList.toggle('sc-poster-visible');
             toggleBtn.classList.toggle('sc-poster-toggle-active', visible);
@@ -2560,6 +2740,7 @@
         addSettingsButton();
         watchMovieTitle();
         initMediaWatcher();
+        initChatTimestamps();
         initNowPlayingWatcher();
         initTopBar();
         initDesyncButton();
@@ -4070,6 +4251,26 @@
                 -webkit-box-orient: vertical !important; overflow: hidden !important;
             }
             #sc-np-chips { display: flex !important; flex-wrap: wrap !important; gap: 8px !important; }
+            #sc-np-progress { margin-top: 18px !important; max-width: 520px !important; }
+            #sc-np-prog-bar {
+                height: 6px !important; border-radius: 3px !important;
+                background: rgba(255,255,255,0.18) !important; overflow: hidden !important;
+            }
+            #sc-np-prog-fill {
+                height: 100% !important; width: 0% !important;
+                background: var(--np-accent, #e0701a) !important; border-radius: 3px !important;
+                transition: width 0.45s linear !important;
+            }
+            #sc-np-prog-times {
+                display: flex !important; justify-content: space-between !important;
+                align-items: baseline !important; margin-top: 8px !important;
+                font-variant-numeric: tabular-nums !important;
+                font-size: 14px !important; color: rgba(255,255,255,0.85) !important;
+            }
+            #sc-np-prog-remain { color: rgba(255,255,255,0.6) !important; font-size: 13px !important; }
+            body.sc-tv #sc-np-prog-bar { height: 8px !important; }
+            body.sc-tv #sc-np-prog-times { font-size: 18px !important; }
+            body.sc-tv #sc-np-prog-remain { font-size: 16px !important; }
             .sc-np-chip {
                 font-size: 13px !important; color: rgba(255,255,255,0.9) !important;
                 background: rgba(255,255,255,0.12) !important;
@@ -4334,6 +4535,8 @@
             body.sc-horizontal #sc-newmsg-pill { right: calc(19vw + 16px) !important; bottom: 56px !important; }
             body.sc-vertical   #sc-newmsg-pill { left: 50% !important; transform: translateX(-50%) !important; bottom: calc(50vh - 44px + 12px) !important; }
             body.sc-tv #sc-newmsg-pill { font-size: 17px !important; padding: 10px 22px !important; }
+            /* Hide CyTube's native "New Messages Below" bar — our pill replaces it. */
+            #newmessages-indicator, #newmessages-indicator-bghack { display: none !important; }
 
             /* ── MENTION TOAST ───────────────────────────────── */
             #sc-mention-toast {
@@ -4748,8 +4951,8 @@
         // 'sc-drm-open' first so it's the default focus when the DRM fallback is up; it's only a
         // candidate while the overlay exists (getElementById is null otherwise). It lives in the main
         // cluster — NOT OVERLAY_IDS — so the remote can still reach chat and the controls.
-        const MAIN_IDS = ['sc-drm-open', 'sc-chatmode-btn', 'sc-emote-proxy', 'sc-desync-btn', 'sc-settings-btn',
-            'sc-usercount-btn', 'sc-poll-btn', 'sc-poster-toggle', 'sc-trivia-btn', 'sc-chat-collapse-btn', 'sc-chat-textarea'];
+        const MAIN_IDS = ['sc-drm-open', 'sc-title-text', 'sc-chatmode-btn', 'sc-emote-proxy', 'sc-desync-btn', 'sc-settings-btn',
+            'sc-usercount-btn', 'sc-poll-btn', 'sc-poster-toggle', 'sc-trivia-btn', 'sc-newmsg-pill', 'sc-chat-collapse-btn', 'sc-chat-textarea'];
         const FOCUS_SEL = 'button, a[href], input:not([type=hidden]), textarea, select, [tabindex]';
 
         const makeFocusable = (el) => {
@@ -4763,12 +4966,22 @@
                 if (!list.length) list = [ov]; // a click-to-dismiss overlay (e.g. the now-playing card)
                 return { scope: ov, list };
             }
-            return { scope: document, list: MAIN_IDS.map(id => document.getElementById(id)).filter(el => el && isVisible(el)) };
+            return { scope: document, list: MAIN_IDS.map(id => document.getElementById(id)).filter(el =>
+                el && isVisible(el) &&
+                // The new-message pill is opacity-hidden (still sized) until shown — only
+                // make it a focus target while it's actually visible.
+                (el.id !== 'sc-newmsg-pill' || el.classList.contains('sc-show'))) };
         }
 
         function setFocus(el) {
             if (!el) return;
             makeFocusable(el);
+            // Moving the remote off the chat input reveals the player's scrubber, the
+            // same way a mouse leaving chat to hover the video brings up the controls.
+            if (focusEl && focusEl.id === 'sc-chat-textarea' && el.id !== 'sc-chat-textarea') wakeVideoControls();
+            // While a title-bar item (the movie title / its buttons) is selected, keep the
+            // scrubber pinned up; releasing it once focus moves off lets video.js fade it.
+            holdScrubber(!!(el.closest && el.closest('#videowrap-header')));
             if (focusEl && focusEl !== el) focusEl.classList.remove('sc-tv-focus');
             focusEl = el;
             el.classList.add('sc-tv-focus');
@@ -4777,7 +4990,9 @@
             // Caption label shown to the right of the focused button
             let cap = document.getElementById('sc-tv-caption');
             if (!cap) { cap = document.createElement('div'); cap.id = 'sc-tv-caption'; document.body.appendChild(cap); }
-            const rawLabel = el.dataset.tvLabel || el.title || '';
+            // Buttons whose visible text already names them opt out of the caption
+            // (dataset.noTvCaption) to avoid redundant on-screen clutter.
+            const rawLabel = el.dataset.noTvCaption ? '' : (el.dataset.tvLabel || el.title || '');
             const capText = rawLabel.replace(/ ?[—–-].*$/, '').replace(/ \(press \w+\)$/i, '').trim();
             if (capText) {
                 const r = el.getBoundingClientRect();
@@ -4791,6 +5006,20 @@
                 cap.classList.remove('sc-show');
             }
         }
+        // Let other UI (settings modal) place the remote's focus ring on an element.
+        _tvSetFocus = setFocus;
+
+        // Coming Attractions strip: a horizontal poster reel. Drive the existing hover-zoom
+        // off the focused poster so the remote gets the same preview the mouse does.
+        const posterZoom = (a, on) => {
+            const img = a && a.querySelector('img');
+            if (img) img.dispatchEvent(new MouseEvent(on ? 'mouseenter' : 'mouseleave', { bubbles: true }));
+        };
+        function setPosterFocus(a, thumbs) {
+            thumbs.forEach(t => { if (t !== a) posterZoom(t, false); });
+            setFocus(a);
+            posterZoom(a, true);
+        }
 
         function move(dir) {
             // Range slider: left/right adjusts the value instead of moving focus
@@ -4803,6 +5032,33 @@
                 focusEl.dispatchEvent(new Event('input', { bubbles: true }));
                 return;
             }
+
+            // Coming Attractions: enter the open strip with Down from its toggle, scroll it
+            // with Left/Right, and leave with Up/Down. The strip isn't an OVERLAY (that would
+            // trap focus), so we steer it explicitly here.
+            const strip = document.getElementById('sc-poster-strip');
+            if (strip && strip.classList.contains('sc-poster-visible')) {
+                const toggle = document.getElementById('sc-poster-toggle');
+                // All reel links — NOT isVisible-filtered: posters scrolled past the strip's
+                // edge are off-viewport but still valid targets we scroll into view.
+                const thumbs = [...strip.querySelectorAll('a')];
+                if (thumbs.length) {
+                    if (focusEl === toggle && dir === 'down') { setPosterFocus(thumbs[0], thumbs); return; }
+                    if (strip.contains(focusEl)) {
+                        if (dir === 'left' || dir === 'right') {
+                            const i = thumbs.indexOf(focusEl);
+                            const ni = dir === 'right' ? Math.min(thumbs.length - 1, i + 1) : Math.max(0, i - 1);
+                            setPosterFocus(thumbs[ni], thumbs);
+                            return;
+                        }
+                        // up / down → step back out of the reel onto the toggle
+                        posterZoom(focusEl, false);
+                        if (toggle) setFocus(toggle);
+                        return;
+                    }
+                }
+            }
+
             const { scope, list } = candidates();
             if (!list.length) return;
             if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) { setFocus(list[0]); return; }

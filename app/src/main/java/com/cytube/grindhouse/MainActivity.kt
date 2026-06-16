@@ -370,6 +370,18 @@ class MainActivity : AppCompatActivity() {
         if (::webView.isInitialized) {
             webView.resumeTimers()
             webView.onResume()
+            // While backgrounded the chat textarea keeps DOM focus, so on wake Chromium
+            // re-pops the soft keyboard over the video. Drop focus from any editable and
+            // hide the IME. Posted so it runs once the window/IME state has settled.
+            webView.post {
+                webView.evaluateJavascript(
+                    "(function(){var a=document.activeElement;" +
+                        "if(a&&(a.tagName==='TEXTAREA'||a.tagName==='INPUT'))a.blur();})()",
+                    null
+                )
+                val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+                imm.hideSoftInputFromWindow(webView.windowToken, 0)
+            }
         }
     }
 
