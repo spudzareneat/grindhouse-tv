@@ -51,6 +51,12 @@ class CytubeJsBridge(
         activity.runOnUiThread { activity.hideLoadingOverlay() }
     }
 
+    /** Update the small status line on the loading splash from the injected script. */
+    @JavascriptInterface
+    fun setLoadingStatus(text: String) {
+        activity.setLoadingStatus(text)
+    }
+
     /** Open a URL outside the app (system browser / native YouTube app) — used for DRM titles. */
     @JavascriptInterface
     fun openExternal(url: String) {

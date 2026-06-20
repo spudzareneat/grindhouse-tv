@@ -32,6 +32,26 @@
             android:src="@drawable/loading_poster"
             android:contentDescription="Loading" />
 
+        <!-- Small status line at the bottom: native sets the early phases (before JS
+             is injected), then the page's JS takes over via CytubeNative.setLoadingStatus.
+             Sizing/bottom margin are bumped for TV (overscan) in MainActivity. -->
+        <TextView
+            android:id="@+id/loading_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|start"
+            android:layout_marginStart="20dp"
+            android:layout_marginBottom="18dp"
+            android:text=""
+            android:textColor="#FFFFFFFF"
+            android:textSize="10sp"
+            android:alpha="0.5"
+            android:shadowColor="#FF000000"
+            android:shadowDx="0"
+            android:shadowDy="1"
+            android:shadowRadius="6"
+            android:contentDescription="Loading status" />
+
     </FrameLayout>
 
 </FrameLayout>

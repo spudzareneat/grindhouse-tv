@@ -1304,6 +1304,11 @@
             const el = document.getElementById(id);
             if (el) el.remove();
         });
+        // Drop stale movie metadata too: if this title turns out to be a non-movie
+        // (short bumper that returns below, or unparseable), _npData must NOT linger —
+        // otherwise the title observer rebuilds a Trivia button for the old film. The
+        // lookup repopulates it below when (and only when) this resolves to a real movie.
+        _npData = null;
 
         // YouTube: usually bumpers/intros, but occasionally a full movie.
         // Only attempt a lookup when the video runs an hour+ (likely a real film),
@@ -1475,6 +1480,13 @@
                 if (key === _lastMediaKey) return;
                 _lastMediaKey = key;
                 lastMovieTitle = '';                 // force a fresh lookup
+                // Forget the previous film's metadata up front so the title observer
+                // can't rebuild a stale Trivia button over the next video (e.g. a short
+                // bumper with no trivia). It's recreated only once the new lookup lands
+                // on a real movie. Drop the button now too in case one is showing.
+                _npData = null;
+                const _staleTrivia = document.getElementById('sc-trivia-btn');
+                if (_staleTrivia) _staleTrivia.remove();
                 // New media: drop any DRM overlay, and (for YouTube) start watching for the
                 // no-Widevine failure that DRM "YouTube Movies" titles hit on this device.
                 clearTimeout(_drmCheckTimer);
@@ -1661,7 +1673,10 @@
         if (dur > 0) {
             const elapsed = Math.min(getCurrentPlaybackSeconds(), dur);
             const pct = Math.max(0, Math.min(100, (elapsed / dur) * 100));
-            fill.style.width = pct + '%';
+            // Must be set !important: the stylesheet pins #sc-np-prog-fill to
+            // `width: 0% !important`, which a plain inline width can't override — so the
+            // bar would otherwise stay empty no matter the playhead.
+            fill.style.setProperty('width', pct + '%', 'important');
             elapsedEl.textContent = formatHMS(elapsed);
             totalEl.textContent   = formatHMS(dur);
             remainEl.textContent  = '−' + formatHMS(dur - elapsed) + ' left';
@@ -1675,6 +1690,40 @@
     // Currently TV-only so the tuned mobile layout is untouched.
     // Flip to `true` to enable the card on phones too.
     function _npCardEnabled() { return _isTv; }
+
+    // Long synopses overflow the fixed overview window. Start at the top (so the
+    // opening lines read first), then after a beat glide smoothly to the bottom so
+    // the whole thing can be read hands-free on the remote. Returns the total ms the
+    // reveal will take so the auto-hide timer can wait for it to finish.
+    let _npScrollTimer = null, _npScrollRaf = null;
+    const _NP_SCROLL_DELAY = 3500;
+    function _autoScrollOverview() {
+        clearTimeout(_npScrollTimer);
+        cancelAnimationFrame(_npScrollRaf);
+        const card = document.getElementById('sc-np-card');
+        const ov = card && card.querySelector('#sc-np-overview');
+        if (!ov) return 0;
+        ov.scrollTop = 0;
+        const dist = ov.scrollHeight - ov.clientHeight;
+        if (dist <= 4) return 0;                          // fits — nothing to reveal
+        const dur = Math.min(12000, Math.max(2500, (dist / 24) * 1000)); // ~24px/s reading pace
+        _npScrollTimer = setTimeout(() => {
+            const start = ov.scrollTop;
+            const span = ov.scrollHeight - ov.clientHeight - start;
+            if (span <= 0) return;
+            const t0 = performance.now();
+            const step = (now) => {
+                const c = document.getElementById('sc-np-card');
+                if (!c || !c.classList.contains('sc-np-visible')) return; // dismissed mid-scroll
+                const p = Math.min(1, (now - t0) / dur);
+                const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2; // easeInOutQuad
+                ov.scrollTop = start + span * e;
+                if (p < 1) _npScrollRaf = requestAnimationFrame(step);
+            };
+            _npScrollRaf = requestAnimationFrame(step);
+        }, _NP_SCROLL_DELAY);
+        return _NP_SCROLL_DELAY + dur;
+    }
 
     function showNowPlayingCard(data, opts = {}) {
         if (!data || (!data.cleanTitle && !data.backdrop)) return;
@@ -1750,12 +1799,16 @@
         clearInterval(_npProgTimer);
         _npProgTimer = setInterval(_renderNpProgress, 500);
 
+        // Reveal a long synopsis by gliding to its bottom after a few seconds.
+        const revealMs = _autoScrollOverview();
+
         clearTimeout(_npHideTimer);
         if (opts.autoHide) {
             // Only auto-hide if the video is actually playing
             const v = document.querySelector('#videowrap video');
             const playing = v && !v.paused;
-            if (playing || !v) _npHideTimer = setTimeout(hideNowPlayingCard, 7000);
+            // Stay up long enough to finish revealing a long description (+ a tail to read it).
+            if (playing || !v) _npHideTimer = setTimeout(hideNowPlayingCard, Math.max(7000, revealMs + 2500));
         }
     }
 
@@ -1764,6 +1817,8 @@
         if (card) card.classList.remove('sc-np-visible');
         clearTimeout(_npHideTimer);
         clearInterval(_npProgTimer);
+        clearTimeout(_npScrollTimer);
+        cancelAnimationFrame(_npScrollRaf);
     }
 
     /* ==========================================================
@@ -1842,6 +1897,11 @@
                 const btn = document.createElement('button');
                 btn.id = 'sc-trivia-btn'; btn.type = 'button'; btn.textContent = 'Trivia';
                 btn.addEventListener('click', (e) => { e.stopPropagation(); showTriviaCard(); });
+                // If the top bar is already faded when we (re)create the button, match
+                // that state immediately. Otherwise it pops in at full opacity and only
+                // fades on the next wake→dim cycle — i.e. you'd have to wave the cursor
+                // over it to make it disappear.
+                if (document.body.classList.contains('sc-video-dimmed')) btn.classList.add('sc-bar-dim');
                 h.appendChild(btn);
             }
         };
@@ -2733,6 +2793,7 @@
     ========================================================== */
 
     function _scBoot() {
+        _scStatus('Styling channel…');
         getKillCountDb(); // pre-fetch kill count DB
         installChatTextarea();
         relocateEmoteButton();
@@ -4247,9 +4308,11 @@
             #sc-np-overview {
                 font-size: 16px !important; line-height: 1.5 !important;
                 color: rgba(255,255,255,0.72) !important; margin-bottom: 16px !important;
-                display: -webkit-box !important; -webkit-line-clamp: 3 !important;
-                -webkit-box-orient: vertical !important; overflow: hidden !important;
+                /* Fixed window (≈4 lines, scales with font-size via em) that we then
+                   auto-scroll to reveal the rest — no scrollbar, just a clipped glide. */
+                max-height: 6em !important; overflow: hidden !important;
             }
+            #sc-np-overview::-webkit-scrollbar { display: none !important; }
             #sc-np-chips { display: flex !important; flex-wrap: wrap !important; gap: 8px !important; }
             #sc-np-progress { margin-top: 18px !important; max-width: 520px !important; }
             #sc-np-prog-bar {
@@ -4820,7 +4883,13 @@
                     (me && node.textContent && node.textContent.toLowerCase().includes('@' + me));
                 if (!isMention) return;
                 const name = node.querySelector('.username')?.textContent?.replace(/[:\s]+$/, '').trim() || 'Mention';
-                const text = node.textContent.replace(/^\s*[^:]+:\s*/, '').trim().slice(0, 180);
+                // Pull the message body by removing the timestamp + username spans, NOT by
+                // a colon regex: CyTube's (CSS-hidden but still in textContent) timestamp is
+                // "[12:34:56]", whose own colons would make a "strip up to first colon" regex
+                // chop only "[12:" — leaving a stray "]" and the repeated username behind.
+                const clone = node.cloneNode(true);
+                clone.querySelectorAll('.timestamp, .username').forEach(el => el.remove());
+                const text = clone.textContent.replace(/^[\s:]+/, '').trim().slice(0, 180);
                 show(name, text);
             }));
         }).observe(buf, { childList: true });
@@ -5151,6 +5220,13 @@
         try { if (window.CytubeNative && CytubeNative.onReady) CytubeNative.onReady(); } catch (e) {}
     }
 
+    // Update the small status line on the native loading splash. Native handles the
+    // pre-injection phases ("Starting…", "Loading channel…", "Preparing…"); from here
+    // on the page drives it through the styling / wait-for-video phases.
+    function _scStatus(s) {
+        try { if (window.CytubeNative && CytubeNative.setLoadingStatus) CytubeNative.setLoadingStatus(s); } catch (e) {}
+    }
+
     // True once media has started. Raw files expose a <video>; YouTube/embeds turn
     // #ytapiplayer INTO an <iframe> (or nest one in #videowrap) — there is no
     // cross-origin playback state, so iframe presence is our "playing" signal.
@@ -5169,12 +5245,14 @@
     function initIntroSequence() {
         const start = Date.now();
         let playingSince = 0, preloadStarted = false, done = false;
+        _scStatus('Waiting for stream…');
 
         const reveal = () => {
             if (done) return;
             done = true;
             clearInterval(iv);
             _introDone = true;
+            _scStatus('Ready');
 
             const data = _npData || (lastMovieTitle && lastMovieTitle.length > 1
                 ? { cleanTitle: lastMovieTitle, backdrop: null } : null);
@@ -5204,6 +5282,7 @@
             // TV: preload the backdrop so the card is fully painted before we reveal it
             if (_npData && _npData.backdrop && !preloadStarted) {
                 preloadStarted = true;
+                _scStatus('Loading movie info…');
                 const img = new Image();
                 img.onload = img.onerror = reveal;
                 img.src = _npData.backdrop;

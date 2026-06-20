@@ -19,6 +19,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -61,6 +62,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var loadingOverlay: ImageView
     private lateinit var loadingContainer: View
+    private lateinit var loadingStatus: TextView
     private var loadingPulse: ObjectAnimator? = null
     private var loadingHidden = false
 
@@ -109,6 +111,18 @@ class MainActivity : AppCompatActivity() {
         fullscreenContainer = findViewById(R.id.fullscreen_container)
         loadingOverlay = findViewById(R.id.loading_overlay)
         loadingContainer = findViewById(R.id.loading_container)
+        loadingStatus = findViewById(R.id.loading_status)
+        // TV sits ~10ft away and overscan can clip the screen edges — nudge the corner
+        // text in slightly and bump the size just enough to stay readable (still subtle).
+        if (isTv) {
+            loadingStatus.textSize = 13f
+            (loadingStatus.layoutParams as FrameLayout.LayoutParams).apply {
+                val m = (40 * resources.displayMetrics.density).toInt()
+                marginStart = m
+                bottomMargin = m
+            }
+        }
+        setLoadingStatus("Starting…")
         startLoadingPulse()
 
         setupWebView()
@@ -131,6 +145,15 @@ class MainActivity : AppCompatActivity() {
             interpolator = AccelerateDecelerateInterpolator()
             start()
         }
+    }
+
+    /**
+     * Update the small status line on the loading splash. Driven by native lifecycle for the
+     * early phases (before JS exists) and then by the injected script via the bridge. No-ops
+     * once the overlay has been dismissed.
+     */
+    fun setLoadingStatus(text: String) {
+        runOnUiThread { if (!loadingHidden && ::loadingStatus.isInitialized) loadingStatus.text = text }
     }
 
     /** Called from JS (via the bridge) once the page is fully styled, or by the safety timeout. */
@@ -261,8 +284,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                setLoadingStatus("Loading channel…")
+            }
             override fun onPageFinished(view: WebView, url: String) {
                 pageLoaded = true
+                setLoadingStatus("Preparing…")
                 injectScript()
             }
             // Drive streams are no longer intercepted here — the injected JS points them at the
