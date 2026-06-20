@@ -122,6 +122,13 @@ class MainActivity : AppCompatActivity() {
                 bottomMargin = m
             }
         }
+        // Phones draw the splash edge-to-edge; centerCrop on a tall/narrow phone crops the
+        // poster's sides and clips the wordmark's outer letters. Show the whole poster
+        // (letterboxed on the dark background) on phones only — TV and tablets, whose aspect
+        // ratios match the art, keep the full-bleed crop unchanged.
+        if (!isTv && resources.configuration.smallestScreenWidthDp < 600) {
+            loadingOverlay.scaleType = ImageView.ScaleType.FIT_CENTER
+        }
         setLoadingStatus("Starting…")
         startLoadingPulse()
 

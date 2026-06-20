@@ -3292,6 +3292,22 @@
                 bottom: auto !important;
             }
 
+            /* Phones draw edge-to-edge, so rounded display corners / cutouts clip the
+               top-corner chrome (movie title at the left, Coming Attractions at the right).
+               Nudge them in from the very edge. Scoped to phones (≤540px on the short side,
+               either orientation) so TV and tablets — which are larger — are untouched;
+               env() adds extra room on devices that actually report a display cutout. */
+            @media (max-width: 540px), (max-height: 540px) {
+                body.sc-horizontal #videowrap-header,
+                body.sc-vertical   #videowrap-header {
+                    padding-left: max(18px, env(safe-area-inset-left, 0px)) !important;
+                }
+                body.sc-vertical #sc-poster-toggle {
+                    right: max(16px, env(safe-area-inset-right, 0px)) !important;
+                    top: env(safe-area-inset-top, 0px) !important;
+                }
+            }
+
             /* ===== MOVIE LINKS ===== */
             #sc-movie-links {
                 display: inline-flex !important;
