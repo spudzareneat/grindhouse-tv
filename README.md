@@ -27,6 +27,10 @@ A native **Android app for [CyTube](https://cytu.be)** — built for the couch o
 
 ![Now-Playing info card with progress bar](docs/images/now-playing.jpg)
 
+**IMDb Trivia** — a summonable, scrollable panel of trivia for the current film (`T` or the title link).
+
+![IMDb trivia panel](docs/images/trivia.jpg)
+
 **Coming Attractions** — a D‑pad‑navigable reel of upcoming posters across the top.
 
 ![Coming Attractions poster reel](docs/images/coming-attractions.jpg)
