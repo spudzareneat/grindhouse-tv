@@ -231,6 +231,18 @@ class MainActivity : AppCompatActivity() {
             val imeUp = ViewCompat.getRootWindowInsets(webView)
                 ?.isVisible(WindowInsetsCompat.Type.ime()) ?: false
             if (!imeUp) {
+                // A physical keyboard's arrow keys arrive as KEYCODE_DPAD_* exactly like the
+                // remote's, but while editing chat they should move the text cursor — not drive
+                // remote-style focus navigation out of the field. When the event comes from a
+                // real (alphabetic) keyboard and the chat input has focus, let the arrows fall
+                // through to the WebView instead of forwarding them to the nav.
+                val isArrow = event.keyCode == KeyEvent.KEYCODE_DPAD_UP ||
+                    event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
+                    event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+                    event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+                if (isArrow && chatInputFocused && isFromPhysicalKeyboard(event)) {
+                    return super.dispatchKeyEvent(event)
+                }
                 val dir = when (event.keyCode) {
                     KeyEvent.KEYCODE_DPAD_UP -> "up"
                     KeyEvent.KEYCODE_DPAD_DOWN -> "down"
@@ -250,6 +262,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    /**
+     * True when a key event originated from a real hardware keyboard (alphabetic) rather than a
+     * D-pad remote — used to keep keyboard arrow keys editing chat text instead of being hijacked
+     * as remote navigation. A TV remote reports KEYBOARD_TYPE_NON_ALPHABETIC; the soft keyboard is
+     * virtual, so both are excluded.
+     */
+    private fun isFromPhysicalKeyboard(event: KeyEvent): Boolean {
+        val dev = event.device ?: return false
+        return !dev.isVirtual &&
+            dev.keyboardType == android.view.InputDevice.KEYBOARD_TYPE_ALPHABETIC
     }
 
     /** Toggle on-screen keyboard suppression (physical keyboard still works). */
