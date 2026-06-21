@@ -19,8 +19,8 @@ android {
         applicationId = "com.grindhouse.cytube"
         minSdk = 29
         targetSdk = 35
-        versionCode = 15
-        versionName = "2.4"
+        versionCode = 16
+        versionName = "2.5-cast-exp"
     }
 
     signingConfigs {
@@ -66,4 +66,7 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("androidx.webkit:webkit:1.11.0")
+    // Google Cast — phone/tablet sender; casts the current movie to the TV's built-in receiver.
+    implementation(libs.play.services.cast.framework)
+    implementation(libs.androidx.mediarouter)
 }

@@ -15,6 +15,19 @@
         android:layout_height="match_parent"
         android:visibility="gone" />
 
+    <!-- Phone/tablet Cast button. Hidden by default; MainActivity shows + wires it only on
+         non-TV devices when Cast is available. The standard MediaRouteButton gives the system
+         device-chooser dialog for free. Placement is a prototype first pass. -->
+    <androidx.mediarouter.app.MediaRouteButton
+        android:id="@+id/cast_button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="10dp"
+        android:layout_marginEnd="10dp"
+        android:contentDescription="@string/cast_button_desc"
+        android:visibility="gone" />
+
     <!-- Loading overlay. The container holds an opaque dark background so the
          WebView never shows through while the image pulses; only the ImageView
          alpha animates. The whole container fades out once the page is styled. -->
