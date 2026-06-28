@@ -5327,7 +5327,10 @@
     }
 
     // ── Chat layout modes: sidebar → overlay → hidden
-    const _CHAT_MODES = ['sidebar', 'overlay', 'hidden', 'chatonly'];
+    // Chat-Only is a phone/tablet mode (a keyboard-free chat client) — not offered on TV,
+    // where the device is the playback target. Excluding it here drops it from the cycle and
+    // makes initChatModes fall back if 'chatonly' was ever persisted on a TV.
+    const _CHAT_MODES = _isTv ? ['sidebar', 'overlay', 'hidden'] : ['sidebar', 'overlay', 'hidden', 'chatonly'];
     const _CHAT_MODE_ICONS = { sidebar: '▐', overlay: '▣', hidden: '⊠', chatonly: '☰' };
     const _CHAT_MODE_LABELS = { sidebar: 'Sidebar', overlay: 'Overlay', hidden: 'Hidden', chatonly: 'Chat Only' };
 
