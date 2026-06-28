@@ -2500,6 +2500,7 @@
                 // Cancel any in-progress collapse
                 zoomEl._collapsing = false;
                 zoomEl.src = thumb.src;
+                zoomEl._activeThumb = thumb;   // remembered so an outside tap can collapse it
                 positionZoom(thumb);
             });
             thumb.addEventListener('mouseleave', () => {
@@ -2523,14 +2524,27 @@
                 zoomEl.addEventListener('transitionend', onEnd);
             });
 
+            // Wrapper stays an <a> so TV-nav (strip.querySelectorAll('a')) can still
+            // enumerate/focus each poster, but it intentionally has NO href — opening the
+            // raw image URL on click/OK navigated the WebView and broke the app.
             const wrap = document.createElement('a');
-            wrap.href = img.src;
-            wrap.target = '_blank';
-            wrap.rel = 'noopener noreferrer';
             wrap.appendChild(thumb);
             strip.appendChild(wrap);
         });
         document.body.appendChild(strip);
+
+        // Tapping a poster zooms it (via mouseenter on touch), but touch never fires the
+        // thumb's mouseleave — so a tap anywhere that ISN'T a poster collapses the zoom,
+        // reusing the existing mouseleave animation. Added once (initPosterStrip re-runs).
+        if (!document.body._scPosterDismiss) {
+            document.body._scPosterDismiss = true;
+            document.addEventListener('click', (e) => {
+                if (zoomEl.style.display !== 'block' || zoomEl._collapsing) return;
+                if (e.target && e.target.classList && e.target.classList.contains('sc-poster-thumb')) return;
+                const active = zoomEl._activeThumb;
+                if (active) active.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+            });
+        }
 
         // Toggle button — injected below the video title
         const toggleBtn = document.createElement('button');
@@ -3235,7 +3249,9 @@
                 backdrop-filter: blur(4px) !important;
             }
             body.sc-vertical .video-js .vjs-control-bar {
-                bottom: 4px !important;
+                /* Sit at the bottom of the video (just above the 50vh chat header),
+                   not pinned to the screen bottom where it would land over chat. */
+                bottom: calc(50vh + 4px) !important;
                 right: 4px !important;
                 left: 4px !important;
             }
@@ -4134,7 +4150,7 @@
                 right: 96px !important; left: auto !important;
                 opacity: 1 !important; pointer-events: auto !important;
             }
-            body.sc-vertical .video-js .vjs-control-bar { bottom: 4px !important; left: 4px !important; right: 4px !important; }
+            body.sc-vertical .video-js .vjs-control-bar { bottom: calc(50vh + 4px) !important; left: 4px !important; right: 4px !important; }
 
             /* Control band element — dark strip between video and chat */
             #sc-vert-ctrl-band { display: none !important; }
@@ -4790,21 +4806,92 @@
             body.sc-chat-hidden.sc-vertical #sc-vert-ctrl-grip {
                 top: auto !important; bottom: 0 !important;
             }
-            body.sc-chat-hidden.sc-vertical #sc-chatmode-btn {
-                top: auto !important; bottom: 8px !important;
+            /* The control row sits just ABOVE the bottom scrubber (≈32px tall at bottom:4px)
+               so the two don't overlap; the cast button joins the row (it otherwise floats
+               mid-screen at the 50vh control-band position). */
+            body.sc-chat-hidden.sc-vertical #sc-chatmode-btn,
+            body.sc-chat-hidden.sc-vertical #sc-desync-btn,
+            body.sc-chat-hidden.sc-vertical #sc-settings-btn,
+            body.sc-chat-hidden.sc-vertical #sc-cast-btn {
+                top: auto !important; bottom: 48px !important;
             }
-            body.sc-chat-hidden.sc-vertical #sc-desync-btn {
-                top: auto !important; bottom: 8px !important;
+            /* Video-only fills the screen, so the scrubber belongs at the screen bottom —
+               not at the 50vh "above the chat header" spot used when chat is present. */
+            body.sc-chat-hidden.sc-vertical .video-js .vjs-control-bar {
+                bottom: 4px !important;
             }
-            body.sc-chat-hidden.sc-vertical #sc-settings-btn {
-                top: auto !important; bottom: 8px !important;
+
+            /* ── CHAT-ONLY: a keyboard-free, video-free chat screen — turns the device
+               (handy on a TV) into a pure chat client. The player is hidden here AND
+               paused/muted in JS, so the whole screen is chat. Works in both orientations. */
+            body.sc-chat-chatonly #videowrap,
+            body.sc-chat-chatonly #videowrap .embed-responsive,
+            body.sc-chat-chatonly #ytapiplayer,
+            body.sc-chat-chatonly #ytapiplayer iframe,
+            body.sc-chat-chatonly .video-js,
+            body.sc-chat-chatonly .vjs-tech,
+            body.sc-chat-chatonly .video-js .vjs-control-bar,
+            body.sc-chat-chatonly #sc-top-bar,
+            body.sc-chat-chatonly #videowrap-header,
+            body.sc-chat-chatonly #sc-movie-links,
+            body.sc-chat-chatonly #sc-movie-stats,
+            body.sc-chat-chatonly #sc-poster-toggle,
+            body.sc-chat-chatonly #sc-poster-strip,
+            body.sc-chat-chatonly #sc-trivia-btn,
+            body.sc-chat-chatonly #sc-desync-btn,
+            body.sc-chat-chatonly #fs-toggle-btn,
+            body.sc-chat-chatonly #sc-cast-btn,
+            body.sc-chat-chatonly #sc-settings-btn,
+            body.sc-chat-chatonly #sc-cluster-grip,
+            body.sc-chat-chatonly #sc-vert-ctrl-band,
+            body.sc-chat-chatonly #sc-vert-ctrl-grip,
+            body.sc-chat-chatonly #sc-chatmode-btn {
+                display: none !important;
             }
+            /* Chat header becomes a clean full-width top bar; its existing "›" button
+               (which already cycles chat modes) is the integrated way back out — no
+               separate floating button needed. */
+            body.sc-chat-chatonly #sc-chat-header {
+                display: flex !important; position: fixed !important;
+                top: 0 !important; left: 0 !important; right: auto !important;
+                width: 100vw !important; height: 32px !important;
+                background: rgba(12,10,20,0.97) !important;
+                z-index: 10010 !important;
+                padding: 0 10px !important; box-sizing: border-box !important;
+            }
+            body.sc-chat-chatonly #sc-chat-collapse-btn {
+                display: inline-flex !important; font-size: 20px !important;
+            }
+            /* Chat fills the screen under the header bar */
+            body.sc-chat-chatonly #chatwrap {
+                position: fixed !important;
+                top: 32px !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+                width: 100vw !important; height: auto !important;
+                z-index: 9999 !important;
+                background: rgba(16,14,24,0.97) !important;
+                display: flex !important; flex-direction: column !important;
+                box-sizing: border-box !important; padding: 0 8px !important;
+            }
+            /* Respect the on-screen keyboard if it opens (vars driven by the IME logic) */
+            body.sc-chat-chatonly.sc-kb-open #chatwrap {
+                top: 32px !important; height: auto !important; bottom: var(--sc-kb-h, 0px) !important;
+            }
+            /* Message list takes all the room above the input row */
+            body.sc-chat-chatonly #messagebuffer { flex: 1 1 auto !important; }
+            /* Keep the send button usable (no physical keyboard assumed), and shift the
+               emote icon left of it so the two don't stack (send is hidden in plain
+               horizontal, so the emote normally sits at the right edge). */
+            body.sc-chat-chatonly #sc-send-btn { display: inline-flex !important; }
+            body.sc-chat-chatonly #sc-emote-proxy { right: calc(44px + 14px) !important; }
 
             /* Overlay: video full width, chat floats translucent over the right */
             /* ── OVERLAY: minimal chat in the top-right corner over full video ── */
             body.sc-chat-overlay.sc-horizontal #videowrap,
             body.sc-chat-overlay.sc-horizontal #videowrap .embed-responsive,
             body.sc-chat-overlay.sc-horizontal #ytapiplayer { width: 100vw !important; }
+            /* No sidebar in overlay — the scrubber spans the full video width (the default
+               horizontal rule reserves 19vw for the chat column that isn't there here). */
+            body.sc-chat-overlay.sc-horizontal .video-js .vjs-control-bar { right: 16px !important; }
 
             /* Hide every bit of chrome — title bar, coming attractions, user/poll header */
             body.sc-chat-overlay.sc-horizontal #sc-top-bar,
@@ -5077,16 +5164,58 @@
     }
 
     // ── Chat layout modes: sidebar → overlay → hidden
-    const _CHAT_MODES = ['sidebar', 'overlay', 'hidden'];
-    const _CHAT_MODE_ICONS = { sidebar: '▐', overlay: '▣', hidden: '⊠' };
+    const _CHAT_MODES = ['sidebar', 'overlay', 'hidden', 'chatonly'];
+    const _CHAT_MODE_ICONS = { sidebar: '▐', overlay: '▣', hidden: '⊠', chatonly: '☰' };
+    const _CHAT_MODE_LABELS = { sidebar: 'Sidebar', overlay: 'Overlay', hidden: 'Hidden', chatonly: 'Chat Only' };
+
+    // CHAT-ONLY side effects: pause + mute the player so the device is a pure chat client.
+    // CyTube's sync conductor keeps trying to resume/seek, so we hold the media down with a
+    // light 1s interval (also covers the player not being ready yet on a cold load).
+    let _chatOnlyTimer = null, _inChatOnly = false;
+    function _coStopMedia() {
+        try { const vid = document.querySelector('#videowrap video'); if (vid) { vid.muted = true; if (!vid.paused) vid.pause(); } } catch (e) {}
+        try {
+            const p = window.PLAYER && window.PLAYER.player;
+            if (p) {
+                if (typeof p.pauseVideo === 'function') p.pauseVideo();
+                else if (typeof p.pause === 'function') { try { p.pause(); } catch (e) {} }
+                if (typeof p.mute === 'function') p.mute();
+                else if (typeof p.muted === 'function') p.muted(true);
+            }
+        } catch (e) {}
+    }
+    function enterChatOnly() {
+        _inChatOnly = true;
+        _coStopMedia();
+        clearInterval(_chatOnlyTimer);
+        _chatOnlyTimer = setInterval(_coStopMedia, 1000);
+    }
+    function exitChatOnly() {
+        if (!_inChatOnly) return;       // only act when we're actually leaving chat-only
+        _inChatOnly = false;
+        clearInterval(_chatOnlyTimer); _chatOnlyTimer = null;
+        // Unmute and nudge playback; the sync conductor takes it from the room's position.
+        try { const vid = document.querySelector('#videowrap video'); if (vid) vid.muted = false; } catch (e) {}
+        try {
+            const p = window.PLAYER && window.PLAYER.player;
+            if (p) {
+                if (typeof p.unMute === 'function') p.unMute();
+                else if (typeof p.muted === 'function') p.muted(false);
+                if (typeof p.playVideo === 'function') p.playVideo();
+                else if (typeof p.play === 'function') { try { p.play(); } catch (e) {} }
+            }
+        } catch (e) {}
+    }
     function applyChatMode(mode) {
-        ['sidebar', 'overlay', 'hidden'].forEach(m => document.body.classList.toggle('sc-chat-' + m, m === mode));
+        _CHAT_MODES.forEach(m => document.body.classList.toggle('sc-chat-' + m, m === mode));
         try { localStorage.setItem('sc_chat_mode', mode); } catch (e) {}
+        if (mode === 'chatonly') enterChatOnly(); else exitChatOnly();
         const btn = document.getElementById('sc-chatmode-btn');
         if (btn) {
             btn.textContent = _CHAT_MODE_ICONS[mode] || '▐';
-            btn.title = 'Chat: ' + mode + ' (press C)';
-            btn.dataset.tvLabel = 'Chat: ' + mode.charAt(0).toUpperCase() + mode.slice(1);
+            const label = _CHAT_MODE_LABELS[mode] || mode;
+            btn.title = 'Chat: ' + label + ' (press C)';
+            btn.dataset.tvLabel = 'Chat: ' + label;
         }
         const colBtn = document.getElementById('sc-chat-collapse-btn');
         if (colBtn) colBtn.textContent = mode === 'hidden' ? '‹' : '›';
@@ -5268,12 +5397,21 @@
     // (sc-video-dimmed on body). A document-level click listener doesn't work here because
     // YouTube/Drive embeds are iframes and their taps never bubble to the parent document.
     function initVideoTapReveal() {
+        const REVEAL_MS = 4000;     // keep the scrubber + fly-out cluster up for the same window
+        let scrubReleaseTimer = null;
         const tap = document.createElement('div');
         tap.id = 'sc-video-tap';
         tap.addEventListener('click', () => {
             if (_topBarWake) _topBarWake();
-            if (_leftZoneReveal) _leftZoneReveal(4000);
-            if (_rightZoneReveal) _rightZoneReveal(4000);
+            if (_leftZoneReveal) _leftZoneReveal(REVEAL_MS);
+            if (_rightZoneReveal) _rightZoneReveal(REVEAL_MS);
+            // Tie the scrubber to the fly-out: this overlay swallows the tap, so the
+            // video.js control bar would otherwise need a second tap. Hold it up for the
+            // same window the buttons stay revealed (holdScrubber refreshes activity
+            // inside video.js's ~2s idle timeout), then release so they fade together.
+            holdScrubber(true);
+            clearTimeout(scrubReleaseTimer);
+            scrubReleaseTimer = setTimeout(() => holdScrubber(false), REVEAL_MS);
         });
         document.body.appendChild(tap);
     }
