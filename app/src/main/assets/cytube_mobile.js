@@ -4022,7 +4022,7 @@
             #fs-toggle-btn { display: none !important; }
 
             /* Compact control icons on phones (TV scales these up to 52px below) */
-            #sc-desync-btn, #sc-settings-btn {
+            #sc-desync-btn, #sc-settings-btn, #sc-cast-btn {
                 width: 36px !important; height: 36px !important; font-size: 15px !important;
                 -webkit-tap-highlight-color: transparent !important;
             }
