@@ -26,6 +26,10 @@ class CytubeJsBridge(
     @JavascriptInterface
     fun isTv(): Boolean = activity.isTvDevice()
 
+    /** Installed app version name (e.g. "2.5") — used by the in-page update checker. */
+    @JavascriptInterface
+    fun appVersion(): String = BuildConfig.VERSION_NAME
+
     /** Back pressed with nothing to close in-page → background the app. */
     @JavascriptInterface
     fun tvBack() { activity.tvBackground() }

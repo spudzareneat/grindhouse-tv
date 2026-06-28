@@ -1010,6 +1010,87 @@
     }
 
     /* ==========================================================
+       APP UPDATE CHECK — compares the installed version against the
+       latest GitHub Release. If newer, the settings gear is highlighted
+       and the settings panel surfaces the release notes + a download link.
+       Uses the native CORS-free httpGet against the public GitHub API.
+    ========================================================== */
+    const LS_UPDATE_CACHE  = 'sc_update_cache'; // {ts, tag, notes, url} from the last good check
+    const GH_RELEASES_API  = 'https://api.github.com/repos/spudzareneat/grindhouse-tv/releases/latest';
+    const GH_RELEASES_PAGE = 'https://github.com/spudzareneat/grindhouse-tv/releases/latest';
+    let _updateInfo = null; // {available, current, latest, notes, url} once a check has run
+    let _pulsedThisSession = false; // the gear highlights+pulses once for ~30s, then retires
+    let _highlightRetired = false;  // after that window the gear returns to its normal color
+
+    function _appVersion() {
+        try { if (window.CytubeNative && CytubeNative.appVersion) return String(CytubeNative.appVersion() || ''); } catch (e) {}
+        return '';
+    }
+    // Pull the leading numeric X.Y.Z out of a version/tag string ("v2.6", "2.5-cast-exp-debug").
+    function _verTuple(s) {
+        const m = String(s || '').match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+        return m ? [(+m[1] || 0), (+m[2] || 0), (+m[3] || 0)] : [0, 0, 0];
+    }
+    function _verNewer(a, b) { // true if a is strictly newer than b
+        const x = _verTuple(a), y = _verTuple(b);
+        for (let i = 0; i < 3; i++) { if (x[i] !== y[i]) return x[i] > y[i]; }
+        return false;
+    }
+    function _markUpdateAvailable(on) {
+        const btn = document.getElementById('sc-settings-btn');
+        if (!btn) return;
+        if (!on) { btn.classList.remove('sc-has-update', 'sc-has-update-pulse'); return; }
+        if (_highlightRetired) return; // already had its 30s — leave the gear at its normal color
+        btn.classList.add('sc-has-update');
+        if (!_pulsedThisSession) {
+            // Highlight + pulse once for ~30s when an update is first noticed, then drop the
+            // highlight entirely so it isn't an endless distraction (the update still shows in
+            // the settings panel). _highlightRetired stops later checks re-applying it.
+            _pulsedThisSession = true;
+            btn.classList.add('sc-has-update-pulse');
+            setTimeout(() => {
+                _highlightRetired = true;
+                const b = document.getElementById('sc-settings-btn');
+                if (b) b.classList.remove('sc-has-update', 'sc-has-update-pulse');
+            }, 30000);
+        }
+    }
+
+    // Resolve the latest release and refresh _updateInfo + the gear highlight.
+    // force=false serves a 6h cache so launches don't hammer the API.
+    async function checkForUpdate(force) {
+        const current = _appVersion();
+        if (!force) {
+            try {
+                const c = JSON.parse(localStorage.getItem(LS_UPDATE_CACHE) || 'null');
+                if (c && c.ts && (Date.now() - c.ts) < 6 * 3600 * 1000) {
+                    _updateInfo = { available: _verNewer(c.tag, current), current, latest: c.tag, notes: c.notes || '', url: c.url || GH_RELEASES_PAGE };
+                    _markUpdateAvailable(_updateInfo.available);
+                    return _updateInfo;
+                }
+            } catch (e) {}
+        }
+        const res = await nativeHttpGet(GH_RELEASES_API, {
+            'User-Agent': 'GrindhouseTV-UpdateCheck',
+            'Accept': 'application/vnd.github+json'
+        });
+        if (!res || res.status < 200 || res.status >= 300) throw new Error('release lookup failed (' + (res && res.status) + ')');
+        const rel = JSON.parse(res.body || '{}');
+        const tag = rel.tag_name || rel.name || '';
+        const notes = rel.body || '';
+        const url = rel.html_url || GH_RELEASES_PAGE;
+        try { localStorage.setItem(LS_UPDATE_CACHE, JSON.stringify({ ts: Date.now(), tag, notes, url })); } catch (e) {}
+        _updateInfo = { available: _verNewer(tag, current), current, latest: tag, notes, url };
+        _markUpdateAvailable(_updateInfo.available);
+        return _updateInfo;
+    }
+
+    function initUpdateCheck() {
+        // Quiet background check a few seconds after boot (throttled by the 6h cache).
+        setTimeout(() => { checkForUpdate(false).catch(() => {}); }, 4000);
+    }
+
+    /* ==========================================================
        GOOGLE DRIVE VIDEO SUPPORT
        Some items in the playlist are Google Drive videos. CyTube can
        play them but needs a privileged cross-origin fetch to
@@ -2152,6 +2233,18 @@
                     </div>
                 </div>
 
+                <div class="sc-settings-group sc-settings-divider" id="sc-update-group">
+                    <label class="sc-settings-label">App Updates
+                        <span class="sc-settings-note" id="sc-update-current">Installed: v${_appVersion() || '?'}</span>
+                    </label>
+                    <div id="sc-update-status" class="sc-settings-note">Checking for updates…</div>
+                    <div id="sc-update-notes" class="sc-update-notes sc-hidden"></div>
+                    <div class="sc-settings-input-row">
+                        <button id="sc-update-check" class="sc-settings-test" type="button">Check now</button>
+                    </div>
+                    <button id="sc-update-download" class="sc-settings-btn-wide sc-hidden" type="button">Get the update on GitHub ↗</button>
+                </div>
+
                 <div id="sc-settings-actions">
                     <button id="sc-settings-cancel">${firstRun ? 'Skip for now' : 'Cancel'}</button>
                     <button id="sc-settings-save">Save</button>
@@ -2283,6 +2376,49 @@
                 lastMovieTitle = ''; // force a re-inject so links appear now
             }
         });
+
+        // ── App update check / release notes ─────────────────────────────────
+        (function wireUpdateSection() {
+            const statusEl = document.getElementById('sc-update-status');
+            const notesEl  = document.getElementById('sc-update-notes');
+            const dlBtn    = document.getElementById('sc-update-download');
+            const checkBtn = document.getElementById('sc-update-check');
+            if (!statusEl || !dlBtn || !checkBtn) return;
+
+            const render = (info) => {
+                statusEl.className = 'sc-settings-note';
+                notesEl.classList.add('sc-hidden');
+                dlBtn.classList.add('sc-hidden');
+                if (!info) { statusEl.textContent = 'Checking for updates…'; return; }
+                if (info.available) {
+                    statusEl.classList.add('sc-update-yes');
+                    statusEl.textContent = 'Update available: ' + info.latest;
+                    if (info.notes) { notesEl.textContent = info.notes; notesEl.classList.remove('sc-hidden'); }
+                    dlBtn.classList.remove('sc-hidden');
+                } else {
+                    statusEl.classList.add('sc-update-no');
+                    statusEl.textContent = info.latest ? '✓ You’re on the latest version (' + info.latest + ')' : '✓ You’re on the latest version';
+                }
+            };
+
+            if (_updateInfo) render(_updateInfo);  // show what we already know instantly
+            checkForUpdate(false).then(render).catch(() => {
+                if (!_updateInfo) statusEl.textContent = 'Couldn’t reach GitHub to check.';
+            });
+
+            dlBtn.addEventListener('click', () => {
+                const url = (_updateInfo && _updateInfo.url) || GH_RELEASES_PAGE;
+                try { if (window.CytubeNative && CytubeNative.openExternal) CytubeNative.openExternal(url); else window.open(url, '_blank'); } catch (e) {}
+            });
+            checkBtn.addEventListener('click', async () => {
+                statusEl.className = 'sc-settings-note';
+                statusEl.textContent = 'Checking…';
+                checkBtn.disabled = true;
+                try { render(await checkForUpdate(true)); }
+                catch (e) { statusEl.textContent = 'Couldn’t reach GitHub to check.'; }
+                checkBtn.disabled = false;
+            });
+        })();
     }
 
     function addSettingsButton() {
@@ -2949,6 +3085,7 @@
         initUserCount();
         initPollWatcher();
         initGoogleDrive();
+        initUpdateCheck();
 
         // First-run settings modal — only the very first launch, never forced again.
         if (!localStorage.getItem(LS_ONBOARDED)) {
@@ -3784,6 +3921,19 @@
                 color: white !important;
                 background: rgba(255,255,255,0.22) !important;
             }
+            /* A newer release is available — static green highlight (always while available) */
+            #sc-settings-btn.sc-has-update {
+                color: #7dffa0 !important;
+                box-shadow: 0 0 0 2px rgba(125,255,160,0.32), 0 0 6px rgba(125,255,160,0.28) !important;
+            }
+            /* …and a brief attention pulse, removed after ~30s so it isn't endless */
+            #sc-settings-btn.sc-has-update.sc-has-update-pulse {
+                animation: sc-gear-update-pulse 2s ease-in-out infinite !important;
+            }
+            @keyframes sc-gear-update-pulse {
+                0%, 100% { box-shadow: 0 0 0 2px rgba(125,255,160,0.35), 0 0 6px rgba(125,255,160,0.35) !important; }
+                50%      { box-shadow: 0 0 0 2px rgba(125,255,160,0.7), 0 0 16px rgba(125,255,160,0.8) !important; }
+            }
 
             body.sc-horizontal #sc-settings-btn {
                 bottom: 6px !important; right: calc(20vw + 102px) !important;
@@ -3953,6 +4103,19 @@
                 cursor: pointer !important; width: 100% !important;
             }
             .sc-settings-btn-wide:hover { background: rgba(192,176,255,0.32) !important; }
+            /* App-update section + the settings-gear "update available" highlight */
+            #sc-update-notes {
+                white-space: pre-wrap !important; max-height: 130px !important; overflow-y: auto !important;
+                margin: 6px 0 8px !important; padding: 8px 10px !important;
+                background: rgba(255,255,255,0.05) !important; border-radius: 6px !important;
+                font-size: 12px !important; line-height: 1.45 !important; color: rgba(255,255,255,0.78) !important;
+            }
+            #sc-update-notes.sc-hidden, #sc-update-download.sc-hidden { display: none !important; }
+            #sc-update-status.sc-update-yes { color: #7dffa0 !important; font-weight: 600 !important; }
+            #sc-update-status.sc-update-no  { color: rgba(255,255,255,0.5) !important; }
+            #sc-update-download { margin-top: 8px !important; background: rgba(125,255,160,0.16) !important;
+                color: #7dffa0 !important; border-color: rgba(125,255,160,0.4) !important; }
+            #sc-update-download:hover { background: rgba(125,255,160,0.28) !important; }
             #sc-settings-actions {
                 display: flex !important; gap: 10px !important; justify-content: flex-end !important;
                 margin-top: 4px !important;

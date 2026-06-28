@@ -9,7 +9,9 @@ A native **Android app for [CyTube](https://cytu.be)** — built for the couch o
 ## Features
 
 - **Cinematic shell** — branded splash that holds until the video is actually playing, then a 3‑second *Now‑Playing* intro card (TMDB backdrop, rating, runtime, genres).
-- **Three chat layouts** — cycle **Sidebar → Overlay → Hidden** (press `C` or the on‑screen control); a translucent corner overlay or full‑bleed cinema, your call.
+- **Four chat layouts** — cycle **Sidebar → Overlay → Hidden → Chat‑Only** (press `C` or the on‑screen control): a translucent corner overlay, full‑bleed cinema, or a keyboard‑free **full‑screen chat** that pauses and mutes the video — handy for using a TV purely as a chat client.
+- **Cast to TV** — from a phone or tablet, send the current video to a Chromecast / Google TV with one tap; the handset becomes a chat remote while the movie plays on the big screen. *(Experimental.)*
+- **Update notifications** — quietly checks GitHub for a newer release and briefly highlights the ⚙ settings gear; the release notes and a one‑tap **download link** live in Settings → App Updates.
 - **Grammar & spell check** — an optional *Review Before Sending* popup (powered by [LanguageTool](https://languagetool.org)) that catches typos and grammar slips, suggests one‑tap fixes, and flags hard‑to‑read messages (ALL CAPS, mashed keys, `!!!!`). Toggle it off in settings.
 - **IMDb Parent Guide & Trivia** — severity chips (Sex/Violence/Profanity/Drugs/Frightening) on the card, plus a summonable Trivia panel (`T` or the title link).
 - **Auto title cleanup** — pulls clean titles, posters, and IMDb/Letterboxd/Wiki links from TMDB; even attempts a match for full‑length YouTube movies.
@@ -35,7 +37,7 @@ A native **Android app for [CyTube](https://cytu.be)** — built for the couch o
 
 ![Coming Attractions poster reel](docs/images/coming-attractions.jpg)
 
-**Three chat layouts** — cycle Sidebar → Overlay → Hidden with `C`.
+**Chat layouts** — cycle Sidebar → Overlay → Hidden → Chat‑Only with `C`.
 
 | Overlay | Hidden (cinema) |
 |---|---|
@@ -76,6 +78,7 @@ Open the **⚙ settings** (in the control drawer) to:
 - Add a free **TMDB API key** (unlocks posters, backdrops, links, and the info card).
 - Toggle movie links, the on‑screen keyboard, grammar review, and chat font size.
 - Log in to / switch CyTube accounts.
+- Check for app updates and read the latest **release notes** (with a download link).
 
 IMDb Parent Guide and Trivia need no key.
 
