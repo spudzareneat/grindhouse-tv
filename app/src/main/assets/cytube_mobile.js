@@ -5004,16 +5004,40 @@
             body.sc-chat-chatonly #sc-desync-btn,
             body.sc-chat-chatonly #fs-toggle-btn,
             body.sc-chat-chatonly #sc-cast-btn,
-            body.sc-chat-chatonly #sc-settings-btn,
-            body.sc-chat-chatonly #sc-cluster-grip,
-            body.sc-chat-chatonly #sc-vert-ctrl-band,
-            body.sc-chat-chatonly #sc-vert-ctrl-grip,
-            body.sc-chat-chatonly #sc-chatmode-btn {
+            body.sc-chat-chatonly #sc-vert-ctrl-band {
                 display: none !important;
             }
-            /* Chat header becomes a clean full-width top bar; its existing "›" button
-               (which already cycles chat modes) is the integrated way back out — no
-               separate floating button needed. */
+            body.sc-chat-chatonly #sc-cluster-grip { display: none !important; }
+            /* The top header doubles as a control band (like the vertical band at 50vh, but
+               pinned to the top): a right-edge grip slides the chat-mode + settings buttons
+               out. Reuses the right-zone drawer (right-edge swipe in portrait, or tap the grip). */
+            body.sc-chat-chatonly #sc-vert-ctrl-grip {
+                display: block !important;
+                position: fixed !important; right: 0 !important; top: 0 !important; bottom: auto !important;
+                height: 32px !important; width: 4px !important;
+                border-radius: 2px 0 0 2px !important;
+                background: rgba(255,255,255,0.3) !important;
+                z-index: 10012 !important; cursor: pointer !important;
+            }
+            body.sc-chat-chatonly.sc-rightzone #sc-vert-ctrl-grip { opacity: 0 !important; pointer-events: none !important; }
+            body.sc-chat-chatonly #sc-chatmode-btn,
+            body.sc-chat-chatonly #sc-settings-btn {
+                display: flex !important;
+                position: fixed !important;
+                top: -2px !important; bottom: auto !important; left: auto !important;
+                opacity: 0 !important; pointer-events: none !important;
+                transform: translateX(16px) !important;
+                transition: opacity 0.25s ease, transform 0.25s ease !important;
+                z-index: 10012 !important;
+            }
+            body.sc-chat-chatonly #sc-chatmode-btn { right: 8px !important; }
+            body.sc-chat-chatonly #sc-settings-btn { right: 50px !important; }
+            body.sc-chat-chatonly.sc-rightzone #sc-chatmode-btn,
+            body.sc-chat-chatonly.sc-rightzone #sc-settings-btn {
+                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
+            }
+            /* Chat header is a clean full-width top bar; the fly-out grip on its right edge
+               (above) is the way out, so the inline "›" collapse button is hidden here. */
             body.sc-chat-chatonly #sc-chat-header {
                 display: flex !important; position: fixed !important;
                 top: 0 !important; left: 0 !important; right: auto !important;
@@ -5022,9 +5046,7 @@
                 z-index: 10010 !important;
                 padding: 0 10px !important; box-sizing: border-box !important;
             }
-            body.sc-chat-chatonly #sc-chat-collapse-btn {
-                display: inline-flex !important; font-size: 20px !important;
-            }
+            body.sc-chat-chatonly #sc-chat-collapse-btn { display: none !important; }
             /* Chat fills the screen under the header bar */
             body.sc-chat-chatonly #chatwrap {
                 position: fixed !important;
