@@ -8,6 +8,7 @@ import android.content.res.Configuration
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Rational
 import android.view.KeyEvent
 import android.view.View
@@ -56,6 +57,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: NoImeWebView
     private var webViewUa: String = ""           // browser UA, reused for native Drive stream fetches
     private var mediaProxy: LocalMediaProxy? = null  // localhost server that proxies Drive streams
+    private var stoppedAtMs = 0L                  // >0 once onStop ran; gates the on-resume player health check
     private lateinit var fullscreenContainer: FrameLayout
     private lateinit var prefs: SharedPreferences
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
@@ -420,6 +422,7 @@ class MainActivity : AppCompatActivity() {
         if (::webView.isInitialized) {
             webView.onPause()
             webView.pauseTimers()
+            stoppedAtMs = SystemClock.elapsedRealtime()
         }
     }
 
@@ -428,6 +431,18 @@ class MainActivity : AppCompatActivity() {
         if (::webView.isInitialized) {
             webView.resumeTimers()
             webView.onResume()
+            // Returning from the background: during a long suspend the socket times out and the
+            // in-page player object goes dead. CyTube re-syncs chat + the title on reconnect, but
+            // PLAYER.load() no-ops against the dead player, so the old video keeps playing forever.
+            // Ask the injected script to check the player on reconnect and rebuild ONLY it when
+            // it's actually stale (wrong/stuck media) — never on a healthy resume, so quick
+            // app-switches aren't disrupted. Posted so it runs once the window has settled.
+            if (stoppedAtMs > 0L) {
+                stoppedAtMs = 0L
+                webView.post {
+                    webView.evaluateJavascript("window.__scStaleResync && window.__scStaleResync()", null)
+                }
+            }
             // While backgrounded the chat textarea keeps DOM focus, so on wake Chromium
             // re-pops the soft keyboard over the video. Drop focus from any editable and
             // hide the IME. Posted so it runs once the window/IME state has settled.

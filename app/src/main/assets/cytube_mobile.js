@@ -1469,8 +1469,83 @@
             return;
         }
         let _lastMediaKey = '';
+        let _lastChangeMediaData = null;
+        let _roomPaused = false;
+        let _resyncArmed = false;
+        let _resyncTimer = null;
+
+        // Duration (seconds) of the media the player has ACTUALLY loaded — YouTube via its API
+        // (the iframe is cross-origin, so a <video> query can't reach inside it), everything
+        // else via the <video> element. This is ground truth for "what's really playing".
+        const renderedDuration = () => {
+            try { const p = window.PLAYER; if (p && p.yt && typeof p.yt.getDuration === 'function') { const d = p.yt.getDuration(); if (d > 0) return d; } } catch (e) {}
+            try { const v = document.querySelector('#ytapiplayer video, video'); if (v && v.duration > 0 && isFinite(v.duration)) return v.duration; } catch (e) {}
+            return null;
+        };
+        // Current playhead position (seconds), same source priority as renderedDuration.
+        const playheadProbe = () => {
+            try { const p = window.PLAYER; if (p && p.yt && typeof p.yt.getCurrentTime === 'function') { const t = p.yt.getCurrentTime(); if (typeof t === 'number') return t; } } catch (e) {}
+            try { const v = document.querySelector('#ytapiplayer video, video'); if (v && typeof v.currentTime === 'number') return v.currentTime; } catch (e) {}
+            return null;
+        };
+        // Rebuild ONLY the in-page player from a changeMedia payload. CyTube's loadMediaPlayer
+        // constructs a fresh player object (replacing window.PLAYER) and seeks it to the room's
+        // sync position — exactly what a dead player needs, with no page reload (chat/UI stay put).
+        const rebuildPlayer = (d) => {
+            try { if (typeof loadMediaPlayer === 'function' && d) loadMediaPlayer(d); } catch (e) {}
+        };
+        // Rebuild the player ONLY if it's genuinely stale — never on a healthy resume. Two
+        // signals, both judged only while the room is PLAYING (a still playhead is normal when
+        // paused): (1) the loaded media's duration doesn't match the room's current media length
+        // — the classic "old movie keeps playing after the room moved on"; (2) right media but
+        // the playhead isn't advancing — a stuck/dead player. A healthy resume (right media,
+        // advancing) matches on duration and is left completely untouched.
+        const maybeRebuildIfStale = () => {
+            try {
+                const d = _lastChangeMediaData;
+                if (!d || _roomPaused) return;
+                const expected = (typeof d.seconds === 'number' && d.seconds > 0) ? d.seconds : null;
+                const rendered = renderedDuration();
+                if (expected != null && rendered != null && Math.abs(rendered - expected) > 4) {
+                    rebuildPlayer(d);              // (1) wrong media loaded
+                    return;
+                }
+                const t1 = playheadProbe();        // (2) right media — is the playhead advancing?
+                if (t1 == null) return;
+                setTimeout(() => {
+                    if (_roomPaused) return;
+                    const t2 = playheadProbe();
+                    if (t2 != null && Math.abs(t2 - t1) < 0.25) rebuildPlayer(d);
+                }, 2000);
+            } catch (e) {}
+        };
+        // Called by native (MainActivity.onStart) when the app returns from the background, and
+        // self-triggered on socket reconnect. The player object dies during a long suspend; on
+        // return CyTube re-syncs chat + the title, but its PLAYER.load() no-ops against the dead
+        // player so the OLD video plays forever. We arm a one-shot staleness check that runs once
+        // the reconnect's fresh changeMedia has refreshed our notion of the room's current media,
+        // so we rebuild ONLY when the player is actually dead — never on a healthy resume. A
+        // safety timer runs the check even if no changeMedia arrives. Older builds without
+        // loadMediaPlayer fall back to a full reload so playback still recovers.
+        const armStaleCheck = () => {
+            if (typeof loadMediaPlayer !== 'function') { location.reload(); return; }
+            _resyncArmed = true;
+            clearTimeout(_resyncTimer);
+            _resyncTimer = setTimeout(() => { if (_resyncArmed) { _resyncArmed = false; maybeRebuildIfStale(); } }, 10000);
+        };
+        window.__scStaleResync = armStaleCheck;
+
         socket.on('changeMedia', (data) => {
             try {
+                _lastChangeMediaData = data;
+                if (data && typeof data.paused === 'boolean') _roomPaused = data.paused;
+                // First changeMedia after a resume/reconnect: the room's current media is now
+                // known. Give the player a few seconds to actually switch, then judge staleness.
+                if (_resyncArmed) {
+                    _resyncArmed = false;
+                    clearTimeout(_resyncTimer);
+                    setTimeout(maybeRebuildIfStale, 4000);
+                }
                 currentMediaSeconds = (data && typeof data.seconds === 'number') ? data.seconds : 0;
                 currentMediaType    = (data && data.type) ? data.type : '';
                 // Only treat this as a NEW film when the media actually changed —
@@ -1500,7 +1575,13 @@
         // is fine — the synced position is meaningless then anyway).
         socket.on('mediaUpdate', (data) => {
             if (data && typeof data.currentTime === 'number') currentPlaybackTime = data.currentTime;
+            if (data && typeof data.paused === 'boolean') _roomPaused = data.paused;
         });
+        // Genuine network drops (not just app suspends) can also leave a dead player behind, so
+        // re-run the staleness check whenever the socket reconnects. Harmless when it's healthy.
+        let _wasDisconnected = false;
+        socket.on('disconnect', () => { _wasDisconnected = true; });
+        socket.on('connect', () => { if (_wasDisconnected) { _wasDisconnected = false; armStaleCheck(); } });
         // The video already playing at launch never fires changeMedia, so check it once.
         setTimeout(() => { if (window.PLAYER && window.PLAYER.mediaType === 'yt') checkYtDrm(0); }, 2500);
     }
@@ -5033,6 +5114,39 @@
             return null;
         };
 
+        // True while "free watch" is on. Seeking the movie (scrubber + Left/Right on
+        // the player) is gated on this — a synced room just snaps a seek back, so we
+        // only let the remote move through the movie once sync is deliberately frozen.
+        const isDesynced = () => {
+            const b = document.getElementById('sc-desync-btn');
+            return !!(b && b.classList.contains('sc-desync-active'));
+        };
+
+        // A video.js pop-up menu (captions / quality / etc.) that's currently open.
+        // video.js marks the open menu with `vjs-lock-showing` when its button is pressed.
+        // Treat it like an overlay so the remote can step through its items and Back closes it.
+        const openVjsMenu = () => {
+            const m = document.querySelector('#videowrap .vjs-menu.vjs-lock-showing');
+            return (m && isVisible(m)) ? m : null;
+        };
+
+        // Interactive controls in the player's control bar (captions, quality, volume,
+        // and — only while free-watch is on — the seek scrubber). This is how CC / quality
+        // become reachable with just a remote. Anything not rendered (e.g. no captions
+        // track → no captions button) simply isn't returned, so there's no empty target.
+        function controlBarTargets() {
+            try {
+                const bar = document.querySelector('#videowrap .vjs-control-bar');
+                if (!bar || !isVisible(bar)) return [];
+                const allowSeek = isDesynced();
+                return [...bar.querySelectorAll('button.vjs-control, .vjs-progress-control')].filter(c => {
+                    if (!isVisible(c)) return false;
+                    if (c.classList.contains('vjs-progress-control') && !allowSeek) return false;
+                    return true;
+                });
+            } catch (e) { return []; }
+        }
+
         // 'sc-drm-open' first so it's the default focus when the DRM fallback is up; it's only a
         // candidate while the overlay exists (getElementById is null otherwise). It lives in the main
         // cluster — NOT OVERLAY_IDS — so the remote can still reach chat and the controls.
@@ -5045,54 +5159,77 @@
         };
 
         function candidates() {
+            // An open captions/quality menu traps focus to its items (Back closes it).
+            const menu = openVjsMenu();
+            if (menu) {
+                const list = [...menu.querySelectorAll('.vjs-menu-item')].filter(isVisible);
+                if (list.length) return { scope: menu, list };
+            }
             const ov = openOverlay();
             if (ov) {
                 let list = [...ov.querySelectorAll(FOCUS_SEL)].filter(isVisible).filter(e => !e.disabled);
                 if (!list.length) list = [ov]; // a click-to-dismiss overlay (e.g. the now-playing card)
                 return { scope: ov, list };
             }
-            return { scope: document, list: MAIN_IDS.map(id => document.getElementById(id)).filter(el =>
+            const main = MAIN_IDS.map(id => document.getElementById(id)).filter(el =>
                 el && isVisible(el) &&
                 // The new-message pill is opacity-hidden (still sized) until shown — only
                 // make it a focus target while it's actually visible.
-                (el.id !== 'sc-newmsg-pill' || el.classList.contains('sc-show'))) };
+                (el.id !== 'sc-newmsg-pill' || el.classList.contains('sc-show')));
+            // Append the player's own controls so CC / quality / (free-watch) seek are
+            // reachable by spatial nav alongside the app chrome.
+            return { scope: document, list: main.concat(controlBarTargets()) };
+        }
+
+        // Drop the focus ring from EVERY element (not just focusEl — an overlay that
+        // held focus can be torn down with its ring still applied, leaving a stale
+        // highlight) and release native focus so no :focus outline lingers either.
+        function clearFocus() {
+            document.querySelectorAll('.sc-tv-focus').forEach(e => e.classList.remove('sc-tv-focus'));
+            try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e) {}
+            holdScrubber(false);
+            focusEl = null;
         }
 
         function setFocus(el) {
             if (!el) return;
             makeFocusable(el);
+            // Native `title` tooltips clutter the TV (and an air-mouse can pop one right
+            // over what you're trying to select). The focus ring is label enough — strip
+            // the title from anything the remote lands on. Phones keep their tooltips.
+            if (el.hasAttribute && el.hasAttribute('title')) el.removeAttribute('title');
             // Moving the remote off the chat input reveals the player's scrubber, the
             // same way a mouse leaving chat to hover the video brings up the controls.
             if (focusEl && focusEl.id === 'sc-chat-textarea' && el.id !== 'sc-chat-textarea') wakeVideoControls();
-            // While a title-bar item (the movie title / its buttons) is selected, keep the
-            // scrubber pinned up; releasing it once focus moves off lets video.js fade it.
-            holdScrubber(!!(el.closest && el.closest('#videowrap-header')));
-            if (focusEl && focusEl !== el) focusEl.classList.remove('sc-tv-focus');
+            // Keep the scrubber pinned up while focus sits on a title-bar item OR inside
+            // the player's own control bar (so captions / quality / seek stay reachable
+            // instead of fading); releasing it once focus moves off lets video.js fade it.
+            holdScrubber(!!(el.closest && el.closest('#videowrap-header, .video-js')));
+            // Clear the ring from any previously-highlighted element before lighting the
+            // new one. querySelectorAll (not just focusEl) so a stale ring can't survive.
+            document.querySelectorAll('.sc-tv-focus').forEach(e => { if (e !== el) e.classList.remove('sc-tv-focus'); });
             focusEl = el;
             el.classList.add('sc-tv-focus');
             try { el.focus({ preventScroll: true }); } catch (e) {}
             try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
-            // Caption label shown to the right of the focused button
-            let cap = document.getElementById('sc-tv-caption');
-            if (!cap) { cap = document.createElement('div'); cap.id = 'sc-tv-caption'; document.body.appendChild(cap); }
-            // Buttons whose visible text already names them opt out of the caption
-            // (dataset.noTvCaption) to avoid redundant on-screen clutter.
-            const rawLabel = el.dataset.noTvCaption ? '' : (el.dataset.tvLabel || el.title || '');
-            const capText = rawLabel.replace(/ ?[—–-].*$/, '').replace(/ \(press \w+\)$/i, '').trim();
-            if (capText) {
-                const r = el.getBoundingClientRect();
-                cap.textContent = capText;
-                cap.style.left = Math.min(window.innerWidth - 180, r.right + 12) + 'px';
-                cap.style.top = Math.max(4, r.top + (r.height - 26) / 2) + 'px';
-                cap.classList.add('sc-show');
-                clearTimeout(cap._t);
-                cap._t = setTimeout(() => cap.classList.remove('sc-show'), 2000);
-            } else {
-                cap.classList.remove('sc-show');
-            }
         }
         // Let other UI (settings modal) place the remote's focus ring on an element.
         _tvSetFocus = setFocus;
+
+        // Seek the active player by ±delta seconds (free-watch only — the caller guards
+        // on isDesynced()). Works for both video.js (raw/Drive) and a bare <video>.
+        function seekBy(delta) {
+            try {
+                const p = window.PLAYER && window.PLAYER.player;
+                if (p && typeof p.currentTime === 'function') {
+                    p.currentTime(Math.max(0, (p.currentTime() || 0) + delta));
+                    wakeVideoControls();
+                    return;
+                }
+            } catch (e) {}
+            const v = document.querySelector('#videowrap video');
+            if (v) { try { v.currentTime = Math.max(0, v.currentTime + delta); wakeVideoControls(); } catch (e) {} }
+        }
 
         // Coming Attractions strip: a horizontal poster reel. Drive the existing hover-zoom
         // off the focused poster so the remote gets the same preview the mouse does.
@@ -5107,6 +5244,15 @@
         }
 
         function move(dir) {
+            // Scrubber focused + free-watch on: Left/Right steps through the movie
+            // (±10s) instead of moving focus. candidates() only offers the scrubber
+            // while desynced, so reaching here already implies seeking is allowed.
+            if (focusEl && focusEl.classList && focusEl.classList.contains('vjs-progress-control') &&
+                (dir === 'left' || dir === 'right')) {
+                if (isDesynced()) seekBy(dir === 'right' ? 10 : -10);
+                return;
+            }
+
             // Range slider: left/right adjusts the value instead of moving focus
             if (focusEl && focusEl.type === 'range' && (dir === 'left' || dir === 'right')) {
                 const step = parseFloat(focusEl.step) || 1;
@@ -5174,35 +5320,56 @@
 
         function activate() {
             if (!focusEl) { move('right'); return; }
+            // OK on the scrubber would click at its origin and jump to 0 — seeking is
+            // Left/Right only, so swallow the press here.
+            if (focusEl.classList && focusEl.classList.contains('vjs-progress-control')) return;
             if (focusEl.tagName === 'TEXTAREA' || focusEl.tagName === 'INPUT') {
                 if (focusEl.type === 'checkbox' || focusEl.type === 'range') focusEl.click();
                 else { try { focusEl.focus(); } catch (e) {} } // let the on-screen keyboard open (if not suppressed)
                 return;
             }
+            // Picking a captions/quality item closes the menu — hand the ring back to its
+            // control-bar button so we aren't stranded on the now-hidden item.
+            const ownerBtn = focusEl.classList && focusEl.classList.contains('vjs-menu-item') &&
+                focusEl.closest('.vjs-menu-button');
             focusEl.click();
+            if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) { clearFocus(); setFocus(ownerBtn); }
         }
 
         function closeTop() {
+            // Innermost first: an open captions/quality menu closes back to its button.
+            const menu = openVjsMenu();
+            if (menu) {
+                const btn = menu.closest('.vjs-menu-button');
+                // Click the button to toggle the menu shut — keeps video.js's own
+                // pressed/lock state in sync (a raw class strip would desync it and the
+                // button would need two presses to reopen). Fall back to a class strip.
+                if (btn) { try { btn.click(); } catch (e) { try { menu.classList.remove('vjs-lock-showing'); } catch (e2) {} } }
+                else { try { menu.classList.remove('vjs-lock-showing'); } catch (e) {} }
+                clearFocus();
+                if (btn && isVisible(btn)) setFocus(btn); // keep our place on the control bar
+                return true;
+            }
             const settings = document.getElementById('sc-settings-overlay');
             if (settings && isVisible(settings)) {
                 const c = document.getElementById('sc-settings-cancel');
                 if (c) c.click(); else settings.remove();
-                focusEl = null; return true;
+                clearFocus(); return true;
             }
             const modal = document.getElementById('sc-modal-overlay');
-            if (modal && isVisible(modal)) { (document.getElementById('sc-btn-cancel') || { click() { modal.remove(); } }).click(); focusEl = null; return true; }
+            if (modal && isVisible(modal)) { (document.getElementById('sc-btn-cancel') || { click() { modal.remove(); } }).click(); clearFocus(); return true; }
             const trivia = document.getElementById('sc-trivia-card');
-            if (trivia && trivia.classList.contains('sc-show')) { hideTriviaCard(); focusEl = null; return true; }
+            if (trivia && trivia.classList.contains('sc-show')) { hideTriviaCard(); clearFocus(); return true; }
             const np = document.getElementById('sc-np-card');
-            if (np && np.classList.contains('sc-np-visible')) { hideNowPlayingCard(); focusEl = null; return true; }
+            if (np && np.classList.contains('sc-np-visible')) { hideNowPlayingCard(); clearFocus(); return true; }
             for (const id of ['sc-users-panel', 'sc-poll-panel']) {
                 const p = document.getElementById(id);
-                if (p && isVisible(p)) { p.style.display = 'none'; focusEl = null; return true; }
+                if (p && isVisible(p)) { p.style.display = 'none'; clearFocus(); return true; }
             }
             const poster = document.getElementById('sc-poster-strip');
             if (poster && poster.classList.contains('sc-poster-visible')) {
                 const t = document.getElementById('sc-poster-toggle'); if (t) t.click(); else poster.classList.remove('sc-poster-visible');
-                focusEl = null; return true;
+                clearFocus(); return true;
             }
             return false;
         }
