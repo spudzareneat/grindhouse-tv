@@ -12,6 +12,7 @@
     const LS_MOVIE_LINKS = 'sc_movie_links'; // 'off' to hide IMDb/Letterboxd/Wiki links
     const LS_COUCH      = 'sc_couch_mode'; // 'on' = chat input grows big & readable while typing
     const LS_WATCHALONG = 'sc_watch_along'; // 'on' = hide the chat input + guest login (read-only)
+    const LS_CAST_MUTE  = 'sc_cast_fallback_mute'; // 'on' = mute fallback (YouTube) playback on this device while casting
     const getKey   = id => localStorage.getItem(id) || '';
     const setKey   = (id, v) => localStorage.setItem(id, v.trim());
     const hasKey   = id => !!getKey(id);
@@ -19,6 +20,7 @@
     const movieLinksEnabled = () => getKey(LS_MOVIE_LINKS) !== 'off';
     const couchModeEnabled  = () => getKey(LS_COUCH) === 'on';
     const watchAlongEnabled = () => getKey(LS_WATCHALONG) === 'on';
+    const castFallbackMuted = () => getKey(LS_CAST_MUTE) === 'on'; // default: unmuted
 
     // Watch-Only mode: hide the chat input and the guest-login box so the room is
     // purely read-along. Works in both sidebar and overlay chat layouts (CSS-gated).
@@ -2129,6 +2131,16 @@
                 </div>
 
                 <div class="sc-settings-group sc-settings-toggle-group">
+                    <label class="sc-settings-toggle-label">
+                        <span class="sc-toggle-row">
+                            <input type="checkbox" id="sc-input-castmute" ${castFallbackMuted() ? 'checked' : ''} />
+                            <span class="sc-toggle-text">Mute fallback audio while casting</span>
+                        </span>
+                        <span class="sc-settings-note">When a clip can't be cast (e.g. YouTube) it plays on this device instead — turn this on to keep that playback muted by default</span>
+                    </label>
+                </div>
+
+                <div class="sc-settings-group sc-settings-toggle-group">
                     <label class="sc-settings-label">
                         Chat font size
                         <span class="sc-settings-note" id="sc-font-val">${getChatFontSize()}px</span>
@@ -2250,6 +2262,16 @@
             applyWatchAlong();
         });
 
+        // ── Cast fallback mute toggle (applies on next fallback; reflects now if casting) ─
+        const castmute = document.getElementById('sc-input-castmute');
+        if (castmute) castmute.addEventListener('change', () => {
+            setKey(LS_CAST_MUTE, castmute.checked ? 'on' : 'off');
+            // If a fallback clip is already playing on this device, honour the change live.
+            if (document.body.classList.contains('sc-cast-fallback') && window.__scApplyCastFallbackAudio) {
+                window.__scApplyCastFallbackAudio();
+            }
+        });
+
         // ── Movie-links toggle (applies on next media; clears current row now) ─
         const mlinks = document.getElementById('sc-input-movielinks');
         if (mlinks) mlinks.addEventListener('change', () => {
@@ -2271,6 +2293,28 @@
         btn.title = 'Script Settings (API keys)';
         btn.dataset.tvLabel = 'Settings';
         btn.addEventListener('click', openSettingsModal);
+        document.body.appendChild(btn);
+    }
+
+    // Cast button — a mobile-only sender control that sits in the fly-out cluster under
+    // the settings gear and opens the system Cast device chooser. Never shown on TV (a TV
+    // is the cast target, not a sender). Queries the bridge directly rather than the _isTv
+    // const, which may not be initialised yet when _scBoot() runs.
+    function addCastButton() {
+        let onTv = false;
+        try { onTv = !!(window.CytubeNative && CytubeNative.isTv && CytubeNative.isTv()); } catch (e) {}
+        if (onTv) return;
+        if (document.getElementById('sc-cast-btn')) return;
+        const btn = document.createElement('button');
+        btn.id = 'sc-cast-btn';
+        btn.type = 'button';
+        btn.title = 'Cast to TV';
+        btn.dataset.tvLabel = 'Cast';
+        btn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">' +
+            '<path d="M1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11zm20-7H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>';
+        btn.addEventListener('click', function () {
+            try { if (window.CytubeNative && CytubeNative.startCasting) CytubeNative.startCasting(); } catch (e) {}
+        });
         document.body.appendChild(btn);
     }
 
@@ -2880,6 +2924,7 @@
         relocateEmoteButton();
         addFloatingButtons();
         addSettingsButton();
+        addCastButton();
         watchMovieTitle();
         initMediaWatcher();
         initChatTimestamps();
@@ -3731,6 +3776,49 @@
                 bottom: 43vh !important; right: 122px !important;
             }
 
+            /* ===== CAST BUTTON (mobile only) — fly-out cluster, one slot past settings ===== */
+            #sc-cast-btn {
+                position: fixed !important;
+                z-index: 20002 !important;
+                background: rgba(255,255,255,0.08) !important;
+                color: rgba(255,255,255,0.55) !important;
+                border: none !important;
+                border-radius: 50% !important;
+                width: 28px !important;
+                height: 28px !important;
+                padding: 0 !important;
+                cursor: pointer !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                transition: color 0.3s ease, background 0.3s ease, opacity 0.25s ease, transform 0.25s ease !important;
+                line-height: 1 !important;
+            }
+            #sc-cast-btn:hover { color: white !important; background: rgba(255,255,255,0.22) !important; }
+            #sc-cast-btn.sc-cast-active { color: #7dffa0 !important; background: rgba(125,255,160,0.18) !important; }
+            /* Horizontal: vertical stack at the left edge, directly under settings (56px pitch) */
+            body.sc-horizontal #sc-cast-btn {
+                left: 10px !important; right: auto !important; bottom: auto !important;
+                top: calc(50% + 112px) !important;
+                opacity: 0 !important; pointer-events: none !important;
+                transform: translateX(-14px) !important;
+            }
+            body.sc-horizontal.sc-leftzone #sc-cast-btn {
+                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
+            }
+            /* Vertical: control-band row, one slot left of settings */
+            body.sc-vertical #sc-cast-btn {
+                top: calc(50vh + 4px) !important; bottom: auto !important;
+                right: 140px !important; left: auto !important;
+                opacity: 0 !important; pointer-events: none !important;
+                transform: translateX(16px) !important;
+            }
+            body.sc-vertical.sc-rightzone #sc-cast-btn {
+                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
+            }
+            /* Hide with the rest of the cluster while the keyboard is up */
+            body.sc-kb-open #sc-cast-btn { opacity: 0 !important; pointer-events: none !important; }
+
             /* ===== SETTINGS MODAL ===== */
             #sc-settings-overlay {
                 position: fixed !important; inset: 0 !important;
@@ -4015,7 +4103,7 @@
             #fs-toggle-btn { display: none !important; }
 
             /* Compact control icons on phones (TV scales these up to 52px below) */
-            #sc-desync-btn, #sc-settings-btn {
+            #sc-desync-btn, #sc-settings-btn, #sc-cast-btn {
                 width: 36px !important; height: 36px !important; font-size: 15px !important;
                 -webkit-tap-highlight-color: transparent !important;
             }
@@ -4557,6 +4645,120 @@
             html body.sc-pip #sc-users-panel, html body.sc-pip #sc-poll-panel,
             html body.sc-pip #sc-np-card, html body.sc-pip #sc-trivia-card,
             html body.sc-pip #sc-mobile-input-row, html body.sc-pip .video-js .vjs-control-bar {
+                display: none !important;
+            }
+
+            /* ── CAST MODE: phone becomes a chat remote with a top control bar ─────
+               While casting, the movie plays on the TV, so on the device we hide the
+               player and give the screen to chat. A dedicated top bar (#sc-cast-bar,
+               built in JS) holds the title plus the relocated controls (coming
+               attractions, trivia, users, poll, settings) and a Stop Casting button.
+               The player must keep PLAYING for the sync conductor's clock, so we make it
+               invisible via opacity/z-index rather than display:none (which can pause it). */
+            html body.sc-cast #videowrap,
+            html body.sc-cast #videowrap .embed-responsive,
+            html body.sc-cast #ytapiplayer,
+            html body.sc-cast #ytapiplayer iframe,
+            html body.sc-cast .video-js,
+            html body.sc-cast .vjs-tech {
+                opacity: 0 !important; z-index: -1 !important; pointer-events: none !important;
+            }
+            /* The cast top bar — only present/visible in cast mode */
+            #sc-cast-bar { display: none !important; }
+            html body.sc-cast #sc-cast-bar {
+                display: flex !important; align-items: center !important;
+                position: fixed !important; top: 0 !important; left: 0 !important;
+                width: 100vw !important; height: 40px !important;
+                padding: 0 12px !important; gap: 14px !important; box-sizing: border-box !important;
+                background: rgba(12,10,20,0.97) !important;
+                border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+                z-index: 10006 !important;
+            }
+            /* Title takes the remaining width and ellipsises; still opens the now-playing card */
+            html body.sc-cast #sc-cast-title-slot {
+                flex: 1 1 auto !important; min-width: 0 !important;
+                overflow: hidden !important; white-space: nowrap !important; text-overflow: ellipsis !important;
+                color: #fff !important; font-size: 13px !important; font-weight: 500 !important;
+            }
+            /* The relocated title header sits inline inside the slot (strip its fixed-overlay
+               styling). It always carries the current title, raw text or #sc-title-text span. */
+            html body.sc-cast #sc-cast-title-slot #videowrap-header {
+                position: static !important; width: auto !important; max-width: 100% !important;
+                height: auto !important; line-height: normal !important;
+                padding: 0 !important; margin: 0 !important;
+                background: transparent !important; border: none !important; box-shadow: none !important;
+                z-index: auto !important; color: #fff !important;
+                font-size: 13px !important; font-weight: 500 !important; opacity: 1 !important;
+                white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important;
+            }
+            /* Don't let the idle dimmer fade the title while it's in the cast bar */
+            html body.sc-cast #sc-cast-title-slot #videowrap-header.sc-bar-dim {
+                opacity: 1 !important; color: #fff !important; background: transparent !important;
+            }
+            html body.sc-cast #sc-cast-title-slot #sc-title-text {
+                color: #fff !important; opacity: 1 !important; pointer-events: auto !important;
+            }
+            html body.sc-cast #sc-cast-controls {
+                display: flex !important; align-items: center !important;
+                gap: 14px !important; flex: 0 0 auto !important;
+            }
+            /* Neutralise each relocated control's own fixed positioning / hover-hide so
+               they simply flow inside the bar. */
+            html body.sc-cast #sc-cast-bar #sc-poster-toggle,
+            html body.sc-cast #sc-cast-bar #sc-trivia-btn,
+            html body.sc-cast #sc-cast-bar #sc-usercount-btn,
+            html body.sc-cast #sc-cast-bar #sc-poll-btn,
+            html body.sc-cast #sc-cast-bar #sc-settings-btn,
+            html body.sc-cast #sc-cast-bar #sc-cast-stop-btn {
+                position: static !important; top: auto !important; left: auto !important;
+                right: auto !important; bottom: auto !important;
+                opacity: 1 !important; transform: none !important; pointer-events: auto !important;
+                margin: 0 !important; box-shadow: none !important;
+                display: inline-flex !important; align-items: center !important;
+            }
+            html body.sc-cast #sc-cast-stop-btn {
+                background: #b3261e !important; color: #fff !important; border: none !important;
+                border-radius: 6px !important; padding: 5px 12px !important;
+                font-size: 12px !important; font-weight: 600 !important; cursor: pointer !important;
+                white-space: nowrap !important;
+            }
+            html body.sc-cast #sc-cast-stop-btn:hover { background: #c8352c !important; }
+            /* Chat fills everything under the bar down to the bottom */
+            html body.sc-cast #chatwrap {
+                position: fixed !important; top: 40px !important; bottom: 0 !important;
+                left: 0 !important; right: 0 !important;
+                width: 100vw !important; height: auto !important;
+                z-index: 9999 !important; background: rgba(16,14,24,0.97) !important;
+                display: flex !important; flex-direction: column !important;
+                padding: 0 8px !important;
+            }
+            /* Respect the on-screen keyboard (vars driven by the existing IME logic) and
+               don't inherit the video/chat split heights — chat owns the screen here. */
+            html body.sc-cast.sc-kb-open #chatwrap {
+                top: 40px !important; height: auto !important;
+                bottom: var(--sc-kb-h, 0px) !important;
+            }
+            /* Keep the send button usable on a touch tablet even in landscape */
+            html body.sc-cast #sc-send-btn { display: inline-flex !important; }
+            /* The send button is visible in cast mode, so push the emote icon left of it
+               (back into the chat area) the same way portrait does — otherwise they overlap. */
+            html body.sc-cast #sc-emote-proxy { right: calc(44px + 14px) !important; }
+            /* Coming Attractions reel: full width, dropping just below the 40px cast bar
+               (normally it's 80vw and tucked under a 20px header). */
+            html body.sc-cast #sc-poster-strip {
+                width: 100vw !important; top: 40px !important; bottom: auto !important;
+            }
+            /* Hide video-only chrome that isn't relocated into the bar (the pop-up panels
+               triggered from the bar — users/poll/trivia/now-playing — stay available). */
+            html body.sc-cast #sc-chatmode-btn,
+            html body.sc-cast #sc-desync-btn,
+            html body.sc-cast #fs-toggle-btn,
+            html body.sc-cast #sc-cast-btn,
+            html body.sc-cast #sc-top-bar,
+            html body.sc-cast #sc-movie-links,
+            html body.sc-cast #sc-movie-stats,
+            html body.sc-cast #sc-vert-ctrl-band,
+            html body.sc-cast #sc-vert-ctrl-grip {
                 display: none !important;
             }
 
@@ -5476,5 +5678,121 @@
 
     if (document.readyState === 'complete') initIntroSequence();
     else window.addEventListener('load', initIntroSequence);
+
+    // ── Cast mode: a top control bar that hosts the title + relocated controls ──────
+    // Native calls window.__scSetCastMode(true/false) when a cast session starts/ends.
+    // We MOVE the existing controls into the bar (keeping their handlers) and put them
+    // back on exit — rather than rebuilding them — so trivia/poll/users/settings behave
+    // exactly as they do normally.
+    (function () {
+        // Only controls that currently exist get moved (trivia needs IMDb data, poll
+        // needs a live poll, poster toggle needs a Coming-Attractions reel, etc.).
+        const CAST_CONTROL_IDS = ['sc-poster-toggle', 'sc-trivia-btn', 'sc-usercount-btn', 'sc-poll-btn', 'sc-settings-btn'];
+        let savedSlots = null;   // each relocated element's original DOM position, for restore
+
+        function buildBar() {
+            let bar = document.getElementById('sc-cast-bar');
+            if (bar) return bar;
+            bar = document.createElement('div');
+            bar.id = 'sc-cast-bar';
+            const titleSlot = document.createElement('div');
+            titleSlot.id = 'sc-cast-title-slot';
+            const controls = document.createElement('div');
+            controls.id = 'sc-cast-controls';
+            const stop = document.createElement('button');
+            stop.id = 'sc-cast-stop-btn';
+            stop.type = 'button';
+            stop.textContent = 'Stop Casting';
+            stop.addEventListener('click', function () {
+                try { if (window.CytubeNative && CytubeNative.stopCasting) CytubeNative.stopCasting(); } catch (e) {}
+            });
+            bar.appendChild(titleSlot);
+            bar.appendChild(controls);
+            bar.appendChild(stop);
+            document.body.appendChild(bar);
+            return bar;
+        }
+
+        function remember(el) { return { el: el, parent: el.parentNode, next: el.nextSibling }; }
+
+        function enter() {
+            buildBar();
+            const titleSlot = document.getElementById('sc-cast-title-slot');
+            const controls = document.getElementById('sc-cast-controls');
+            savedSlots = [];
+            // Move the whole title header (it always holds the live title — sometimes raw text,
+            // sometimes the #sc-title-text span once TMDB matches — and keeps updating in place).
+            const header = document.getElementById('videowrap-header');
+            if (header) { savedSlots.push(remember(header)); titleSlot.appendChild(header); }
+            CAST_CONTROL_IDS.forEach(function (id) {
+                const el = document.getElementById(id);
+                if (el) { savedSlots.push(remember(el)); controls.appendChild(el); }
+            });
+            document.body.classList.remove('sc-cast-fallback');
+            document.body.classList.add('sc-cast');
+            scrollChatToBottom();   // back to the chat view — pin to the newest message
+        }
+
+        // Jump the chat to the latest message once the cast layout has settled.
+        function scrollChatToBottom() {
+            var pin = function () {
+                var mb = document.getElementById('messagebuffer');
+                if (mb) mb.scrollTop = mb.scrollHeight;
+            };
+            requestAnimationFrame(function () { requestAnimationFrame(pin); });
+            setTimeout(pin, 250);
+        }
+
+        function exit() {
+            document.body.classList.remove('sc-cast');
+            document.body.classList.remove('sc-cast-fallback');
+            if (savedSlots) {
+                savedSlots.forEach(function (s) {
+                    try { if (s.parent) s.parent.insertBefore(s.el, s.next); } catch (e) {}
+                });
+                savedSlots = null;
+            }
+        }
+
+        // Set the mute state of whatever player is current: <video> (raw/Drive) and/or the
+        // CyTube player wrapper (YouTube YT.Player has mute/unMute; video.js has muted()).
+        function setPlayerMuted(muted) {
+            try { var v = document.querySelector('video'); if (v) v.muted = muted; } catch (e) {}
+            try {
+                var p = window.PLAYER && window.PLAYER.player;
+                if (p) {
+                    if (muted) {
+                        if (typeof p.mute === 'function') p.mute();
+                        else if (typeof p.muted === 'function') p.muted(true);
+                    } else {
+                        if (typeof p.unMute === 'function') p.unMute();
+                        else if (typeof p.muted === 'function') p.muted(false);
+                        if (typeof p.setVolume === 'function') { try { p.setVolume(100); } catch (e) {} }
+                    }
+                }
+            } catch (e) {}
+        }
+        window.__scSetPlayerMuted = setPlayerMuted;
+
+        // Apply the user's fallback-audio preference to the device player.
+        window.__scApplyCastFallbackAudio = function () {
+            var muted = false;
+            try { muted = localStorage.getItem('sc_cast_fallback_mute') === 'on'; } catch (e) {}
+            setPlayerMuted(muted);
+        };
+
+        // Native calls this when a non-castable (YouTube) clip falls back to this device.
+        // The player may not be ready the instant we switch, so re-apply a few times.
+        window.__scEnterCastFallback = function () {
+            document.body.classList.add('sc-cast-fallback');
+            window.__scApplyCastFallbackAudio();
+            setTimeout(window.__scApplyCastFallbackAudio, 600);
+            setTimeout(window.__scApplyCastFallbackAudio, 1600);
+        };
+
+        window.__scSetCastMode = function (on) {
+            try { on ? enter() : exit(); } catch (e) { /* never let cast UI throw */ }
+        };
+    })();
 
 })();

@@ -67,6 +67,18 @@ class CytubeJsBridge(
     @JavascriptInterface
     fun gdProxyBase(): String = activity.gdProxyBase()
 
+    /** Open the system Cast device chooser (the in-page mobile cast button). */
+    @JavascriptInterface
+    fun startCasting() {
+        activity.runOnUiThread { activity.startCasting() }
+    }
+
+    /** End the current cast session (the cast-mode "Stop Casting" button). */
+    @JavascriptInterface
+    fun stopCasting() {
+        activity.runOnUiThread { activity.stopCasting() }
+    }
+
     /**
      * Native HTTP GET — bypasses WebView CORS so the script can validate API keys
      * (and reach APIs like DoesTheDogDie that don't send CORS headers).

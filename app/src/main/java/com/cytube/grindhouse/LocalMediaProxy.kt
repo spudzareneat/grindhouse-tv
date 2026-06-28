@@ -32,9 +32,18 @@ class LocalMediaProxy(private val userAgent: String) {
     private val pool = Executors.newCachedThreadPool()
     var port: Int = 0; private set
 
+    // JPEG bytes served at /slate — the "please wait" card shown on the cast TV during a
+    // non-castable (YouTube) segment. Set by MainActivity; the cast device fetches it over the LAN.
+    @Volatile var slate: ByteArray? = null
+
     fun start() {
         if (server != null) return
-        val s = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
+        // Bind on the wildcard address (0.0.0.0) rather than loopback-only. The WebView still
+        // reaches it via http://127.0.0.1:<port> (a Chromium "secure context"), but binding the
+        // wildcard also lets a CAST TARGET on the same LAN fetch Drive streams from the phone:
+        // Google ties Drive stream URLs to the requesting browser, so the Chromecast can't hit
+        // Google directly — it pulls through this proxy at http://<phone-lan-ip>:<port> instead.
+        val s = ServerSocket(0, 50, InetAddress.getByName("0.0.0.0"))
         server = s
         port = s.localPort
         pool.execute {
@@ -66,9 +75,12 @@ class LocalMediaProxy(private val userAgent: String) {
                     if (line.isEmpty()) break
                     if (line.startsWith("Range:", ignoreCase = true)) range = line.substringAfter(":").trim()
                 }
-                val enc = path.substringAfter("u=", "")
                 val out = sock.getOutputStream()
-                if (enc.isEmpty()) { writeStatus(out, 400, "Bad Request"); return }
+                if (path.startsWith("/slate")) {
+                    serveSlate(out, method.equals("HEAD", true)); return@use
+                }
+                val enc = path.substringAfter("u=", "")
+                if (enc.isEmpty()) { writeStatus(out, 400, "Bad Request"); return@use }
                 proxy(URLDecoder.decode(enc, "UTF-8"), range, method.equals("HEAD", true), out)
             }
         } catch (_: Exception) { /* client gone / broken pipe — ignore */ }
@@ -129,6 +141,19 @@ class LocalMediaProxy(private val userAgent: String) {
             conn.disconnect()
             return
         }
+    }
+
+    private fun serveSlate(out: OutputStream, headOnly: Boolean) {
+        val data = slate
+        if (data == null) { writeStatus(out, 404, "Not Found"); return }
+        val sb = StringBuilder("HTTP/1.1 200 OK\r\n")
+        sb.append("Content-Type: image/jpeg\r\n")
+        sb.append("Content-Length: ${data.size}\r\n")
+        sb.append("Access-Control-Allow-Origin: *\r\n")
+        sb.append("Connection: close\r\n\r\n")
+        out.write(sb.toString().toByteArray(Charsets.US_ASCII))
+        if (!headOnly) out.write(data)
+        out.flush()
     }
 
     private fun writeStatus(out: OutputStream, code: Int, reason: String) {

@@ -21,3 +21,6 @@ keystore.properties
 
 # Built APKs go to GitHub Releases, not the repo
 *.apk
+
+# Scratch / working files (source art before it's resized into res or assets)
+/tmp

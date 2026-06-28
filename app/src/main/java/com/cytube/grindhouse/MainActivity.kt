@@ -31,6 +31,17 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import androidx.mediarouter.app.MediaRouteButton
+import com.google.android.gms.cast.MediaInfo
+import com.google.android.gms.cast.MediaLoadRequestData
+import com.google.android.gms.cast.MediaSeekOptions
+import com.google.android.gms.cast.MediaStatus
+import com.google.android.gms.cast.framework.CastButtonFactory
+import com.google.android.gms.cast.framework.CastContext
+import com.google.android.gms.cast.framework.CastSession
+import com.google.android.gms.cast.framework.SessionManagerListener
+import org.json.JSONObject
+import org.json.JSONTokener
 
 class MainActivity : AppCompatActivity() {
 
@@ -75,6 +86,22 @@ class MainActivity : AppCompatActivity() {
     // Set to true by JS bridge when the chat textarea has focus, so physical keyboard
     // Enter passes through to the WebView instead of being intercepted as TV-nav "center".
     @Volatile var chatInputFocused: Boolean = false
+
+    // --- Casting (phone → TV, video-only; chat stays on the phone) ---
+    private var castContext: CastContext? = null
+    private var castSession: CastSession? = null
+    // Hidden MediaRouteButton kept only so the SDK's device-chooser dialog can be opened
+    // programmatically (performClick) from the in-page cast button.
+    private var castButton: MediaRouteButton? = null
+    private val conductorHandler = Handler(Looper.getMainLooper())
+    private var conductorRunning = false
+    // The stream URL last sent to the TV — used to detect when the room advances to a new movie.
+    private var lastCastUrl: String? = null
+    // Tablet/TV state while casting: "cast" = movie on TV + chat-only tablet; "fallback" = a
+    // non-castable (YouTube) item playing back on the tablet with a slate on the TV.
+    private var castUiMode: String = "none"
+    private val CONDUCTOR_INTERVAL_MS = 1800L   // how often the phone re-checks the room vs the TV
+    private val DRIFT_TOLERANCE_MS = 3000L      // only nudge the TV when it drifts past this
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -139,6 +166,9 @@ class MainActivity : AppCompatActivity() {
         mediaProxy = LocalMediaProxy(webViewUa).also { it.start() }
         webView.loadUrl("https://cytu.be/r/420Grindhouse")
 
+        // Phone/tablet only: offer the Cast button (a TV is the cast target, not a sender).
+        if (!isTv) setupCastSender()
+
         // Safety net: never leave the loading overlay up forever (JS hides it once the
         // video is actually playing, with its own 45s cap — this is the hard backstop).
         Handler(Looper.getMainLooper()).postDelayed({ hideLoadingOverlay() }, 48000)
@@ -184,6 +214,253 @@ class MainActivity : AppCompatActivity() {
 
     /** Base URL of the localhost Drive media proxy; the injected JS rewrites stream URLs onto it. */
     fun gdProxyBase(): String = "http://127.0.0.1:${mediaProxy?.port ?: 0}/gd?u="
+
+    // ----------------------------------------------------------------------------------------
+    // Casting (phone → TV). Video-only: only the movie goes to the TV; the room (chat, overlays,
+    // controls) stays on this phone, which also keeps the TV in sync by polling the room and
+    // driving the TV's player. Works on any Cast device incl. Vizio SmartCast (Chromecast built-in).
+    // ----------------------------------------------------------------------------------------
+
+    /** Acquire the CastContext, wire the (hidden) route button, and listen for sessions. */
+    private fun setupCastSender() {
+        val button = findViewById<MediaRouteButton>(R.id.cast_button)
+        castButton = button
+        castContext = try {
+            CastContext.getSharedInstance(this)
+        } catch (e: Exception) {
+            button.visibility = View.GONE   // Play Services missing/old — no casting
+            return
+        }
+        CastButtonFactory.setUpMediaRouteButton(applicationContext, button)
+        // The visible control is the in-page cast button (styled with the rest of the UI);
+        // this native button stays invisible and is only click-driven to show the chooser.
+        button.visibility = View.INVISIBLE
+        mediaProxy?.slate = buildSlateBytes()   // image the TV shows during YouTube segments
+        castContext?.sessionManager?.addSessionManagerListener(castSessionListener, CastSession::class.java)
+        // Pick up a session that's already live (e.g. after a config change).
+        castContext?.sessionManager?.currentCastSession?.let {
+            castSession = it
+            onCastStarted()
+        }
+    }
+
+    private val castSessionListener = object : SessionManagerListener<CastSession> {
+        override fun onSessionStarted(session: CastSession, sessionId: String) {
+            castSession = session; onCastStarted()
+        }
+        override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
+            castSession = session; onCastStarted()
+        }
+        override fun onSessionEnded(session: CastSession, error: Int) = onCastStopped()
+        override fun onSessionSuspended(session: CastSession, reason: Int) = onCastStopped()
+        override fun onSessionStarting(session: CastSession) {}
+        override fun onSessionStartFailed(session: CastSession, error: Int) {}
+        override fun onSessionEnding(session: CastSession) {}
+        override fun onSessionResuming(session: CastSession, sessionId: String) {}
+        override fun onSessionResumeFailed(session: CastSession, error: Int) {}
+    }
+
+    /** A cast session connected: start conducting; the first tick picks the right UI for what's playing. */
+    private fun onCastStarted() {
+        castUiMode = "none"
+        startConductor()
+    }
+
+    /** Cast ended: stop conducting and restore phone audio + normal UI. */
+    private fun onCastStopped() {
+        stopConductor()
+        castSession = null
+        lastCastUrl = null
+        castUiMode = "none"
+        setPhoneVideoMuted(false)
+        setCastModeUi(false)
+    }
+
+    /** Toggle the page's cast-mode layout (hide video, full-width chat + top bar). */
+    private fun setCastModeUi(on: Boolean) {
+        evalJs("window.__scSetCastMode && window.__scSetCastMode($on)")
+    }
+
+    /** Open the system Cast device chooser — called from the in-page mobile cast button. */
+    fun startCasting() {
+        castButton?.performClick()
+    }
+
+    /** End the active cast session — called from the in-page "Stop Casting" button. */
+    fun stopCasting() {
+        castContext?.sessionManager?.endCurrentSession(true)
+    }
+
+    private fun startConductor() {
+        if (conductorRunning) return
+        conductorRunning = true
+        lastCastUrl = null
+        conductorTick()
+    }
+
+    private fun stopConductor() {
+        conductorRunning = false
+        conductorHandler.removeCallbacksAndMessages(null)
+    }
+
+    /** Poll the room's current movie/position and reconcile the TV to it, then schedule the next tick. */
+    private fun conductorTick() {
+        if (!conductorRunning) return
+        queryCurrentMedia { media ->
+            if (media != null) syncToReceiver(media)
+            if (conductorRunning) conductorHandler.postDelayed({ conductorTick() }, CONDUCTOR_INTERVAL_MS)
+        }
+    }
+
+    /**
+     * Ask the page what's playing right now: {type:'video', src, time, paused} for a castable
+     * <video>, or {type:'youtube'|'none'}. evaluateJavascript returns a JSON-encoded string, so the
+     * result is double-quoted — unwrap it before parsing.
+     */
+    private fun queryCurrentMedia(cb: (JSONObject?) -> Unit) {
+        val js = """
+            (function(){
+              try {
+                var v = document.querySelector('video');
+                if (v && (v.currentSrc || v.src)) {
+                  return JSON.stringify({type:'video', src:(v.currentSrc||v.src),
+                    time:(v.currentTime||0), paused:!!v.paused});
+                }
+                if (document.querySelector('iframe[src*="youtube"], #ytapiplayer iframe')) {
+                  return JSON.stringify({type:'youtube'});
+                }
+                return JSON.stringify({type:'none'});
+              } catch(e) { return JSON.stringify({type:'err'}); }
+            })()
+        """.trimIndent()
+        webView.evaluateJavascript(js) { result ->
+            cb(try {
+                val unwrapped = JSONTokener(result).nextValue()
+                if (unwrapped is String) JSONObject(unwrapped) else null
+            } catch (e: Exception) { null })
+        }
+    }
+
+    /**
+     * Reconcile both screens with what the room is playing:
+     *  - castable movie  → "cast" mode: chat-only tablet, movie on the TV (load/seek/pause).
+     *  - YouTube/other   → "fallback" mode: play it back on the tablet, slate on the TV.
+     *  - nothing/unknown → leave whatever's up (avoid thrashing between items).
+     */
+    private fun syncToReceiver(media: JSONObject) {
+        val client = castSession?.remoteMediaClient ?: return
+        val type = media.optString("type")
+        val url = if (type == "video") castableUrl(media.optString("src")) else null
+
+        when {
+            type == "video" && url != null -> {
+                applyCastMode("cast")
+                castMovieToReceiver(client, url,
+                    (media.optDouble("time", 0.0) * 1000).toLong(),
+                    media.optBoolean("paused", false))
+            }
+            type == "youtube" || (type == "video" && url == null) -> applyCastMode("fallback")
+            // "none"/"err": between items — keep the current screen state.
+        }
+    }
+
+    /** Switch the tablet/TV between cast and fallback presentations (only acts on a change). */
+    private fun applyCastMode(mode: String) {
+        if (castUiMode == mode) return
+        castUiMode = mode
+        lastCastUrl = null   // force a fresh receiver load after any mode switch
+        if (mode == "cast") {
+            setCastModeUi(true)          // chat-only tablet
+            setPhoneVideoMuted(true)     // movie's audio comes from the TV
+        } else {
+            setCastModeUi(false)         // normal tablet UI — play the YouTube item here
+            // Apply the user's fallback-audio preference (default unmuted) to the device player.
+            evalJs("window.__scEnterCastFallback && window.__scEnterCastFallback()")
+            showSlateOnReceiver()        // "playing on tablet" card on the TV
+        }
+    }
+
+    /** (Re)load the movie on the TV when it changes, otherwise correct drift / play-pause. */
+    private fun castMovieToReceiver(
+        client: com.google.android.gms.cast.framework.media.RemoteMediaClient,
+        url: String, roomTimeMs: Long, paused: Boolean
+    ) {
+        if (url != lastCastUrl) {
+            lastCastUrl = url
+            val info = MediaInfo.Builder(url)
+                .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
+                .setContentType("video/mp4")
+                .build()
+            client.load(
+                MediaLoadRequestData.Builder()
+                    .setMediaInfo(info).setCurrentTime(roomTimeMs).setAutoplay(!paused).build()
+            )
+            return
+        }
+        val state = client.playerState
+        if (state == MediaStatus.PLAYER_STATE_PLAYING || state == MediaStatus.PLAYER_STATE_PAUSED) {
+            if (kotlin.math.abs(client.approximateStreamPosition - roomTimeMs) > DRIFT_TOLERANCE_MS) {
+                client.seek(MediaSeekOptions.Builder().setPosition(roomTimeMs).build())
+            }
+            if (paused && state == MediaStatus.PLAYER_STATE_PLAYING) client.pause()
+            if (!paused && state == MediaStatus.PLAYER_STATE_PAUSED) client.play()
+        }
+    }
+
+    /** Show the "please wait / playing on tablet" slate image on the TV (served from the LAN proxy). */
+    private fun showSlateOnReceiver() {
+        val client = castSession?.remoteMediaClient ?: return
+        val ip = lanIpAddress() ?: return
+        val port = mediaProxy?.port ?: return
+        // No metadata title/subtitle — the slate image speaks for itself (and avoids the
+        // receiver drawing a text overlay on top of it).
+        val info = MediaInfo.Builder("http://$ip:$port/slate")
+            .setStreamType(MediaInfo.STREAM_TYPE_NONE)
+            .setContentType("image/jpeg")
+            .build()
+        client.load(MediaLoadRequestData.Builder().setMediaInfo(info).setAutoplay(true).build())
+    }
+
+    /**
+     * Turn the phone's <video> src into something the TV can fetch. Drive streams come back pointed
+     * at the phone's loopback proxy (127.0.0.1) — rewrite that to the phone's LAN IP so the TV can
+     * reach it. Plain http(s) URLs (raw files) pass through. blob:/data: can't be cast → null.
+     */
+    private fun castableUrl(src: String?): String? {
+        val s = src?.trim().orEmpty()
+        if (s.isEmpty()) return null
+        if (s.contains("127.0.0.1") || s.contains("localhost")) {
+            val ip = lanIpAddress() ?: return null
+            return s.replace("127.0.0.1", ip).replace("localhost", ip)
+        }
+        return if (s.startsWith("http://") || s.startsWith("https://")) s else null
+    }
+
+    /** First site-local IPv4 address of an up, non-loopback interface (the phone's Wi-Fi/LAN IP). */
+    private fun lanIpAddress(): String? {
+        try {
+            for (iface in java.net.NetworkInterface.getNetworkInterfaces()) {
+                if (!iface.isUp || iface.isLoopback) continue
+                for (addr in iface.inetAddresses) {
+                    if (!addr.isLoopbackAddress && addr is java.net.Inet4Address && addr.isSiteLocalAddress) {
+                        return addr.hostAddress
+                    }
+                }
+            }
+        } catch (e: Exception) { /* fall through */ }
+        return null
+    }
+
+    private fun setPhoneVideoMuted(muted: Boolean) {
+        evalJs("window.__scSetPlayerMuted && window.__scSetPlayerMuted($muted)")
+    }
+
+    /** The "can't be cast" slate JPEG (served to the TV during a YouTube fallback). */
+    private fun buildSlateBytes(): ByteArray? {
+        return try {
+            assets.open("cast_slate.jpg").use { it.readBytes() }
+        } catch (e: Exception) { null }
+    }
 
     /**
      * Open a URL in an external web BROWSER (not the WebView, not another app). Used for DRM
@@ -461,6 +738,13 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         mediaProxy?.stop()
         mediaProxy = null
+        stopConductor()
+        // Casting depends on this app being alive (it's the sync conductor + Drive relay), so
+        // when the app closes, stop the cast too — otherwise the TV keeps showing it as "casting".
+        if (isFinishing) castContext?.sessionManager?.endCurrentSession(true)
+        castContext?.sessionManager?.removeSessionManagerListener(
+            castSessionListener, CastSession::class.java
+        )
         super.onDestroy()
     }
 }
