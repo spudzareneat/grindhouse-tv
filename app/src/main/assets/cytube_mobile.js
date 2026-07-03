@@ -719,6 +719,15 @@
     }
   }
 
+  // src/tvdetect.js
+  var isTv = function() {
+    try {
+      if (window.CytubeNative && typeof CytubeNative.isTv === "function") return !!CytubeNative.isTv();
+    } catch (e) {
+    }
+    return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
+  }();
+
   // src/player/scrubber.js
   function wakeVideoControls() {
     try {
@@ -758,14 +767,968 @@
     }
   }
 
-  // src/tvdetect.js
-  var isTv = function() {
+  // src/native.js
+  var _scHttpCbs = {};
+  window.__scHttpResolve = function(id, res) {
+    const cb = _scHttpCbs[id];
+    if (cb) {
+      delete _scHttpCbs[id];
+      cb(res);
+    }
+  };
+  function nativeHttpGet(url, headers = {}) {
+    return new Promise((resolve, reject) => {
+      if (!(window.CytubeNative && typeof CytubeNative.httpGet === "function")) {
+        reject(new Error("native http unavailable"));
+        return;
+      }
+      const id = "h" + Math.random().toString(36).slice(2);
+      _scHttpCbs[id] = (res) => {
+        if (res && res.error) reject(new Error(res.error));
+        else resolve(res);
+      };
+      try {
+        CytubeNative.httpGet(id, url, JSON.stringify(headers));
+      } catch (e) {
+        delete _scHttpCbs[id];
+        reject(e);
+      }
+      setTimeout(() => {
+        if (_scHttpCbs[id]) {
+          delete _scHttpCbs[id];
+          reject(new Error("timeout"));
+        }
+      }, 1e4);
+    });
+  }
+
+  // src/metadata/imdb.js
+  var IMDB_GQL = "https://caching.graphql.imdb.com/";
+  var IMDB_HEADERS = {
+    "Accept": "application/graphql+json, application/json",
+    "Content-Type": "application/json",
+    "x-imdb-client-name": "imdb-web-next-localized",
+    "x-imdb-user-language": "en-US",
+    "x-imdb-user-country": "US"
+  };
+  async function imdbQuery(operationName, query, variables) {
+    const url = IMDB_GQL + "?operationName=" + encodeURIComponent(operationName) + "&query=" + encodeURIComponent(query) + "&variables=" + encodeURIComponent(JSON.stringify(variables));
+    const res = await nativeHttpGet(url, IMDB_HEADERS);
+    if (!res || res.status !== 200) throw new Error("IMDb GQL HTTP " + (res && res.status));
+    return JSON.parse(res.body);
+  }
+  async function fetchImdbParentalGuide(tconst) {
+    if (!tconst) return null;
+    const q = "query GHGuide($id: ID!){ title(id:$id){ parentsGuide{ categories{ category{ text } severity{ text } } } } }";
     try {
-      if (window.CytubeNative && typeof CytubeNative.isTv === "function") return !!CytubeNative.isTv();
+      const data = await imdbQuery("GHGuide", q, { id: tconst });
+      const cats = data && data.data && data.data.title && data.data.title.parentsGuide ? data.data.title.parentsGuide.categories : null;
+      if (!cats) return null;
+      return cats.map((c) => ({ category: c.category && c.category.text, severity: c.severity && c.severity.text })).filter((c) => c.category && c.severity);
+    } catch (e) {
+      return null;
+    }
+  }
+  var _triviaCache = {};
+  async function fetchImdbTrivia(tconst) {
+    if (!tconst) return null;
+    if (_triviaCache[tconst]) return _triviaCache[tconst];
+    const q = "query GHTrivia($id: ID!){ title(id:$id){ trivia(first: 30){ edges{ node{ text{ plainText } } } } } }";
+    try {
+      const data = await imdbQuery("GHTrivia", q, { id: tconst });
+      const edges = data && data.data && data.data.title && data.data.title.trivia ? data.data.title.trivia.edges : [];
+      const items = (edges || []).map((e) => e && e.node && e.node.text && e.node.text.plainText).filter(Boolean);
+      _triviaCache[tconst] = items;
+      return items;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // src/mediatime.js
+  var mediaState = {
+    currentMediaSeconds: 0,
+    currentMediaType: "",
+    currentPlaybackTime: 0
+  };
+  function parseTimeToSeconds(t) {
+    const parts = String(t).trim().split(":").map(Number);
+    if (!parts.length || parts.some(isNaN)) return 0;
+    return parts.reduce((acc, v) => acc * 60 + v, 0);
+  }
+  function getCurrentMediaSeconds() {
+    if (mediaState.currentMediaSeconds > 0) return mediaState.currentMediaSeconds;
+    const el = document.querySelector("#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time");
+    return el ? parseTimeToSeconds(el.textContent) : 0;
+  }
+  function getCurrentPlaybackSeconds() {
+    const v = document.querySelector("#videowrap video");
+    if (v && isFinite(v.currentTime) && v.currentTime > 0) return v.currentTime;
+    return mediaState.currentPlaybackTime;
+  }
+  function formatHMS(s) {
+    s = Math.max(0, Math.floor(s || 0));
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+    const pad = (n) => String(n).padStart(2, "0");
+    return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+  }
+
+  // src/metadata/tmdb.js
+  var LINK_DEFS = [
+    { key: "imdb", label: "IMDb", color: "#f5c518", fg: "#000", char: "i" },
+    { key: "letterboxd", label: "Letterboxd", color: "#2c4a2e", fg: "#00e054", char: "L" },
+    { key: "wiki", label: "Wikipedia", color: "#444", fg: "#eee", char: "W" }
+  ];
+  var movieState = {
+    lastMovieTitle: "",
+    movieLinkCache: {}
+    // cache by raw title to avoid repeat lookups
+  };
+  var killCountDb = null;
+  async function getKillCountDb() {
+    if (killCountDb !== null) return killCountDb;
+    killCountDb = {};
+    try {
+      const text = await new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: "GET",
+          url: "https://raw.githubusercontent.com/lklynet/Kill-Count/main/killcounts.jsonl",
+          onload: (r) => r.status === 200 ? resolve(r.responseText) : reject(new Error(`HTTP ${r.status}`)),
+          onerror: reject
+        });
+      });
+      let loaded = 0;
+      for (const line of text.split("\n")) {
+        const s = line.trim();
+        if (!s) continue;
+        try {
+          const entry = JSON.parse(s);
+          if (entry.tmdb_id != null) {
+            killCountDb[String(entry.tmdb_id)] = entry.count;
+            loaded++;
+          }
+        } catch (e) {
+        }
+      }
+    } catch (e) {
+      console.warn("[CyTube SC] Kill count DB failed to load:", e);
+    }
+    return killCountDb;
+  }
+  async function validateTmdbKey(key) {
+    if (!key) return "invalid";
+    const url = `https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(key)}`;
+    try {
+      const res = await fetch(url);
+      if (res.status === 200) return "valid";
+      if (res.status === 401) return "invalid";
+      return "error";
+    } catch (e) {
+      try {
+        const r = await nativeHttpGet(url);
+        if (r.status === 200) return "valid";
+        if (r.status === 401) return "invalid";
+        return "error";
+      } catch (e2) {
+        return "error";
+      }
+    }
+  }
+  async function lookupMovie(title, year) {
+    var _a, _b;
+    const cacheKey = title + (year || "");
+    if (movieState.movieLinkCache[cacheKey] !== void 0) return movieState.movieLinkCache[cacheKey];
+    let tmdbResult = null;
+    let wikiUrl = null;
+    const tmdbPromise = hasKey(LS_TMDB) ? (async () => {
+      var _a2, _b2;
+      try {
+        const params = new URLSearchParams({ api_key: getKey(LS_TMDB), query: title, language: "en-US" });
+        if (year) params.set("year", year);
+        const res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!((_a2 = data.results) == null ? void 0 : _a2.length)) return;
+        let best = data.results[0];
+        if (year) {
+          const withYear = data.results.find((r) => {
+            var _a3;
+            return (_a3 = r.release_date) == null ? void 0 : _a3.startsWith(year);
+          });
+          if (withYear) best = withYear;
+        }
+        const detailRes = await fetch(
+          `https://api.themoviedb.org/3/movie/${best.id}?api_key=${getKey(LS_TMDB)}&append_to_response=external_ids`
+        );
+        if (!detailRes.ok) return;
+        const detail = await detailRes.json();
+        tmdbResult = {
+          tmdbId: best.id,
+          imdbId: detail.imdb_id || ((_b2 = detail.external_ids) == null ? void 0 : _b2.imdb_id) || null,
+          title: detail.title,
+          year: detail.release_date ? detail.release_date.slice(0, 4) : year,
+          poster: detail.poster_path ? `https://image.tmdb.org/t/p/w500${detail.poster_path}` : null,
+          backdrop: detail.backdrop_path ? `https://image.tmdb.org/t/p/w1280${detail.backdrop_path}` : null,
+          rating: detail.vote_average ? Math.round(detail.vote_average * 10) / 10 : null,
+          runtime: detail.runtime || null,
+          overview: detail.overview || "",
+          genres: (detail.genres || []).map((g) => g.name)
+        };
+      } catch (e) {
+      }
+    })() : Promise.resolve();
+    const wikiPromise = (async () => {
+      var _a2, _b2;
+      try {
+        const searchTitle = title + (year ? " " + year : "") + " film";
+        const res = await fetch(
+          `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(searchTitle)}&srlimit=1&format=json&origin=*`
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const hit = (_b2 = (_a2 = data == null ? void 0 : data.query) == null ? void 0 : _a2.search) == null ? void 0 : _b2[0];
+        if (hit) wikiUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(hit.title.replace(/ /g, "_"))}`;
+      } catch (e) {
+      }
+    })();
+    await Promise.all([tmdbPromise, wikiPromise]);
+    let killCount = null;
+    if (tmdbResult == null ? void 0 : tmdbResult.tmdbId) {
+      const db = await getKillCountDb();
+      const count = db[String(tmdbResult.tmdbId)];
+      if (count !== void 0 && count !== null) killCount = count;
+    }
+    const parentalGuide = await fetchImdbParentalGuide(tmdbResult == null ? void 0 : tmdbResult.imdbId);
+    const result = {
+      links: {
+        imdb: (tmdbResult == null ? void 0 : tmdbResult.imdbId) ? `https://www.imdb.com/title/${tmdbResult.imdbId}/` : null,
+        letterboxd: (tmdbResult == null ? void 0 : tmdbResult.tmdbId) ? `https://letterboxd.com/tmdb/${tmdbResult.tmdbId}` : null,
+        wiki: wikiUrl
+      },
+      killCount,
+      parentalGuide,
+      imdbId: (tmdbResult == null ? void 0 : tmdbResult.imdbId) || null,
+      cleanTitle: (tmdbResult == null ? void 0 : tmdbResult.title) || null,
+      cleanYear: (tmdbResult == null ? void 0 : tmdbResult.year) || null,
+      poster: (tmdbResult == null ? void 0 : tmdbResult.poster) || null,
+      backdrop: (tmdbResult == null ? void 0 : tmdbResult.backdrop) || null,
+      rating: (_a = tmdbResult == null ? void 0 : tmdbResult.rating) != null ? _a : null,
+      runtime: (_b = tmdbResult == null ? void 0 : tmdbResult.runtime) != null ? _b : null,
+      overview: (tmdbResult == null ? void 0 : tmdbResult.overview) || "",
+      genres: (tmdbResult == null ? void 0 : tmdbResult.genres) || []
+    };
+    movieState.movieLinkCache[cacheKey] = result;
+    return result;
+  }
+
+  // src/cards/nowplaying.js
+  var NP_PG_SHORT = {
+    "Sex & Nudity": "Sex/Nudity",
+    "Violence & Gore": "Violence",
+    "Profanity": "Profanity",
+    "Alcohol, Drugs & Smoking": "Drugs",
+    "Frightening & Intense Scenes": "Frightening"
+  };
+  var npState = {
+    data: null,
+    // latest movie data for the card
+    introDone: false
+    // startup intro card has run (see initIntroSequence)
+  };
+  var _npHideTimer = null;
+  var _npProgTimer = null;
+  var _npWatcherInit = false;
+  function _renderNpProgress() {
+    const card = document.getElementById("sc-np-card");
+    if (!card) {
+      clearInterval(_npProgTimer);
+      return;
+    }
+    const wrap = card.querySelector("#sc-np-progress");
+    const fill = card.querySelector("#sc-np-prog-fill");
+    const elapsedEl = card.querySelector("#sc-np-prog-elapsed");
+    const totalEl = card.querySelector("#sc-np-prog-total");
+    const remainEl = card.querySelector("#sc-np-prog-remain");
+    if (!wrap || !fill) return;
+    const dur = getCurrentMediaSeconds();
+    if (dur > 0) {
+      const elapsed = Math.min(getCurrentPlaybackSeconds(), dur);
+      const pct = Math.max(0, Math.min(100, elapsed / dur * 100));
+      fill.style.setProperty("width", pct + "%", "important");
+      elapsedEl.textContent = formatHMS(elapsed);
+      totalEl.textContent = formatHMS(dur);
+      remainEl.textContent = "−" + formatHMS(dur - elapsed) + " left";
+      wrap.style.display = "";
+    } else {
+      wrap.style.display = "none";
+    }
+  }
+  function _npCardEnabled() {
+    return isTv;
+  }
+  var _npScrollTimer = null;
+  var _npScrollRaf = null;
+  var _NP_SCROLL_DELAY = 3500;
+  function _autoScrollOverview() {
+    clearTimeout(_npScrollTimer);
+    cancelAnimationFrame(_npScrollRaf);
+    const card = document.getElementById("sc-np-card");
+    const ov = card && card.querySelector("#sc-np-overview");
+    if (!ov) return 0;
+    ov.scrollTop = 0;
+    const dist = ov.scrollHeight - ov.clientHeight;
+    if (dist <= 4) return 0;
+    const dur = Math.min(12e3, Math.max(2500, dist / 24 * 1e3));
+    _npScrollTimer = setTimeout(() => {
+      const start = ov.scrollTop;
+      const span = ov.scrollHeight - ov.clientHeight - start;
+      if (span <= 0) return;
+      const t0 = performance.now();
+      const step = (now) => {
+        const c = document.getElementById("sc-np-card");
+        if (!c || !c.classList.contains("sc-np-visible")) return;
+        const p = Math.min(1, (now - t0) / dur);
+        const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+        ov.scrollTop = start + span * e;
+        if (p < 1) _npScrollRaf = requestAnimationFrame(step);
+      };
+      _npScrollRaf = requestAnimationFrame(step);
+    }, _NP_SCROLL_DELAY);
+    return _NP_SCROLL_DELAY + dur;
+  }
+  function showNowPlayingCard(data, opts = {}) {
+    if (!data || !data.cleanTitle && !data.backdrop) return;
+    let card = document.getElementById("sc-np-card");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "sc-np-card";
+      card.innerHTML = `
+            <div id="sc-np-backdrop"></div>
+            <div id="sc-np-scrim"></div>
+            <div id="sc-np-content">
+                <img id="sc-np-poster" alt="" />
+                <div id="sc-np-info">
+                    <div id="sc-np-eyebrow">Now Playing</div>
+                    <div id="sc-np-title"></div>
+                    <div id="sc-np-meta"></div>
+                    <div id="sc-np-overview"></div>
+                    <div id="sc-np-chips"></div>
+                    <div id="sc-np-progress">
+                        <div id="sc-np-prog-bar"><div id="sc-np-prog-fill"></div></div>
+                        <div id="sc-np-prog-times">
+                            <span id="sc-np-prog-elapsed">0:00</span>
+                            <span id="sc-np-prog-remain"></span>
+                            <span id="sc-np-prog-total">0:00</span>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+      document.body.appendChild(card);
+      card.addEventListener("click", hideNowPlayingCard);
+    }
+    const title = data.cleanTitle || movieState.lastMovieTitle || "";
+    const year = data.cleanYear ? ` (${data.cleanYear})` : "";
+    const bd = card.querySelector("#sc-np-backdrop");
+    const poster = card.querySelector("#sc-np-poster");
+    const meta = card.querySelector("#sc-np-meta");
+    const chips = card.querySelector("#sc-np-chips");
+    bd.style.backgroundImage = data.backdrop ? `url(${data.backdrop})` : "none";
+    if (data.poster) {
+      poster.src = data.poster;
+      poster.style.display = "";
+    } else poster.style.display = "none";
+    card.querySelector("#sc-np-title").textContent = title + year;
+    card.querySelector("#sc-np-overview").textContent = data.overview || "";
+    const metaParts = [];
+    if (data.rating) metaParts.push(`⭐ ${data.rating}`);
+    if (data.runtime) metaParts.push(`${Math.floor(data.runtime / 60)}h ${data.runtime % 60}m`);
+    if (data.genres && data.genres.length) metaParts.push(data.genres.slice(0, 3).join(" · "));
+    meta.textContent = metaParts.join("     ");
+    const chipHtml = [];
+    (data.parentalGuide || []).forEach((pg) => {
+      const sev = String(pg.severity || "").toLowerCase();
+      const label = NP_PG_SHORT[pg.category] || pg.category;
+      chipHtml.push(`<span class="sc-np-chip sc-sev-${sev}">${label}: ${pg.severity}</span>`);
+    });
+    if (data.killCount !== null && data.killCount !== void 0) {
+      chipHtml.push(`<span class="sc-np-chip">💀 ${data.killCount} kills</span>`);
+    }
+    chips.innerHTML = chipHtml.join("");
+    card.classList.add("sc-np-visible");
+    _renderNpProgress();
+    clearInterval(_npProgTimer);
+    _npProgTimer = setInterval(_renderNpProgress, 500);
+    const revealMs = _autoScrollOverview();
+    clearTimeout(_npHideTimer);
+    if (opts.autoHide) {
+      const v = document.querySelector("#videowrap video");
+      const playing = v && !v.paused;
+      if (playing || !v) _npHideTimer = setTimeout(hideNowPlayingCard, Math.max(7e3, revealMs + 2500));
+    }
+  }
+  function hideNowPlayingCard() {
+    const card = document.getElementById("sc-np-card");
+    if (card) card.classList.remove("sc-np-visible");
+    clearTimeout(_npHideTimer);
+    clearInterval(_npProgTimer);
+    clearTimeout(_npScrollTimer);
+    cancelAnimationFrame(_npScrollRaf);
+  }
+  function initNowPlayingWatcher() {
+    if (_npWatcherInit) return;
+    _npWatcherInit = true;
+    const toggle = () => {
+      const card = document.getElementById("sc-np-card");
+      if (card && card.classList.contains("sc-np-visible")) hideNowPlayingCard();
+      else if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
+    };
+    document.addEventListener("keydown", (e) => {
+      const t = e.target;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
+      if (e.key === "i" || e.key === "I") toggle();
+      else if (e.key === "t" || e.key === "T") toggleTriviaCard();
+    });
+    const bindTitle = () => {
+      const h = document.getElementById("videowrap-header");
+      if (!h) return;
+      if (npState.data && npState.data.imdbId && !document.getElementById("sc-trivia-btn")) {
+        const btn = document.createElement("button");
+        btn.id = "sc-trivia-btn";
+        btn.type = "button";
+        btn.textContent = "Trivia";
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          showTriviaCard();
+        });
+        if (document.body.classList.contains("sc-video-dimmed")) btn.classList.add("sc-bar-dim");
+        h.appendChild(btn);
+      }
+    };
+    bindTitle();
+    new MutationObserver(bindTitle).observe(document.body, { childList: true, subtree: true });
+  }
+
+  // src/cards/trivia.js
+  function _escHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function showTriviaCard() {
+    const tconst = npState.data && npState.data.imdbId;
+    if (!tconst) return;
+    let card = document.getElementById("sc-trivia-card");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "sc-trivia-card";
+      card.innerHTML = `
+            <div id="sc-trivia-panel">
+                <div id="sc-trivia-head">
+                    <span id="sc-trivia-title">Trivia</span>
+                    <button id="sc-trivia-close" type="button">✕</button>
+                </div>
+                <div id="sc-trivia-list"></div>
+            </div>`;
+      document.body.appendChild(card);
+      card.addEventListener("click", (e) => {
+        if (e.target === card) hideTriviaCard();
+      });
+      card.querySelector("#sc-trivia-close").addEventListener("click", hideTriviaCard);
+    }
+    card.querySelector("#sc-trivia-title").textContent = "Trivia" + (npState.data.cleanTitle ? " — " + npState.data.cleanTitle : "");
+    const list = card.querySelector("#sc-trivia-list");
+    list.innerHTML = '<div class="sc-trivia-item">Loading…</div>';
+    card.classList.add("sc-show");
+    fetchImdbTrivia(tconst).then((items) => {
+      if (!document.getElementById("sc-trivia-card")) return;
+      if (!items || !items.length) {
+        list.innerHTML = '<div class="sc-trivia-item">No trivia found.</div>';
+        return;
+      }
+      list.innerHTML = items.map((t) => `<div class="sc-trivia-item">${_escHtml(t)}</div>`).join("");
+      list.scrollTop = 0;
+    });
+  }
+  function hideTriviaCard() {
+    const card = document.getElementById("sc-trivia-card");
+    if (card) card.classList.remove("sc-show");
+  }
+  function toggleTriviaCard() {
+    const card = document.getElementById("sc-trivia-card");
+    if (card && card.classList.contains("sc-show")) hideTriviaCard();
+    else showTriviaCard();
+  }
+
+  // src/tvnav.js
+  var tvNavState = { setFocus: null };
+  function initLoginTvNav() {
+    let isTv2 = false;
+    try {
+      if (window.CytubeNative && CytubeNative.isTv) isTv2 = !!CytubeNative.isTv();
     } catch (e) {
     }
-    return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
-  }();
+    if (!isTv2) isTv2 = window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
+    if (!isTv2) return;
+    const style = document.createElement("style");
+    style.textContent = ".sc-tv-focus{outline:3px solid #e0701a !important;outline-offset:2px !important;box-shadow:0 0 0 5px rgba(224,112,26,0.32) !important;border-radius:5px !important;}";
+    (document.head || document.documentElement).appendChild(style);
+    let focusEl = null;
+    const isVisible = (el) => {
+      if (!el || !el.getBoundingClientRect) return false;
+      const r = el.getBoundingClientRect();
+      if (r.width < 3 || r.height < 3) return false;
+      const cs = getComputedStyle(el);
+      return cs.visibility !== "hidden" && cs.display !== "none";
+    };
+    const FOCUS_SEL = "input:not([type=hidden]), button, a[href], select, textarea, [tabindex]";
+    const candidates = () => [...document.querySelectorAll(FOCUS_SEL)].filter(isVisible).filter((e) => !e.disabled);
+    function setFocus(el) {
+      if (!el) return;
+      if (focusEl && focusEl !== el) focusEl.classList.remove("sc-tv-focus");
+      focusEl = el;
+      el.classList.add("sc-tv-focus");
+      try {
+        el.focus({ preventScroll: true });
+      } catch (e) {
+      }
+      try {
+        el.scrollIntoView({ block: "nearest" });
+      } catch (e) {
+      }
+    }
+    function move(dir) {
+      const list = candidates();
+      if (!list.length) return;
+      if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) {
+        setFocus(list[0]);
+        return;
+      }
+      const cur = focusEl.getBoundingClientRect();
+      const cx = cur.left + cur.width / 2, cy = cur.top + cur.height / 2;
+      let best = null, bestScore = Infinity;
+      for (const el of list) {
+        if (el === focusEl) continue;
+        const r = el.getBoundingClientRect();
+        const dx = r.left + r.width / 2 - cx, dy = r.top + r.height / 2 - cy;
+        let primary, perp;
+        if (dir === "left") {
+          if (dx > -4) continue;
+          primary = -dx;
+          perp = Math.abs(dy);
+        } else if (dir === "right") {
+          if (dx < 4) continue;
+          primary = dx;
+          perp = Math.abs(dy);
+        } else if (dir === "up") {
+          if (dy > -4) continue;
+          primary = -dy;
+          perp = Math.abs(dx);
+        } else {
+          if (dy < 4) continue;
+          primary = dy;
+          perp = Math.abs(dx);
+        }
+        const score = primary + perp * 2;
+        if (score < bestScore) {
+          bestScore = score;
+          best = el;
+        }
+      }
+      if (best) setFocus(best);
+    }
+    function activate() {
+      if (!focusEl) {
+        move("down");
+        return;
+      }
+      const tag = focusEl.tagName, type = (focusEl.type || "").toLowerCase();
+      if (tag === "INPUT" && !/^(checkbox|radio|submit|button|reset)$/.test(type) || tag === "TEXTAREA") {
+        try {
+          focusEl.focus();
+        } catch (e) {
+        }
+      } else {
+        focusEl.click();
+      }
+    }
+    window.__scTvKey = function(dir) {
+      try {
+        if (dir === "back") {
+          if (history.length > 1) history.back();
+          else {
+            try {
+              if (window.CytubeNative && CytubeNative.tvBack) CytubeNative.tvBack();
+            } catch (e) {
+            }
+          }
+          return;
+        }
+        if (dir === "center") activate();
+        else move(dir);
+      } catch (e) {
+      }
+    };
+    const seed = () => {
+      const l = candidates();
+      if (l.length) setFocus(l.find((e) => e.tagName === "INPUT" && /^(text|password|email)$/i.test(e.type)) || l[0]);
+    };
+    if (document.readyState === "complete" || document.readyState === "interactive") seed();
+    else window.addEventListener("DOMContentLoaded", seed);
+  }
+  function initTvNav() {
+    if (!isTv) return;
+    let focusEl = null;
+    const isVisible = (el) => {
+      if (!el || !el.getBoundingClientRect) return false;
+      const r = el.getBoundingClientRect();
+      if (r.width < 3 || r.height < 3) return false;
+      if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return false;
+      const cs = getComputedStyle(el);
+      return cs.visibility !== "hidden" && cs.display !== "none";
+    };
+    const OVERLAY_IDS = ["sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card"];
+    const openOverlay = () => {
+      for (const id of OVERLAY_IDS) {
+        const o = document.getElementById(id);
+        if (o && isVisible(o) && (id !== "sc-np-card" || o.classList.contains("sc-np-visible")) && (id !== "sc-trivia-card" || o.classList.contains("sc-show"))) return o;
+      }
+      return null;
+    };
+    const isDesynced = () => {
+      const b = document.getElementById("sc-desync-btn");
+      return !!(b && b.classList.contains("sc-desync-active"));
+    };
+    const openVjsMenu = () => {
+      const m = document.querySelector("#videowrap .vjs-menu.vjs-lock-showing");
+      return m && [...m.querySelectorAll(".vjs-menu-item")].some(isVisible) ? m : null;
+    };
+    function controlBarTargets() {
+      try {
+        const bar = document.querySelector("#videowrap .vjs-control-bar");
+        if (!bar || !isVisible(bar)) return [];
+        const allowSeek = isDesynced();
+        return [...bar.querySelectorAll("button.vjs-control, button.vjs-menu-button, .vjs-progress-control")].filter((c) => {
+          if (!isVisible(c)) return false;
+          if (c.classList.contains("vjs-progress-control") && !allowSeek) return false;
+          if (c.disabled || c.classList.contains("vjs-disabled")) return false;
+          return true;
+        });
+      } catch (e) {
+        return [];
+      }
+    }
+    const MAIN_IDS = [
+      "sc-drm-open",
+      "sc-title-text",
+      "sc-chatmode-btn",
+      "sc-emote-proxy",
+      "sc-desync-btn",
+      "sc-settings-btn",
+      "sc-usercount-btn",
+      "sc-poll-btn",
+      "sc-poster-toggle",
+      "sc-trivia-btn",
+      "sc-newmsg-pill",
+      "sc-chat-collapse-btn",
+      "sc-chat-textarea"
+    ];
+    const FOCUS_SEL = "button, a[href], input:not([type=hidden]), textarea, select, [tabindex]";
+    const makeFocusable = (el) => {
+      if (!el.hasAttribute("tabindex") && !/^(BUTTON|A|INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) el.tabIndex = -1;
+    };
+    function candidates() {
+      const menu = openVjsMenu();
+      if (menu) {
+        const list = [...menu.querySelectorAll(".vjs-menu-item")].filter(isVisible);
+        if (list.length) return { scope: menu, list };
+      }
+      const ov = openOverlay();
+      if (ov) {
+        let list = [...ov.querySelectorAll(FOCUS_SEL)].filter(isVisible).filter((e) => !e.disabled);
+        if (!list.length) list = [ov];
+        return { scope: ov, list };
+      }
+      const main = MAIN_IDS.map((id) => document.getElementById(id)).filter((el) => el && isVisible(el) && // The new-message pill is opacity-hidden (still sized) until shown — only
+      // make it a focus target while it's actually visible.
+      (el.id !== "sc-newmsg-pill" || el.classList.contains("sc-show")));
+      return { scope: document, list: main.concat(controlBarTargets()) };
+    }
+    function clearFocus() {
+      document.querySelectorAll(".sc-tv-focus").forEach((e) => e.classList.remove("sc-tv-focus"));
+      try {
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      } catch (e) {
+      }
+      holdScrubber(false);
+      focusEl = null;
+    }
+    function setFocus(el) {
+      if (!el) return;
+      makeFocusable(el);
+      if (el.hasAttribute && el.hasAttribute("title")) el.removeAttribute("title");
+      if (focusEl && focusEl.id === "sc-chat-textarea" && el.id !== "sc-chat-textarea") wakeVideoControls();
+      holdScrubber(!!(el.closest && el.closest("#videowrap-header, .video-js")));
+      document.querySelectorAll(".sc-tv-focus").forEach((e) => {
+        if (e !== el) e.classList.remove("sc-tv-focus");
+      });
+      focusEl = el;
+      el.classList.add("sc-tv-focus");
+      try {
+        el.focus({ preventScroll: true });
+      } catch (e) {
+      }
+      try {
+        el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      } catch (e) {
+      }
+    }
+    tvNavState.setFocus = setFocus;
+    function seekBy(delta) {
+      try {
+        const p = window.PLAYER && window.PLAYER.player;
+        if (p && typeof p.currentTime === "function") {
+          p.currentTime(Math.max(0, (p.currentTime() || 0) + delta));
+          wakeVideoControls();
+          return;
+        }
+      } catch (e) {
+      }
+      const v = document.querySelector("#videowrap video");
+      if (v) {
+        try {
+          v.currentTime = Math.max(0, v.currentTime + delta);
+          wakeVideoControls();
+        } catch (e) {
+        }
+      }
+    }
+    const posterZoom = (a, on) => {
+      const img = a && a.querySelector("img");
+      if (img) img.dispatchEvent(new MouseEvent(on ? "mouseenter" : "mouseleave", { bubbles: true }));
+    };
+    function setPosterFocus(a, thumbs) {
+      thumbs.forEach((t) => {
+        if (t !== a) posterZoom(t, false);
+      });
+      setFocus(a);
+      posterZoom(a, true);
+    }
+    function move(dir) {
+      if (focusEl && focusEl.classList && focusEl.classList.contains("vjs-progress-control") && (dir === "left" || dir === "right")) {
+        if (isDesynced()) seekBy(dir === "right" ? 10 : -10);
+        return;
+      }
+      if (focusEl && (dir === "left" || dir === "right") && !openVjsMenu()) {
+        const barEls = controlBarTargets();
+        if (barEls.includes(focusEl)) {
+          const sorted = barEls.slice().sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+          const i = sorted.indexOf(focusEl);
+          const ni = dir === "right" ? i + 1 : i - 1;
+          if (ni >= 0 && ni < sorted.length) {
+            setFocus(sorted[ni]);
+            return;
+          }
+        }
+      }
+      if (focusEl && focusEl.type === "range" && (dir === "left" || dir === "right")) {
+        const step = parseFloat(focusEl.step) || 1;
+        const min = focusEl.min !== "" ? parseFloat(focusEl.min) : -Infinity;
+        const max = focusEl.max !== "" ? parseFloat(focusEl.max) : Infinity;
+        let v = (parseFloat(focusEl.value) || 0) + (dir === "right" ? step : -step);
+        focusEl.value = Math.max(min, Math.min(max, v));
+        focusEl.dispatchEvent(new Event("input", { bubbles: true }));
+        return;
+      }
+      const strip = document.getElementById("sc-poster-strip");
+      if (strip && strip.classList.contains("sc-poster-visible")) {
+        const toggle = document.getElementById("sc-poster-toggle");
+        const thumbs = [...strip.querySelectorAll("a")];
+        if (thumbs.length) {
+          if (focusEl === toggle && dir === "down") {
+            setPosterFocus(thumbs[0], thumbs);
+            return;
+          }
+          if (strip.contains(focusEl)) {
+            if (dir === "left" || dir === "right") {
+              const i = thumbs.indexOf(focusEl);
+              const ni = dir === "right" ? Math.min(thumbs.length - 1, i + 1) : Math.max(0, i - 1);
+              setPosterFocus(thumbs[ni], thumbs);
+              return;
+            }
+            posterZoom(focusEl, false);
+            if (toggle) setFocus(toggle);
+            return;
+          }
+        }
+      }
+      const { scope, list } = candidates();
+      if (!list.length) return;
+      if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) {
+        setFocus(list[0]);
+        return;
+      }
+      const cur = focusEl.getBoundingClientRect();
+      const cx = cur.left + cur.width / 2, cy = cur.top + cur.height / 2;
+      let best = null, bestScore = Infinity, cone = null, coneScore = Infinity;
+      for (const el of list) {
+        if (el === focusEl) continue;
+        const r = el.getBoundingClientRect();
+        const dx = r.left + r.width / 2 - cx, dy = r.top + r.height / 2 - cy;
+        let primary, perp;
+        if (dir === "left") {
+          if (dx > -4) continue;
+          primary = -dx;
+          perp = Math.abs(dy);
+        } else if (dir === "right") {
+          if (dx < 4) continue;
+          primary = dx;
+          perp = Math.abs(dy);
+        } else if (dir === "up") {
+          if (dy > -4) continue;
+          primary = -dy;
+          perp = Math.abs(dx);
+        } else {
+          if (dy < 4) continue;
+          primary = dy;
+          perp = Math.abs(dx);
+        }
+        const score = primary + perp * 2;
+        if (primary >= perp && score < coneScore) {
+          coneScore = score;
+          cone = el;
+        }
+        if (score < bestScore) {
+          bestScore = score;
+          best = el;
+        }
+      }
+      if (cone) best = cone;
+      if (best) {
+        setFocus(best);
+        return;
+      }
+      if (dir === "up" || dir === "down") {
+        const sc = scope.querySelector && scope.querySelector("#sc-trivia-list, #sc-settings-modal, #messagebuffer") || document.getElementById("messagebuffer");
+        if (sc && sc.scrollHeight > sc.clientHeight) sc.scrollTop += dir === "down" ? 140 : -140;
+      }
+    }
+    function activate() {
+      if (!focusEl) {
+        move("right");
+        return;
+      }
+      if (focusEl.classList && focusEl.classList.contains("vjs-progress-control")) return;
+      if (focusEl.tagName === "TEXTAREA" || focusEl.tagName === "INPUT") {
+        if (focusEl.type === "checkbox" || focusEl.type === "range") focusEl.click();
+        else {
+          try {
+            focusEl.focus();
+          } catch (e) {
+          }
+        }
+        return;
+      }
+      const ownerWrap = focusEl.classList && focusEl.classList.contains("vjs-menu-item") && focusEl.closest(".vjs-menu-button");
+      const ownerBtn = ownerWrap && ownerWrap.querySelector("button.vjs-menu-button");
+      focusEl.click();
+      if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) {
+        clearFocus();
+        setFocus(ownerBtn);
+      }
+    }
+    function closeTop() {
+      const menu = openVjsMenu();
+      if (menu) {
+        const wrap = menu.closest(".vjs-menu-button");
+        const btn = wrap && wrap.querySelector("button.vjs-menu-button");
+        if (btn) {
+          try {
+            btn.click();
+          } catch (e) {
+            try {
+              menu.classList.remove("vjs-lock-showing");
+            } catch (e2) {
+            }
+          }
+        } else {
+          try {
+            menu.classList.remove("vjs-lock-showing");
+          } catch (e) {
+          }
+        }
+        clearFocus();
+        if (btn && isVisible(btn)) setFocus(btn);
+        return true;
+      }
+      const settings = document.getElementById("sc-settings-overlay");
+      if (settings && isVisible(settings)) {
+        const c = document.getElementById("sc-settings-cancel");
+        if (c) c.click();
+        else settings.remove();
+        clearFocus();
+        return true;
+      }
+      const modal = document.getElementById("sc-modal-overlay");
+      if (modal && isVisible(modal)) {
+        (document.getElementById("sc-btn-cancel") || { click() {
+          modal.remove();
+        } }).click();
+        clearFocus();
+        return true;
+      }
+      const trivia = document.getElementById("sc-trivia-card");
+      if (trivia && trivia.classList.contains("sc-show")) {
+        hideTriviaCard();
+        clearFocus();
+        return true;
+      }
+      const np = document.getElementById("sc-np-card");
+      if (np && np.classList.contains("sc-np-visible")) {
+        hideNowPlayingCard();
+        clearFocus();
+        return true;
+      }
+      for (const id of ["sc-users-panel", "sc-poll-panel"]) {
+        const p = document.getElementById(id);
+        if (p && isVisible(p)) {
+          p.style.display = "none";
+          clearFocus();
+          return true;
+        }
+      }
+      const poster = document.getElementById("sc-poster-strip");
+      if (poster && poster.classList.contains("sc-poster-visible")) {
+        const t = document.getElementById("sc-poster-toggle");
+        if (t) t.click();
+        else poster.classList.remove("sc-poster-visible");
+        clearFocus();
+        return true;
+      }
+      return false;
+    }
+    function revealChrome() {
+      if (typeof chromeState.leftZoneReveal === "function") chromeState.leftZoneReveal(4e3);
+      else document.body.classList.add("sc-leftzone");
+      if (typeof chromeState.chromeWake === "function") chromeState.chromeWake();
+      else document.body.classList.remove("sc-chrome-hidden");
+      if (typeof chromeState.topBarWake === "function") chromeState.topBarWake();
+    }
+    window.__scTvKey = function(dir) {
+      try {
+        if (dir === "back") {
+          if (!closeTop()) {
+            try {
+              if (window.CytubeNative && CytubeNative.tvBack) CytubeNative.tvBack();
+            } catch (e) {
+            }
+          }
+          return;
+        }
+        revealChrome();
+        if (dir === "center") activate();
+        else move(dir);
+      } catch (e) {
+      }
+    };
+  }
 
   // src/chat/modes.js
   function initAmbientGlow() {
@@ -1189,41 +2152,6 @@
     document.body.appendChild(btn);
   }
 
-  // src/native.js
-  var _scHttpCbs = {};
-  window.__scHttpResolve = function(id, res) {
-    const cb = _scHttpCbs[id];
-    if (cb) {
-      delete _scHttpCbs[id];
-      cb(res);
-    }
-  };
-  function nativeHttpGet(url, headers = {}) {
-    return new Promise((resolve, reject) => {
-      if (!(window.CytubeNative && typeof CytubeNative.httpGet === "function")) {
-        reject(new Error("native http unavailable"));
-        return;
-      }
-      const id = "h" + Math.random().toString(36).slice(2);
-      _scHttpCbs[id] = (res) => {
-        if (res && res.error) reject(new Error(res.error));
-        else resolve(res);
-      };
-      try {
-        CytubeNative.httpGet(id, url, JSON.stringify(headers));
-      } catch (e) {
-        delete _scHttpCbs[id];
-        reject(e);
-      }
-      setTimeout(() => {
-        if (_scHttpCbs[id]) {
-          delete _scHttpCbs[id];
-          reject(new Error("timeout"));
-        }
-      }, 1e4);
-    });
-  }
-
   // src/update.js
   var LS_UPDATE_CACHE = "sc_update_cache";
   var GH_RELEASES_API = "https://api.github.com/repos/spudzareneat/grindhouse-tv/releases/latest";
@@ -1303,461 +2231,6 @@
       checkForUpdate(false).catch(() => {
       });
     }, 4e3);
-  }
-
-  // src/metadata/imdb.js
-  var IMDB_GQL = "https://caching.graphql.imdb.com/";
-  var IMDB_HEADERS = {
-    "Accept": "application/graphql+json, application/json",
-    "Content-Type": "application/json",
-    "x-imdb-client-name": "imdb-web-next-localized",
-    "x-imdb-user-language": "en-US",
-    "x-imdb-user-country": "US"
-  };
-  async function imdbQuery(operationName, query, variables) {
-    const url = IMDB_GQL + "?operationName=" + encodeURIComponent(operationName) + "&query=" + encodeURIComponent(query) + "&variables=" + encodeURIComponent(JSON.stringify(variables));
-    const res = await nativeHttpGet(url, IMDB_HEADERS);
-    if (!res || res.status !== 200) throw new Error("IMDb GQL HTTP " + (res && res.status));
-    return JSON.parse(res.body);
-  }
-  async function fetchImdbParentalGuide(tconst) {
-    if (!tconst) return null;
-    const q = "query GHGuide($id: ID!){ title(id:$id){ parentsGuide{ categories{ category{ text } severity{ text } } } } }";
-    try {
-      const data = await imdbQuery("GHGuide", q, { id: tconst });
-      const cats = data && data.data && data.data.title && data.data.title.parentsGuide ? data.data.title.parentsGuide.categories : null;
-      if (!cats) return null;
-      return cats.map((c) => ({ category: c.category && c.category.text, severity: c.severity && c.severity.text })).filter((c) => c.category && c.severity);
-    } catch (e) {
-      return null;
-    }
-  }
-  var _triviaCache = {};
-  async function fetchImdbTrivia(tconst) {
-    if (!tconst) return null;
-    if (_triviaCache[tconst]) return _triviaCache[tconst];
-    const q = "query GHTrivia($id: ID!){ title(id:$id){ trivia(first: 30){ edges{ node{ text{ plainText } } } } } }";
-    try {
-      const data = await imdbQuery("GHTrivia", q, { id: tconst });
-      const edges = data && data.data && data.data.title && data.data.title.trivia ? data.data.title.trivia.edges : [];
-      const items = (edges || []).map((e) => e && e.node && e.node.text && e.node.text.plainText).filter(Boolean);
-      _triviaCache[tconst] = items;
-      return items;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  // src/metadata/tmdb.js
-  var LINK_DEFS = [
-    { key: "imdb", label: "IMDb", color: "#f5c518", fg: "#000", char: "i" },
-    { key: "letterboxd", label: "Letterboxd", color: "#2c4a2e", fg: "#00e054", char: "L" },
-    { key: "wiki", label: "Wikipedia", color: "#444", fg: "#eee", char: "W" }
-  ];
-  var movieState = {
-    lastMovieTitle: "",
-    movieLinkCache: {}
-    // cache by raw title to avoid repeat lookups
-  };
-  var killCountDb = null;
-  async function getKillCountDb() {
-    if (killCountDb !== null) return killCountDb;
-    killCountDb = {};
-    try {
-      const text = await new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({
-          method: "GET",
-          url: "https://raw.githubusercontent.com/lklynet/Kill-Count/main/killcounts.jsonl",
-          onload: (r) => r.status === 200 ? resolve(r.responseText) : reject(new Error(`HTTP ${r.status}`)),
-          onerror: reject
-        });
-      });
-      let loaded = 0;
-      for (const line of text.split("\n")) {
-        const s = line.trim();
-        if (!s) continue;
-        try {
-          const entry = JSON.parse(s);
-          if (entry.tmdb_id != null) {
-            killCountDb[String(entry.tmdb_id)] = entry.count;
-            loaded++;
-          }
-        } catch (e) {
-        }
-      }
-    } catch (e) {
-      console.warn("[CyTube SC] Kill count DB failed to load:", e);
-    }
-    return killCountDb;
-  }
-  async function validateTmdbKey(key) {
-    if (!key) return "invalid";
-    const url = `https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(key)}`;
-    try {
-      const res = await fetch(url);
-      if (res.status === 200) return "valid";
-      if (res.status === 401) return "invalid";
-      return "error";
-    } catch (e) {
-      try {
-        const r = await nativeHttpGet(url);
-        if (r.status === 200) return "valid";
-        if (r.status === 401) return "invalid";
-        return "error";
-      } catch (e2) {
-        return "error";
-      }
-    }
-  }
-  async function lookupMovie(title, year) {
-    var _a, _b;
-    const cacheKey = title + (year || "");
-    if (movieState.movieLinkCache[cacheKey] !== void 0) return movieState.movieLinkCache[cacheKey];
-    let tmdbResult = null;
-    let wikiUrl = null;
-    const tmdbPromise = hasKey(LS_TMDB) ? (async () => {
-      var _a2, _b2;
-      try {
-        const params = new URLSearchParams({ api_key: getKey(LS_TMDB), query: title, language: "en-US" });
-        if (year) params.set("year", year);
-        const res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!((_a2 = data.results) == null ? void 0 : _a2.length)) return;
-        let best = data.results[0];
-        if (year) {
-          const withYear = data.results.find((r) => {
-            var _a3;
-            return (_a3 = r.release_date) == null ? void 0 : _a3.startsWith(year);
-          });
-          if (withYear) best = withYear;
-        }
-        const detailRes = await fetch(
-          `https://api.themoviedb.org/3/movie/${best.id}?api_key=${getKey(LS_TMDB)}&append_to_response=external_ids`
-        );
-        if (!detailRes.ok) return;
-        const detail = await detailRes.json();
-        tmdbResult = {
-          tmdbId: best.id,
-          imdbId: detail.imdb_id || ((_b2 = detail.external_ids) == null ? void 0 : _b2.imdb_id) || null,
-          title: detail.title,
-          year: detail.release_date ? detail.release_date.slice(0, 4) : year,
-          poster: detail.poster_path ? `https://image.tmdb.org/t/p/w500${detail.poster_path}` : null,
-          backdrop: detail.backdrop_path ? `https://image.tmdb.org/t/p/w1280${detail.backdrop_path}` : null,
-          rating: detail.vote_average ? Math.round(detail.vote_average * 10) / 10 : null,
-          runtime: detail.runtime || null,
-          overview: detail.overview || "",
-          genres: (detail.genres || []).map((g) => g.name)
-        };
-      } catch (e) {
-      }
-    })() : Promise.resolve();
-    const wikiPromise = (async () => {
-      var _a2, _b2;
-      try {
-        const searchTitle = title + (year ? " " + year : "") + " film";
-        const res = await fetch(
-          `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(searchTitle)}&srlimit=1&format=json&origin=*`
-        );
-        if (!res.ok) return;
-        const data = await res.json();
-        const hit = (_b2 = (_a2 = data == null ? void 0 : data.query) == null ? void 0 : _a2.search) == null ? void 0 : _b2[0];
-        if (hit) wikiUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(hit.title.replace(/ /g, "_"))}`;
-      } catch (e) {
-      }
-    })();
-    await Promise.all([tmdbPromise, wikiPromise]);
-    let killCount = null;
-    if (tmdbResult == null ? void 0 : tmdbResult.tmdbId) {
-      const db = await getKillCountDb();
-      const count = db[String(tmdbResult.tmdbId)];
-      if (count !== void 0 && count !== null) killCount = count;
-    }
-    const parentalGuide = await fetchImdbParentalGuide(tmdbResult == null ? void 0 : tmdbResult.imdbId);
-    const result = {
-      links: {
-        imdb: (tmdbResult == null ? void 0 : tmdbResult.imdbId) ? `https://www.imdb.com/title/${tmdbResult.imdbId}/` : null,
-        letterboxd: (tmdbResult == null ? void 0 : tmdbResult.tmdbId) ? `https://letterboxd.com/tmdb/${tmdbResult.tmdbId}` : null,
-        wiki: wikiUrl
-      },
-      killCount,
-      parentalGuide,
-      imdbId: (tmdbResult == null ? void 0 : tmdbResult.imdbId) || null,
-      cleanTitle: (tmdbResult == null ? void 0 : tmdbResult.title) || null,
-      cleanYear: (tmdbResult == null ? void 0 : tmdbResult.year) || null,
-      poster: (tmdbResult == null ? void 0 : tmdbResult.poster) || null,
-      backdrop: (tmdbResult == null ? void 0 : tmdbResult.backdrop) || null,
-      rating: (_a = tmdbResult == null ? void 0 : tmdbResult.rating) != null ? _a : null,
-      runtime: (_b = tmdbResult == null ? void 0 : tmdbResult.runtime) != null ? _b : null,
-      overview: (tmdbResult == null ? void 0 : tmdbResult.overview) || "",
-      genres: (tmdbResult == null ? void 0 : tmdbResult.genres) || []
-    };
-    movieState.movieLinkCache[cacheKey] = result;
-    return result;
-  }
-
-  // src/mediatime.js
-  var mediaState = {
-    currentMediaSeconds: 0,
-    currentMediaType: "",
-    currentPlaybackTime: 0
-  };
-  function parseTimeToSeconds(t) {
-    const parts = String(t).trim().split(":").map(Number);
-    if (!parts.length || parts.some(isNaN)) return 0;
-    return parts.reduce((acc, v) => acc * 60 + v, 0);
-  }
-  function getCurrentMediaSeconds() {
-    if (mediaState.currentMediaSeconds > 0) return mediaState.currentMediaSeconds;
-    const el = document.querySelector("#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time");
-    return el ? parseTimeToSeconds(el.textContent) : 0;
-  }
-  function getCurrentPlaybackSeconds() {
-    const v = document.querySelector("#videowrap video");
-    if (v && isFinite(v.currentTime) && v.currentTime > 0) return v.currentTime;
-    return mediaState.currentPlaybackTime;
-  }
-  function formatHMS(s) {
-    s = Math.max(0, Math.floor(s || 0));
-    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
-    const pad = (n) => String(n).padStart(2, "0");
-    return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
-  }
-
-  // src/cards/trivia.js
-  function _escHtml(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-  function showTriviaCard() {
-    const tconst = npState.data && npState.data.imdbId;
-    if (!tconst) return;
-    let card = document.getElementById("sc-trivia-card");
-    if (!card) {
-      card = document.createElement("div");
-      card.id = "sc-trivia-card";
-      card.innerHTML = `
-            <div id="sc-trivia-panel">
-                <div id="sc-trivia-head">
-                    <span id="sc-trivia-title">Trivia</span>
-                    <button id="sc-trivia-close" type="button">✕</button>
-                </div>
-                <div id="sc-trivia-list"></div>
-            </div>`;
-      document.body.appendChild(card);
-      card.addEventListener("click", (e) => {
-        if (e.target === card) hideTriviaCard();
-      });
-      card.querySelector("#sc-trivia-close").addEventListener("click", hideTriviaCard);
-    }
-    card.querySelector("#sc-trivia-title").textContent = "Trivia" + (npState.data.cleanTitle ? " — " + npState.data.cleanTitle : "");
-    const list = card.querySelector("#sc-trivia-list");
-    list.innerHTML = '<div class="sc-trivia-item">Loading…</div>';
-    card.classList.add("sc-show");
-    fetchImdbTrivia(tconst).then((items) => {
-      if (!document.getElementById("sc-trivia-card")) return;
-      if (!items || !items.length) {
-        list.innerHTML = '<div class="sc-trivia-item">No trivia found.</div>';
-        return;
-      }
-      list.innerHTML = items.map((t) => `<div class="sc-trivia-item">${_escHtml(t)}</div>`).join("");
-      list.scrollTop = 0;
-    });
-  }
-  function hideTriviaCard() {
-    const card = document.getElementById("sc-trivia-card");
-    if (card) card.classList.remove("sc-show");
-  }
-  function toggleTriviaCard() {
-    const card = document.getElementById("sc-trivia-card");
-    if (card && card.classList.contains("sc-show")) hideTriviaCard();
-    else showTriviaCard();
-  }
-
-  // src/cards/nowplaying.js
-  var NP_PG_SHORT = {
-    "Sex & Nudity": "Sex/Nudity",
-    "Violence & Gore": "Violence",
-    "Profanity": "Profanity",
-    "Alcohol, Drugs & Smoking": "Drugs",
-    "Frightening & Intense Scenes": "Frightening"
-  };
-  var npState = {
-    data: null,
-    // latest movie data for the card
-    introDone: false
-    // startup intro card has run (see initIntroSequence)
-  };
-  var _npHideTimer = null;
-  var _npProgTimer = null;
-  var _npWatcherInit = false;
-  function _renderNpProgress() {
-    const card = document.getElementById("sc-np-card");
-    if (!card) {
-      clearInterval(_npProgTimer);
-      return;
-    }
-    const wrap = card.querySelector("#sc-np-progress");
-    const fill = card.querySelector("#sc-np-prog-fill");
-    const elapsedEl = card.querySelector("#sc-np-prog-elapsed");
-    const totalEl = card.querySelector("#sc-np-prog-total");
-    const remainEl = card.querySelector("#sc-np-prog-remain");
-    if (!wrap || !fill) return;
-    const dur = getCurrentMediaSeconds();
-    if (dur > 0) {
-      const elapsed = Math.min(getCurrentPlaybackSeconds(), dur);
-      const pct = Math.max(0, Math.min(100, elapsed / dur * 100));
-      fill.style.setProperty("width", pct + "%", "important");
-      elapsedEl.textContent = formatHMS(elapsed);
-      totalEl.textContent = formatHMS(dur);
-      remainEl.textContent = "−" + formatHMS(dur - elapsed) + " left";
-      wrap.style.display = "";
-    } else {
-      wrap.style.display = "none";
-    }
-  }
-  function _npCardEnabled() {
-    return isTv;
-  }
-  var _npScrollTimer = null;
-  var _npScrollRaf = null;
-  var _NP_SCROLL_DELAY = 3500;
-  function _autoScrollOverview() {
-    clearTimeout(_npScrollTimer);
-    cancelAnimationFrame(_npScrollRaf);
-    const card = document.getElementById("sc-np-card");
-    const ov = card && card.querySelector("#sc-np-overview");
-    if (!ov) return 0;
-    ov.scrollTop = 0;
-    const dist = ov.scrollHeight - ov.clientHeight;
-    if (dist <= 4) return 0;
-    const dur = Math.min(12e3, Math.max(2500, dist / 24 * 1e3));
-    _npScrollTimer = setTimeout(() => {
-      const start = ov.scrollTop;
-      const span = ov.scrollHeight - ov.clientHeight - start;
-      if (span <= 0) return;
-      const t0 = performance.now();
-      const step = (now) => {
-        const c = document.getElementById("sc-np-card");
-        if (!c || !c.classList.contains("sc-np-visible")) return;
-        const p = Math.min(1, (now - t0) / dur);
-        const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-        ov.scrollTop = start + span * e;
-        if (p < 1) _npScrollRaf = requestAnimationFrame(step);
-      };
-      _npScrollRaf = requestAnimationFrame(step);
-    }, _NP_SCROLL_DELAY);
-    return _NP_SCROLL_DELAY + dur;
-  }
-  function showNowPlayingCard(data, opts = {}) {
-    if (!data || !data.cleanTitle && !data.backdrop) return;
-    let card = document.getElementById("sc-np-card");
-    if (!card) {
-      card = document.createElement("div");
-      card.id = "sc-np-card";
-      card.innerHTML = `
-            <div id="sc-np-backdrop"></div>
-            <div id="sc-np-scrim"></div>
-            <div id="sc-np-content">
-                <img id="sc-np-poster" alt="" />
-                <div id="sc-np-info">
-                    <div id="sc-np-eyebrow">Now Playing</div>
-                    <div id="sc-np-title"></div>
-                    <div id="sc-np-meta"></div>
-                    <div id="sc-np-overview"></div>
-                    <div id="sc-np-chips"></div>
-                    <div id="sc-np-progress">
-                        <div id="sc-np-prog-bar"><div id="sc-np-prog-fill"></div></div>
-                        <div id="sc-np-prog-times">
-                            <span id="sc-np-prog-elapsed">0:00</span>
-                            <span id="sc-np-prog-remain"></span>
-                            <span id="sc-np-prog-total">0:00</span>
-                        </div>
-                    </div>
-                </div>
-            </div>`;
-      document.body.appendChild(card);
-      card.addEventListener("click", hideNowPlayingCard);
-    }
-    const title = data.cleanTitle || movieState.lastMovieTitle || "";
-    const year = data.cleanYear ? ` (${data.cleanYear})` : "";
-    const bd = card.querySelector("#sc-np-backdrop");
-    const poster = card.querySelector("#sc-np-poster");
-    const meta = card.querySelector("#sc-np-meta");
-    const chips = card.querySelector("#sc-np-chips");
-    bd.style.backgroundImage = data.backdrop ? `url(${data.backdrop})` : "none";
-    if (data.poster) {
-      poster.src = data.poster;
-      poster.style.display = "";
-    } else poster.style.display = "none";
-    card.querySelector("#sc-np-title").textContent = title + year;
-    card.querySelector("#sc-np-overview").textContent = data.overview || "";
-    const metaParts = [];
-    if (data.rating) metaParts.push(`⭐ ${data.rating}`);
-    if (data.runtime) metaParts.push(`${Math.floor(data.runtime / 60)}h ${data.runtime % 60}m`);
-    if (data.genres && data.genres.length) metaParts.push(data.genres.slice(0, 3).join(" · "));
-    meta.textContent = metaParts.join("     ");
-    const chipHtml = [];
-    (data.parentalGuide || []).forEach((pg) => {
-      const sev = String(pg.severity || "").toLowerCase();
-      const label = NP_PG_SHORT[pg.category] || pg.category;
-      chipHtml.push(`<span class="sc-np-chip sc-sev-${sev}">${label}: ${pg.severity}</span>`);
-    });
-    if (data.killCount !== null && data.killCount !== void 0) {
-      chipHtml.push(`<span class="sc-np-chip">💀 ${data.killCount} kills</span>`);
-    }
-    chips.innerHTML = chipHtml.join("");
-    card.classList.add("sc-np-visible");
-    _renderNpProgress();
-    clearInterval(_npProgTimer);
-    _npProgTimer = setInterval(_renderNpProgress, 500);
-    const revealMs = _autoScrollOverview();
-    clearTimeout(_npHideTimer);
-    if (opts.autoHide) {
-      const v = document.querySelector("#videowrap video");
-      const playing = v && !v.paused;
-      if (playing || !v) _npHideTimer = setTimeout(hideNowPlayingCard, Math.max(7e3, revealMs + 2500));
-    }
-  }
-  function hideNowPlayingCard() {
-    const card = document.getElementById("sc-np-card");
-    if (card) card.classList.remove("sc-np-visible");
-    clearTimeout(_npHideTimer);
-    clearInterval(_npProgTimer);
-    clearTimeout(_npScrollTimer);
-    cancelAnimationFrame(_npScrollRaf);
-  }
-  function initNowPlayingWatcher() {
-    if (_npWatcherInit) return;
-    _npWatcherInit = true;
-    const toggle = () => {
-      const card = document.getElementById("sc-np-card");
-      if (card && card.classList.contains("sc-np-visible")) hideNowPlayingCard();
-      else if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
-    };
-    document.addEventListener("keydown", (e) => {
-      const t = e.target;
-      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
-      if (e.key === "i" || e.key === "I") toggle();
-      else if (e.key === "t" || e.key === "T") toggleTriviaCard();
-    });
-    const bindTitle = () => {
-      const h = document.getElementById("videowrap-header");
-      if (!h) return;
-      if (npState.data && npState.data.imdbId && !document.getElementById("sc-trivia-btn")) {
-        const btn = document.createElement("button");
-        btn.id = "sc-trivia-btn";
-        btn.type = "button";
-        btn.textContent = "Trivia";
-        btn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          showTriviaCard();
-        });
-        if (document.body.classList.contains("sc-video-dimmed")) btn.classList.add("sc-bar-dim");
-        h.appendChild(btn);
-      }
-    };
-    bindTitle();
-    new MutationObserver(bindTitle).observe(document.body, { childList: true, subtree: true });
   }
 
   // src/parse.js
@@ -4503,7 +4976,6 @@
       startEmoteWatcher(originalInput, textarea);
       return true;
     }
-    let _tvSetFocus = null;
     function initChatTimestamps() {
       if (typeof socket === "undefined" || !socket || typeof socket.on !== "function") {
         setTimeout(initChatTimestamps, 600);
@@ -4736,7 +5208,7 @@
           if (tmdbEnable.checked) {
             const i = document.getElementById("sc-input-tmdb");
             if (i) {
-              if (_tvSetFocus) _tvSetFocus(i);
+              if (tvNavState.setFocus) tvNavState.setFocus(i);
               else i.focus();
             }
           }
@@ -4995,120 +5467,6 @@
       initLoginTvNav();
       return;
     }
-    function initLoginTvNav() {
-      let isTv2 = false;
-      try {
-        if (window.CytubeNative && CytubeNative.isTv) isTv2 = !!CytubeNative.isTv();
-      } catch (e) {
-      }
-      if (!isTv2) isTv2 = window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
-      if (!isTv2) return;
-      const style = document.createElement("style");
-      style.textContent = ".sc-tv-focus{outline:3px solid #e0701a !important;outline-offset:2px !important;box-shadow:0 0 0 5px rgba(224,112,26,0.32) !important;border-radius:5px !important;}";
-      (document.head || document.documentElement).appendChild(style);
-      let focusEl = null;
-      const isVisible = (el) => {
-        if (!el || !el.getBoundingClientRect) return false;
-        const r = el.getBoundingClientRect();
-        if (r.width < 3 || r.height < 3) return false;
-        const cs = getComputedStyle(el);
-        return cs.visibility !== "hidden" && cs.display !== "none";
-      };
-      const FOCUS_SEL = "input:not([type=hidden]), button, a[href], select, textarea, [tabindex]";
-      const candidates = () => [...document.querySelectorAll(FOCUS_SEL)].filter(isVisible).filter((e) => !e.disabled);
-      function setFocus(el) {
-        if (!el) return;
-        if (focusEl && focusEl !== el) focusEl.classList.remove("sc-tv-focus");
-        focusEl = el;
-        el.classList.add("sc-tv-focus");
-        try {
-          el.focus({ preventScroll: true });
-        } catch (e) {
-        }
-        try {
-          el.scrollIntoView({ block: "nearest" });
-        } catch (e) {
-        }
-      }
-      function move(dir) {
-        const list = candidates();
-        if (!list.length) return;
-        if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) {
-          setFocus(list[0]);
-          return;
-        }
-        const cur = focusEl.getBoundingClientRect();
-        const cx = cur.left + cur.width / 2, cy = cur.top + cur.height / 2;
-        let best = null, bestScore = Infinity;
-        for (const el of list) {
-          if (el === focusEl) continue;
-          const r = el.getBoundingClientRect();
-          const dx = r.left + r.width / 2 - cx, dy = r.top + r.height / 2 - cy;
-          let primary, perp;
-          if (dir === "left") {
-            if (dx > -4) continue;
-            primary = -dx;
-            perp = Math.abs(dy);
-          } else if (dir === "right") {
-            if (dx < 4) continue;
-            primary = dx;
-            perp = Math.abs(dy);
-          } else if (dir === "up") {
-            if (dy > -4) continue;
-            primary = -dy;
-            perp = Math.abs(dx);
-          } else {
-            if (dy < 4) continue;
-            primary = dy;
-            perp = Math.abs(dx);
-          }
-          const score = primary + perp * 2;
-          if (score < bestScore) {
-            bestScore = score;
-            best = el;
-          }
-        }
-        if (best) setFocus(best);
-      }
-      function activate() {
-        if (!focusEl) {
-          move("down");
-          return;
-        }
-        const tag = focusEl.tagName, type = (focusEl.type || "").toLowerCase();
-        if (tag === "INPUT" && !/^(checkbox|radio|submit|button|reset)$/.test(type) || tag === "TEXTAREA") {
-          try {
-            focusEl.focus();
-          } catch (e) {
-          }
-        } else {
-          focusEl.click();
-        }
-      }
-      window.__scTvKey = function(dir) {
-        try {
-          if (dir === "back") {
-            if (history.length > 1) history.back();
-            else {
-              try {
-                if (window.CytubeNative && CytubeNative.tvBack) CytubeNative.tvBack();
-              } catch (e) {
-              }
-            }
-            return;
-          }
-          if (dir === "center") activate();
-          else move(dir);
-        } catch (e) {
-        }
-      };
-      const seed = () => {
-        const l = candidates();
-        if (l.length) setFocus(l.find((e) => e.tagName === "INPUT" && /^(text|password|email)$/i.test(e.type)) || l[0]);
-      };
-      if (document.readyState === "complete" || document.readyState === "interactive") seed();
-      else window.addEventListener("DOMContentLoaded", seed);
-    }
     waitForBody();
     function _scBoot() {
       _scStatus("Styling channel…");
@@ -5288,362 +5646,7 @@
     }
     if (document.readyState === "complete") initCinematicChat();
     else window.addEventListener("load", initCinematicChat);
-    (function initTvNav() {
-      if (!isTv) return;
-      let focusEl = null;
-      const isVisible = (el) => {
-        if (!el || !el.getBoundingClientRect) return false;
-        const r = el.getBoundingClientRect();
-        if (r.width < 3 || r.height < 3) return false;
-        if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return false;
-        const cs = getComputedStyle(el);
-        return cs.visibility !== "hidden" && cs.display !== "none";
-      };
-      const OVERLAY_IDS = ["sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card"];
-      const openOverlay = () => {
-        for (const id of OVERLAY_IDS) {
-          const o = document.getElementById(id);
-          if (o && isVisible(o) && (id !== "sc-np-card" || o.classList.contains("sc-np-visible")) && (id !== "sc-trivia-card" || o.classList.contains("sc-show"))) return o;
-        }
-        return null;
-      };
-      const isDesynced = () => {
-        const b = document.getElementById("sc-desync-btn");
-        return !!(b && b.classList.contains("sc-desync-active"));
-      };
-      const openVjsMenu = () => {
-        const m = document.querySelector("#videowrap .vjs-menu.vjs-lock-showing");
-        return m && [...m.querySelectorAll(".vjs-menu-item")].some(isVisible) ? m : null;
-      };
-      function controlBarTargets() {
-        try {
-          const bar = document.querySelector("#videowrap .vjs-control-bar");
-          if (!bar || !isVisible(bar)) return [];
-          const allowSeek = isDesynced();
-          return [...bar.querySelectorAll("button.vjs-control, button.vjs-menu-button, .vjs-progress-control")].filter((c) => {
-            if (!isVisible(c)) return false;
-            if (c.classList.contains("vjs-progress-control") && !allowSeek) return false;
-            if (c.disabled || c.classList.contains("vjs-disabled")) return false;
-            return true;
-          });
-        } catch (e) {
-          return [];
-        }
-      }
-      const MAIN_IDS = [
-        "sc-drm-open",
-        "sc-title-text",
-        "sc-chatmode-btn",
-        "sc-emote-proxy",
-        "sc-desync-btn",
-        "sc-settings-btn",
-        "sc-usercount-btn",
-        "sc-poll-btn",
-        "sc-poster-toggle",
-        "sc-trivia-btn",
-        "sc-newmsg-pill",
-        "sc-chat-collapse-btn",
-        "sc-chat-textarea"
-      ];
-      const FOCUS_SEL = "button, a[href], input:not([type=hidden]), textarea, select, [tabindex]";
-      const makeFocusable = (el) => {
-        if (!el.hasAttribute("tabindex") && !/^(BUTTON|A|INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) el.tabIndex = -1;
-      };
-      function candidates() {
-        const menu = openVjsMenu();
-        if (menu) {
-          const list = [...menu.querySelectorAll(".vjs-menu-item")].filter(isVisible);
-          if (list.length) return { scope: menu, list };
-        }
-        const ov = openOverlay();
-        if (ov) {
-          let list = [...ov.querySelectorAll(FOCUS_SEL)].filter(isVisible).filter((e) => !e.disabled);
-          if (!list.length) list = [ov];
-          return { scope: ov, list };
-        }
-        const main = MAIN_IDS.map((id) => document.getElementById(id)).filter((el) => el && isVisible(el) && // The new-message pill is opacity-hidden (still sized) until shown — only
-        // make it a focus target while it's actually visible.
-        (el.id !== "sc-newmsg-pill" || el.classList.contains("sc-show")));
-        return { scope: document, list: main.concat(controlBarTargets()) };
-      }
-      function clearFocus() {
-        document.querySelectorAll(".sc-tv-focus").forEach((e) => e.classList.remove("sc-tv-focus"));
-        try {
-          if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-        } catch (e) {
-        }
-        holdScrubber(false);
-        focusEl = null;
-      }
-      function setFocus(el) {
-        if (!el) return;
-        makeFocusable(el);
-        if (el.hasAttribute && el.hasAttribute("title")) el.removeAttribute("title");
-        if (focusEl && focusEl.id === "sc-chat-textarea" && el.id !== "sc-chat-textarea") wakeVideoControls();
-        holdScrubber(!!(el.closest && el.closest("#videowrap-header, .video-js")));
-        document.querySelectorAll(".sc-tv-focus").forEach((e) => {
-          if (e !== el) e.classList.remove("sc-tv-focus");
-        });
-        focusEl = el;
-        el.classList.add("sc-tv-focus");
-        try {
-          el.focus({ preventScroll: true });
-        } catch (e) {
-        }
-        try {
-          el.scrollIntoView({ block: "nearest", inline: "nearest" });
-        } catch (e) {
-        }
-      }
-      _tvSetFocus = setFocus;
-      function seekBy(delta) {
-        try {
-          const p = window.PLAYER && window.PLAYER.player;
-          if (p && typeof p.currentTime === "function") {
-            p.currentTime(Math.max(0, (p.currentTime() || 0) + delta));
-            wakeVideoControls();
-            return;
-          }
-        } catch (e) {
-        }
-        const v = document.querySelector("#videowrap video");
-        if (v) {
-          try {
-            v.currentTime = Math.max(0, v.currentTime + delta);
-            wakeVideoControls();
-          } catch (e) {
-          }
-        }
-      }
-      const posterZoom = (a, on) => {
-        const img = a && a.querySelector("img");
-        if (img) img.dispatchEvent(new MouseEvent(on ? "mouseenter" : "mouseleave", { bubbles: true }));
-      };
-      function setPosterFocus(a, thumbs) {
-        thumbs.forEach((t) => {
-          if (t !== a) posterZoom(t, false);
-        });
-        setFocus(a);
-        posterZoom(a, true);
-      }
-      function move(dir) {
-        if (focusEl && focusEl.classList && focusEl.classList.contains("vjs-progress-control") && (dir === "left" || dir === "right")) {
-          if (isDesynced()) seekBy(dir === "right" ? 10 : -10);
-          return;
-        }
-        if (focusEl && (dir === "left" || dir === "right") && !openVjsMenu()) {
-          const barEls = controlBarTargets();
-          if (barEls.includes(focusEl)) {
-            const sorted = barEls.slice().sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-            const i = sorted.indexOf(focusEl);
-            const ni = dir === "right" ? i + 1 : i - 1;
-            if (ni >= 0 && ni < sorted.length) {
-              setFocus(sorted[ni]);
-              return;
-            }
-          }
-        }
-        if (focusEl && focusEl.type === "range" && (dir === "left" || dir === "right")) {
-          const step = parseFloat(focusEl.step) || 1;
-          const min = focusEl.min !== "" ? parseFloat(focusEl.min) : -Infinity;
-          const max = focusEl.max !== "" ? parseFloat(focusEl.max) : Infinity;
-          let v = (parseFloat(focusEl.value) || 0) + (dir === "right" ? step : -step);
-          focusEl.value = Math.max(min, Math.min(max, v));
-          focusEl.dispatchEvent(new Event("input", { bubbles: true }));
-          return;
-        }
-        const strip = document.getElementById("sc-poster-strip");
-        if (strip && strip.classList.contains("sc-poster-visible")) {
-          const toggle = document.getElementById("sc-poster-toggle");
-          const thumbs = [...strip.querySelectorAll("a")];
-          if (thumbs.length) {
-            if (focusEl === toggle && dir === "down") {
-              setPosterFocus(thumbs[0], thumbs);
-              return;
-            }
-            if (strip.contains(focusEl)) {
-              if (dir === "left" || dir === "right") {
-                const i = thumbs.indexOf(focusEl);
-                const ni = dir === "right" ? Math.min(thumbs.length - 1, i + 1) : Math.max(0, i - 1);
-                setPosterFocus(thumbs[ni], thumbs);
-                return;
-              }
-              posterZoom(focusEl, false);
-              if (toggle) setFocus(toggle);
-              return;
-            }
-          }
-        }
-        const { scope, list } = candidates();
-        if (!list.length) return;
-        if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) {
-          setFocus(list[0]);
-          return;
-        }
-        const cur = focusEl.getBoundingClientRect();
-        const cx = cur.left + cur.width / 2, cy = cur.top + cur.height / 2;
-        let best = null, bestScore = Infinity, cone = null, coneScore = Infinity;
-        for (const el of list) {
-          if (el === focusEl) continue;
-          const r = el.getBoundingClientRect();
-          const dx = r.left + r.width / 2 - cx, dy = r.top + r.height / 2 - cy;
-          let primary, perp;
-          if (dir === "left") {
-            if (dx > -4) continue;
-            primary = -dx;
-            perp = Math.abs(dy);
-          } else if (dir === "right") {
-            if (dx < 4) continue;
-            primary = dx;
-            perp = Math.abs(dy);
-          } else if (dir === "up") {
-            if (dy > -4) continue;
-            primary = -dy;
-            perp = Math.abs(dx);
-          } else {
-            if (dy < 4) continue;
-            primary = dy;
-            perp = Math.abs(dx);
-          }
-          const score = primary + perp * 2;
-          if (primary >= perp && score < coneScore) {
-            coneScore = score;
-            cone = el;
-          }
-          if (score < bestScore) {
-            bestScore = score;
-            best = el;
-          }
-        }
-        if (cone) best = cone;
-        if (best) {
-          setFocus(best);
-          return;
-        }
-        if (dir === "up" || dir === "down") {
-          const sc = scope.querySelector && scope.querySelector("#sc-trivia-list, #sc-settings-modal, #messagebuffer") || document.getElementById("messagebuffer");
-          if (sc && sc.scrollHeight > sc.clientHeight) sc.scrollTop += dir === "down" ? 140 : -140;
-        }
-      }
-      function activate() {
-        if (!focusEl) {
-          move("right");
-          return;
-        }
-        if (focusEl.classList && focusEl.classList.contains("vjs-progress-control")) return;
-        if (focusEl.tagName === "TEXTAREA" || focusEl.tagName === "INPUT") {
-          if (focusEl.type === "checkbox" || focusEl.type === "range") focusEl.click();
-          else {
-            try {
-              focusEl.focus();
-            } catch (e) {
-            }
-          }
-          return;
-        }
-        const ownerWrap = focusEl.classList && focusEl.classList.contains("vjs-menu-item") && focusEl.closest(".vjs-menu-button");
-        const ownerBtn = ownerWrap && ownerWrap.querySelector("button.vjs-menu-button");
-        focusEl.click();
-        if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) {
-          clearFocus();
-          setFocus(ownerBtn);
-        }
-      }
-      function closeTop() {
-        const menu = openVjsMenu();
-        if (menu) {
-          const wrap = menu.closest(".vjs-menu-button");
-          const btn = wrap && wrap.querySelector("button.vjs-menu-button");
-          if (btn) {
-            try {
-              btn.click();
-            } catch (e) {
-              try {
-                menu.classList.remove("vjs-lock-showing");
-              } catch (e2) {
-              }
-            }
-          } else {
-            try {
-              menu.classList.remove("vjs-lock-showing");
-            } catch (e) {
-            }
-          }
-          clearFocus();
-          if (btn && isVisible(btn)) setFocus(btn);
-          return true;
-        }
-        const settings = document.getElementById("sc-settings-overlay");
-        if (settings && isVisible(settings)) {
-          const c = document.getElementById("sc-settings-cancel");
-          if (c) c.click();
-          else settings.remove();
-          clearFocus();
-          return true;
-        }
-        const modal = document.getElementById("sc-modal-overlay");
-        if (modal && isVisible(modal)) {
-          (document.getElementById("sc-btn-cancel") || { click() {
-            modal.remove();
-          } }).click();
-          clearFocus();
-          return true;
-        }
-        const trivia = document.getElementById("sc-trivia-card");
-        if (trivia && trivia.classList.contains("sc-show")) {
-          hideTriviaCard();
-          clearFocus();
-          return true;
-        }
-        const np = document.getElementById("sc-np-card");
-        if (np && np.classList.contains("sc-np-visible")) {
-          hideNowPlayingCard();
-          clearFocus();
-          return true;
-        }
-        for (const id of ["sc-users-panel", "sc-poll-panel"]) {
-          const p = document.getElementById(id);
-          if (p && isVisible(p)) {
-            p.style.display = "none";
-            clearFocus();
-            return true;
-          }
-        }
-        const poster = document.getElementById("sc-poster-strip");
-        if (poster && poster.classList.contains("sc-poster-visible")) {
-          const t = document.getElementById("sc-poster-toggle");
-          if (t) t.click();
-          else poster.classList.remove("sc-poster-visible");
-          clearFocus();
-          return true;
-        }
-        return false;
-      }
-      function revealChrome() {
-        if (typeof chromeState.leftZoneReveal === "function") chromeState.leftZoneReveal(4e3);
-        else document.body.classList.add("sc-leftzone");
-        if (typeof chromeState.chromeWake === "function") chromeState.chromeWake();
-        else document.body.classList.remove("sc-chrome-hidden");
-        if (typeof chromeState.topBarWake === "function") chromeState.topBarWake();
-      }
-      window.__scTvKey = function(dir) {
-        try {
-          if (dir === "back") {
-            if (!closeTop()) {
-              try {
-                if (window.CytubeNative && CytubeNative.tvBack) CytubeNative.tvBack();
-              } catch (e) {
-              }
-            }
-            return;
-          }
-          revealChrome();
-          if (dir === "center") activate();
-          else move(dir);
-        } catch (e) {
-        }
-      };
-    })();
+    initTvNav();
     function _scSignalReady() {
       try {
         if (window.CytubeNative && CytubeNative.onReady) CytubeNative.onReady();
