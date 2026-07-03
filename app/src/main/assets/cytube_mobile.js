@@ -703,6 +703,492 @@
     updateCount();
   }
 
+  // src/chat/fontsize.js
+  function getChatFontSize() {
+    const v = parseInt(getKey(LS_CHAT_FONT), 10);
+    if (Number.isFinite(v) && v >= 10 && v <= 32) return v;
+    return document.body && document.body.classList.contains("sc-tv") ? 18 : 14;
+  }
+  function applyChatFontSize(px) {
+    const buf = document.getElementById("messagebuffer");
+    if (buf) buf.style.setProperty("font-size", px + "px", "important");
+    const ta = document.getElementById("sc-chat-textarea");
+    if (ta) {
+      const overlay = document.body && document.body.classList.contains("sc-chat-overlay");
+      ta.style.setProperty("font-size", (overlay ? 13 : px) + "px", "important");
+    }
+  }
+
+  // src/player/scrubber.js
+  function wakeVideoControls() {
+    try {
+      const p = window.PLAYER && window.PLAYER.player;
+      if (p && typeof p.userActive === "function") {
+        p.userActive(true);
+        if (typeof p.reportUserActivity === "function") p.reportUserActivity();
+        return;
+      }
+    } catch (e) {
+    }
+    const el = document.querySelector("#videowrap .video-js");
+    if (el) {
+      el.classList.add("vjs-user-active");
+      el.classList.remove("vjs-user-inactive");
+    }
+  }
+  var _scrubHoldTimer = null;
+  function holdScrubber(on) {
+    if (on) {
+      wakeVideoControls();
+      if (!_scrubHoldTimer) _scrubHoldTimer = setInterval(wakeVideoControls, 1e3);
+      return;
+    }
+    if (!_scrubHoldTimer) return;
+    clearInterval(_scrubHoldTimer);
+    _scrubHoldTimer = null;
+    try {
+      const p = window.PLAYER && window.PLAYER.player;
+      if (p && typeof p.userActive === "function") p.userActive(false);
+    } catch (e) {
+    }
+    const el = document.querySelector("#videowrap .video-js");
+    if (el) {
+      el.classList.add("vjs-user-inactive");
+      el.classList.remove("vjs-user-active");
+    }
+  }
+
+  // src/tvdetect.js
+  var isTv = function() {
+    try {
+      if (window.CytubeNative && typeof CytubeNative.isTv === "function") return !!CytubeNative.isTv();
+    } catch (e) {
+    }
+    return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
+  }();
+
+  // src/chat/modes.js
+  function initAmbientGlow() {
+    if (isTv) return;
+    const el = document.createElement("div");
+    el.id = "sc-ambient";
+    document.body.appendChild(el);
+    const canvas = document.createElement("canvas");
+    canvas.width = 16;
+    canvas.height = 9;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    let disabled = false;
+    const sample = () => {
+      if (disabled) return;
+      const v = document.querySelector("#videowrap video");
+      if (!v || v.paused || v.readyState < 2 || !v.videoWidth) return;
+      try {
+        ctx.drawImage(v, 0, 0, 16, 9);
+        const d = ctx.getImageData(0, 0, 16, 9).data;
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          r += d[i];
+          g += d[i + 1];
+          b += d[i + 2];
+          n++;
+        }
+        r = Math.round(r / n);
+        g = Math.round(g / n);
+        b = Math.round(b / n);
+        const max = Math.max(r, g, b) || 1;
+        const boost = (c) => Math.min(255, Math.round(c * (1 + c / max * 0.35)));
+        r = boost(r);
+        g = boost(g);
+        b = boost(b);
+        document.documentElement.style.setProperty("--sc-ambient-color", `rgba(${r},${g},${b},0.5)`);
+        document.documentElement.style.setProperty("--np-accent", `rgb(${Math.min(255, r + 40)},${Math.min(255, g + 40)},${Math.min(255, b + 40)})`);
+      } catch (e) {
+        disabled = true;
+        document.body.classList.add("sc-ambient-off");
+      }
+    };
+    setInterval(sample, 2500);
+  }
+  function initChromeAutohide() {
+    if (!isTv) return;
+    let timer = null;
+    const hide = () => document.body.classList.add("sc-chrome-hidden");
+    const show = () => {
+      document.body.classList.remove("sc-chrome-hidden");
+      if (typeof chromeState.topBarWake === "function") chromeState.topBarWake();
+      clearTimeout(timer);
+      timer = setTimeout(hide, 4e3);
+    };
+    ["mousemove", "keydown", "click", "touchstart", "wheel"].forEach((ev) => document.addEventListener(ev, show, { passive: true }));
+    chromeState.chromeWake = show;
+    timer = setTimeout(hide, 4e3);
+  }
+  var _CHAT_MODES = isTv ? ["sidebar", "overlay", "hidden"] : ["sidebar", "overlay", "hidden", "chatonly"];
+  var _CHAT_MODE_ICONS = { sidebar: "▐", overlay: "▣", hidden: "⊠", chatonly: "☰" };
+  var _CHAT_MODE_LABELS = { sidebar: "Sidebar", overlay: "Overlay", hidden: "Hidden", chatonly: "Chat Only" };
+  var _chatOnlyTimer = null;
+  var _inChatOnly = false;
+  function _coStopMedia() {
+    try {
+      const vid = document.querySelector("#videowrap video");
+      if (vid) {
+        vid.muted = true;
+        if (!vid.paused) vid.pause();
+      }
+    } catch (e) {
+    }
+    try {
+      const p = window.PLAYER && window.PLAYER.player;
+      if (p) {
+        if (typeof p.pauseVideo === "function") p.pauseVideo();
+        else if (typeof p.pause === "function") {
+          try {
+            p.pause();
+          } catch (e) {
+          }
+        }
+        if (typeof p.mute === "function") p.mute();
+        else if (typeof p.muted === "function") p.muted(true);
+      }
+    } catch (e) {
+    }
+  }
+  function enterChatOnly() {
+    _inChatOnly = true;
+    _coStopMedia();
+    clearInterval(_chatOnlyTimer);
+    _chatOnlyTimer = setInterval(_coStopMedia, 1e3);
+  }
+  function exitChatOnly() {
+    if (!_inChatOnly) return;
+    _inChatOnly = false;
+    clearInterval(_chatOnlyTimer);
+    _chatOnlyTimer = null;
+    try {
+      const vid = document.querySelector("#videowrap video");
+      if (vid) vid.muted = false;
+    } catch (e) {
+    }
+    try {
+      const p = window.PLAYER && window.PLAYER.player;
+      if (p) {
+        if (typeof p.unMute === "function") p.unMute();
+        else if (typeof p.muted === "function") p.muted(false);
+        if (typeof p.playVideo === "function") p.playVideo();
+        else if (typeof p.play === "function") {
+          try {
+            p.play();
+          } catch (e) {
+          }
+        }
+      }
+    } catch (e) {
+    }
+  }
+  function applyChatMode(mode) {
+    _CHAT_MODES.forEach((m) => document.body.classList.toggle("sc-chat-" + m, m === mode));
+    try {
+      localStorage.setItem("sc_chat_mode", mode);
+    } catch (e) {
+    }
+    if (mode === "chatonly") enterChatOnly();
+    else exitChatOnly();
+    const btn = document.getElementById("sc-chatmode-btn");
+    if (btn) {
+      btn.textContent = _CHAT_MODE_ICONS[mode] || "▐";
+      const label = _CHAT_MODE_LABELS[mode] || mode;
+      btn.title = "Chat: " + label + " (press C)";
+      btn.dataset.tvLabel = "Chat: " + label;
+    }
+    const colBtn = document.getElementById("sc-chat-collapse-btn");
+    if (colBtn) colBtn.textContent = mode === "hidden" ? "‹" : "›";
+    applyChatFontSize(getChatFontSize());
+    const buf = document.getElementById("messagebuffer");
+    if (buf) {
+      const toBottom = () => {
+        buf.scrollTop = buf.scrollHeight;
+      };
+      requestAnimationFrame(() => requestAnimationFrame(toBottom));
+      [120, 320, 600].forEach((ms) => setTimeout(toBottom, ms));
+    }
+  }
+  function cycleChatMode() {
+    let cur = "sidebar";
+    try {
+      cur = localStorage.getItem("sc_chat_mode") || "sidebar";
+    } catch (e) {
+    }
+    applyChatMode(_CHAT_MODES[(_CHAT_MODES.indexOf(cur) + 1) % _CHAT_MODES.length]);
+  }
+  function initChatModes() {
+    let saved = "sidebar";
+    try {
+      saved = localStorage.getItem("sc_chat_mode") || "sidebar";
+    } catch (e) {
+    }
+    if (!_CHAT_MODES.includes(saved)) saved = "sidebar";
+    if (!document.getElementById("sc-chatmode-btn")) {
+      const btn = document.createElement("button");
+      btn.id = "sc-chatmode-btn";
+      btn.type = "button";
+      btn.title = "Cycle chat layout (press C)";
+      btn.addEventListener("click", cycleChatMode);
+      document.body.appendChild(btn);
+    }
+    applyChatMode(saved);
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "c" && e.key !== "C") return;
+      const t = e.target;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
+      cycleChatMode();
+    });
+  }
+  function initNewMessagePill() {
+    const buf = document.getElementById("messagebuffer");
+    if (!buf) return;
+    const pill = document.createElement("div");
+    pill.id = "sc-newmsg-pill";
+    pill.textContent = "↓ New messages";
+    document.body.appendChild(pill);
+    const nearBottom = () => buf.scrollHeight - buf.scrollTop - buf.clientHeight < 80;
+    const toBottom = () => {
+      buf.scrollTop = buf.scrollHeight;
+      pill.classList.remove("sc-show");
+    };
+    pill.addEventListener("click", toBottom);
+    buf.addEventListener("scroll", () => {
+      if (nearBottom()) pill.classList.remove("sc-show");
+    }, { passive: true });
+    new MutationObserver(() => {
+      if (nearBottom()) buf.scrollTop = buf.scrollHeight;
+      else pill.classList.add("sc-show");
+    }).observe(buf, { childList: true });
+  }
+  function initMentionToast() {
+    const buf = document.getElementById("messagebuffer");
+    if (!buf) return;
+    const myName = () => {
+      try {
+        return window.CLIENT && CLIENT.name ? String(CLIENT.name) : "";
+      } catch (e) {
+        return "";
+      }
+    };
+    let toast = null, toastTimer = null;
+    const show = (name, text) => {
+      if (!toast) {
+        toast = document.createElement("div");
+        toast.id = "sc-mention-toast";
+        toast.addEventListener("click", () => toast.classList.remove("sc-show"));
+        document.body.appendChild(toast);
+      }
+      toast.innerHTML = `<span class="sc-mt-name"></span><span class="sc-mt-text"></span>`;
+      toast.querySelector(".sc-mt-name").textContent = name + ":";
+      toast.querySelector(".sc-mt-text").textContent = " " + text;
+      toast.classList.add("sc-show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove("sc-show"), 6e3);
+    };
+    new MutationObserver((muts) => {
+      const me = myName().toLowerCase();
+      muts.forEach((m) => m.addedNodes.forEach((node) => {
+        var _a, _b, _c;
+        if (node.nodeType !== 1) return;
+        const isMention = ((_a = node.classList) == null ? void 0 : _a.contains("nick-highlight")) || me && node.textContent && node.textContent.toLowerCase().includes("@" + me);
+        if (!isMention) return;
+        const name = ((_c = (_b = node.querySelector(".username")) == null ? void 0 : _b.textContent) == null ? void 0 : _c.replace(/[:\s]+$/, "").trim()) || "Mention";
+        const clone = node.cloneNode(true);
+        clone.querySelectorAll(".timestamp, .username").forEach((el) => el.remove());
+        const text = clone.textContent.replace(/^[\s:]+/, "").trim().slice(0, 180);
+        show(name, text);
+      }));
+    }).observe(buf, { childList: true });
+  }
+  function initChatFont() {
+    applyChatFontSize(getChatFontSize());
+  }
+  function initLeftZone() {
+    let hideTimer = null;
+    const THRESH = 120;
+    const scheduleHide = (ms) => {
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => document.body.classList.remove("sc-leftzone"), ms);
+    };
+    const reveal = (autoHideMs) => {
+      clearTimeout(hideTimer);
+      document.body.classList.add("sc-leftzone");
+      if (autoHideMs) scheduleHide(autoHideMs);
+    };
+    chromeState.leftZoneReveal = reveal;
+    if (!document.getElementById("sc-cluster-grip")) {
+      const grip = document.createElement("div");
+      grip.id = "sc-cluster-grip";
+      grip.title = "Controls";
+      grip.addEventListener("mouseenter", reveal);
+      grip.addEventListener("click", reveal);
+      document.body.appendChild(grip);
+    }
+    document.addEventListener("mousemove", (e) => {
+      if (e.clientX <= THRESH) reveal();
+      else if (document.body.classList.contains("sc-leftzone")) scheduleHide(550);
+    }, { passive: true });
+    document.addEventListener("touchstart", (e) => {
+      const x = e.touches[0] ? e.touches[0].clientX : 1e9;
+      if (x <= THRESH) {
+        reveal(3500);
+      }
+    }, { passive: true });
+  }
+  function initVertControlBand() {
+    if (document.getElementById("sc-vert-ctrl-band")) return;
+    const band = document.createElement("div");
+    band.id = "sc-vert-ctrl-band";
+    document.body.appendChild(band);
+  }
+  function initRightZone() {
+    let hideTimer = null;
+    const THRESH = 100;
+    const scheduleHide = (ms) => {
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => document.body.classList.remove("sc-rightzone"), ms);
+    };
+    const reveal = (ms) => {
+      clearTimeout(hideTimer);
+      document.body.classList.add("sc-rightzone");
+      if (ms) scheduleHide(ms);
+    };
+    chromeState.rightZoneReveal = reveal;
+    if (!document.getElementById("sc-vert-ctrl-grip")) {
+      const grip = document.createElement("div");
+      grip.id = "sc-vert-ctrl-grip";
+      grip.title = "Controls";
+      grip.addEventListener("click", () => reveal(3500));
+      document.body.appendChild(grip);
+    }
+    document.addEventListener("touchstart", (e) => {
+      var _a;
+      if (!document.body.classList.contains("sc-vertical")) return;
+      const x = (_a = e.touches[0]) == null ? void 0 : _a.clientX;
+      if (x != null && window.innerWidth - x <= THRESH) reveal(3500);
+    }, { passive: true });
+  }
+  function initVideoTapReveal() {
+    const REVEAL_MS = 4e3;
+    let scrubReleaseTimer = null;
+    const tap = document.createElement("div");
+    tap.id = "sc-video-tap";
+    tap.addEventListener("click", () => {
+      if (chromeState.topBarWake) chromeState.topBarWake();
+      if (chromeState.leftZoneReveal) chromeState.leftZoneReveal(REVEAL_MS);
+      if (chromeState.rightZoneReveal) chromeState.rightZoneReveal(REVEAL_MS);
+      holdScrubber(true);
+      clearTimeout(scrubReleaseTimer);
+      scrubReleaseTimer = setTimeout(() => holdScrubber(false), REVEAL_MS);
+    });
+    document.body.appendChild(tap);
+  }
+
+  // src/chrome/buttons.js
+  function initDesyncButton() {
+    const btn = document.createElement("button");
+    btn.id = "sc-desync-btn";
+    btn.textContent = "⟳";
+    btn.title = "Free watch — click to watch freely, click again to re-sync";
+    btn.dataset.tvLabel = "Free Watch";
+    document.body.appendChild(btn);
+    let desynced = false;
+    let savedListeners = null;
+    const getMediaUpdateListeners = () => {
+      var _a, _b;
+      const key = "$mediaUpdate";
+      if ((_a = socket._callbacks) == null ? void 0 : _a[key]) return { store: "_callbacks", key };
+      if ((_b = socket._events) == null ? void 0 : _b.mediaUpdate) return { store: "_events", key: "mediaUpdate" };
+      return null;
+    };
+    const freezeSync = () => {
+      var _a;
+      const loc = getMediaUpdateListeners();
+      if (!loc) {
+        console.warn("[CyTube SC] Could not find mediaUpdate listeners to freeze");
+        return;
+      }
+      if (loc.store === "_callbacks") {
+        savedListeners = socket._callbacks[loc.key].slice();
+        socket._callbacks[loc.key] = [];
+      } else {
+        savedListeners = socket._events[loc.key];
+        delete socket._events[loc.key];
+      }
+      console.log("[CyTube SC] Sync frozen — removed", (_a = savedListeners == null ? void 0 : savedListeners.length) != null ? _a : 1, "mediaUpdate listener(s)");
+    };
+    const thawSync = () => {
+      if (!savedListeners) return;
+      const loc = getMediaUpdateListeners();
+      if ((loc == null ? void 0 : loc.store) === "_callbacks") {
+        socket._callbacks[loc.key] = savedListeners;
+      } else {
+        socket._events = socket._events || {};
+        socket._events["mediaUpdate"] = savedListeners;
+      }
+      savedListeners = null;
+      console.log("[CyTube SC] Sync restored");
+      if (typeof socket !== "undefined" && socket) {
+        socket.emit("playerReady");
+      }
+    };
+    btn.addEventListener("click", () => {
+      if (typeof socket === "undefined" || !socket) return;
+      desynced = !desynced;
+      if (desynced) {
+        freezeSync();
+        btn.classList.add("sc-desync-active");
+        btn.title = "Free watch ON — click to re-sync";
+      } else {
+        thawSync();
+        btn.classList.remove("sc-desync-active");
+        btn.title = "Free watch — click to watch freely";
+      }
+    });
+  }
+  function addFloatingButtons() {
+    if (document.getElementById("fs-toggle-btn")) return;
+    const fsBtn = document.createElement("button");
+    fsBtn.id = "fs-toggle-btn";
+    fsBtn.textContent = "⛶";
+    fsBtn.title = "Toggle Fullscreen";
+    fsBtn.addEventListener("click", () => {
+      document.fullscreenElement ? document.exitFullscreen().catch(() => {
+      }) : document.documentElement.requestFullscreen().catch(() => {
+      });
+    });
+    document.body.appendChild(fsBtn);
+    document.addEventListener("fullscreenchange", () => {
+      fsBtn.style.display = document.fullscreenElement ? "none" : "";
+    });
+  }
+  function addCastButton() {
+    let onTv = false;
+    try {
+      onTv = !!(window.CytubeNative && CytubeNative.isTv && CytubeNative.isTv());
+    } catch (e) {
+    }
+    if (onTv) return;
+    if (document.getElementById("sc-cast-btn")) return;
+    const btn = document.createElement("button");
+    btn.id = "sc-cast-btn";
+    btn.type = "button";
+    btn.title = "Cast to TV";
+    btn.dataset.tvLabel = "Cast";
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11zm20-7H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>';
+    btn.addEventListener("click", function() {
+      try {
+        if (window.CytubeNative && CytubeNative.startCasting) CytubeNative.startCasting();
+      } catch (e) {
+      }
+    });
+    document.body.appendChild(btn);
+  }
+
   // src/native.js
   var _scHttpCbs = {};
   window.__scHttpResolve = function(id, res) {
@@ -861,15 +1347,6 @@
       return null;
     }
   }
-
-  // src/tvdetect.js
-  var isTv = function() {
-    try {
-      if (window.CytubeNative && typeof CytubeNative.isTv === "function") return !!CytubeNative.isTv();
-    } catch (e) {
-    }
-    return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
-  }();
 
   // src/metadata/tmdb.js
   var LINK_DEFS = [
@@ -3916,20 +4393,6 @@
       clearTimeout(_couchIdleTimer);
       _couchIdleTimer = setTimeout(couchTypingOff, 1e4);
     }
-    function getChatFontSize() {
-      const v = parseInt(getKey(LS_CHAT_FONT), 10);
-      if (Number.isFinite(v) && v >= 10 && v <= 32) return v;
-      return document.body && document.body.classList.contains("sc-tv") ? 18 : 14;
-    }
-    function applyChatFontSize(px) {
-      const buf = document.getElementById("messagebuffer");
-      if (buf) buf.style.setProperty("font-size", px + "px", "important");
-      const ta = document.getElementById("sc-chat-textarea");
-      if (ta) {
-        const overlay = document.body && document.body.classList.contains("sc-chat-overlay");
-        ta.style.setProperty("font-size", (overlay ? 13 : px) + "px", "important");
-      }
-    }
     const LS_NOKEYBOARD = "sc_no_soft_keyboard";
     function softKeyboardDisabled() {
       const v = getKey(LS_NOKEYBOARD);
@@ -4040,121 +4503,7 @@
       startEmoteWatcher(originalInput, textarea);
       return true;
     }
-    function initDesyncButton() {
-      const btn = document.createElement("button");
-      btn.id = "sc-desync-btn";
-      btn.textContent = "⟳";
-      btn.title = "Free watch — click to watch freely, click again to re-sync";
-      btn.dataset.tvLabel = "Free Watch";
-      document.body.appendChild(btn);
-      let desynced = false;
-      let savedListeners = null;
-      const getMediaUpdateListeners = () => {
-        var _a, _b;
-        const key = "$mediaUpdate";
-        if ((_a = socket._callbacks) == null ? void 0 : _a[key]) return { store: "_callbacks", key };
-        if ((_b = socket._events) == null ? void 0 : _b.mediaUpdate) return { store: "_events", key: "mediaUpdate" };
-        return null;
-      };
-      const freezeSync = () => {
-        var _a;
-        const loc = getMediaUpdateListeners();
-        if (!loc) {
-          console.warn("[CyTube SC] Could not find mediaUpdate listeners to freeze");
-          return;
-        }
-        if (loc.store === "_callbacks") {
-          savedListeners = socket._callbacks[loc.key].slice();
-          socket._callbacks[loc.key] = [];
-        } else {
-          savedListeners = socket._events[loc.key];
-          delete socket._events[loc.key];
-        }
-        console.log("[CyTube SC] Sync frozen — removed", (_a = savedListeners == null ? void 0 : savedListeners.length) != null ? _a : 1, "mediaUpdate listener(s)");
-      };
-      const thawSync = () => {
-        if (!savedListeners) return;
-        const loc = getMediaUpdateListeners();
-        if ((loc == null ? void 0 : loc.store) === "_callbacks") {
-          socket._callbacks[loc.key] = savedListeners;
-        } else {
-          socket._events = socket._events || {};
-          socket._events["mediaUpdate"] = savedListeners;
-        }
-        savedListeners = null;
-        console.log("[CyTube SC] Sync restored");
-        if (typeof socket !== "undefined" && socket) {
-          socket.emit("playerReady");
-        }
-      };
-      btn.addEventListener("click", () => {
-        if (typeof socket === "undefined" || !socket) return;
-        desynced = !desynced;
-        if (desynced) {
-          freezeSync();
-          btn.classList.add("sc-desync-active");
-          btn.title = "Free watch ON — click to re-sync";
-        } else {
-          thawSync();
-          btn.classList.remove("sc-desync-active");
-          btn.title = "Free watch — click to watch freely";
-        }
-      });
-    }
-    function addFloatingButtons() {
-      if (document.getElementById("fs-toggle-btn")) return;
-      const fsBtn = document.createElement("button");
-      fsBtn.id = "fs-toggle-btn";
-      fsBtn.textContent = "⛶";
-      fsBtn.title = "Toggle Fullscreen";
-      fsBtn.addEventListener("click", () => {
-        document.fullscreenElement ? document.exitFullscreen().catch(() => {
-        }) : document.documentElement.requestFullscreen().catch(() => {
-        });
-      });
-      document.body.appendChild(fsBtn);
-      document.addEventListener("fullscreenchange", () => {
-        fsBtn.style.display = document.fullscreenElement ? "none" : "";
-      });
-    }
     let _tvSetFocus = null;
-    function wakeVideoControls() {
-      try {
-        const p = window.PLAYER && window.PLAYER.player;
-        if (p && typeof p.userActive === "function") {
-          p.userActive(true);
-          if (typeof p.reportUserActivity === "function") p.reportUserActivity();
-          return;
-        }
-      } catch (e) {
-      }
-      const el = document.querySelector("#videowrap .video-js");
-      if (el) {
-        el.classList.add("vjs-user-active");
-        el.classList.remove("vjs-user-inactive");
-      }
-    }
-    let _scrubHoldTimer = null;
-    function holdScrubber(on) {
-      if (on) {
-        wakeVideoControls();
-        if (!_scrubHoldTimer) _scrubHoldTimer = setInterval(wakeVideoControls, 1e3);
-        return;
-      }
-      if (!_scrubHoldTimer) return;
-      clearInterval(_scrubHoldTimer);
-      _scrubHoldTimer = null;
-      try {
-        const p = window.PLAYER && window.PLAYER.player;
-        if (p && typeof p.userActive === "function") p.userActive(false);
-      } catch (e) {
-      }
-      const el = document.querySelector("#videowrap .video-js");
-      if (el) {
-        el.classList.add("vjs-user-inactive");
-        el.classList.remove("vjs-user-active");
-      }
-    }
     function initChatTimestamps() {
       if (typeof socket === "undefined" || !socket || typeof socket.on !== "function") {
         setTimeout(initChatTimestamps, 600);
@@ -4546,28 +4895,6 @@
       btn.addEventListener("click", openSettingsModal);
       document.body.appendChild(btn);
     }
-    function addCastButton() {
-      let onTv = false;
-      try {
-        onTv = !!(window.CytubeNative && CytubeNative.isTv && CytubeNative.isTv());
-      } catch (e) {
-      }
-      if (onTv) return;
-      if (document.getElementById("sc-cast-btn")) return;
-      const btn = document.createElement("button");
-      btn.id = "sc-cast-btn";
-      btn.type = "button";
-      btn.title = "Cast to TV";
-      btn.dataset.tvLabel = "Cast";
-      btn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11zm20-7H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>';
-      btn.addEventListener("click", function() {
-        try {
-          if (window.CytubeNative && CytubeNative.startCasting) CytubeNative.startCasting();
-        } catch (e) {
-        }
-      });
-      document.body.appendChild(btn);
-    }
     function initTopBar() {
       const bar = document.createElement("div");
       bar.id = "sc-top-bar";
@@ -4950,324 +5277,6 @@
       }
     });
     _scSendObs.observe(document.body, { childList: true, subtree: true });
-    function initAmbientGlow() {
-      if (isTv) return;
-      const el = document.createElement("div");
-      el.id = "sc-ambient";
-      document.body.appendChild(el);
-      const canvas = document.createElement("canvas");
-      canvas.width = 16;
-      canvas.height = 9;
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      let disabled = false;
-      const sample = () => {
-        if (disabled) return;
-        const v = document.querySelector("#videowrap video");
-        if (!v || v.paused || v.readyState < 2 || !v.videoWidth) return;
-        try {
-          ctx.drawImage(v, 0, 0, 16, 9);
-          const d = ctx.getImageData(0, 0, 16, 9).data;
-          let r = 0, g = 0, b = 0, n = 0;
-          for (let i = 0; i < d.length; i += 4) {
-            r += d[i];
-            g += d[i + 1];
-            b += d[i + 2];
-            n++;
-          }
-          r = Math.round(r / n);
-          g = Math.round(g / n);
-          b = Math.round(b / n);
-          const max = Math.max(r, g, b) || 1;
-          const boost = (c) => Math.min(255, Math.round(c * (1 + c / max * 0.35)));
-          r = boost(r);
-          g = boost(g);
-          b = boost(b);
-          document.documentElement.style.setProperty("--sc-ambient-color", `rgba(${r},${g},${b},0.5)`);
-          document.documentElement.style.setProperty("--np-accent", `rgb(${Math.min(255, r + 40)},${Math.min(255, g + 40)},${Math.min(255, b + 40)})`);
-        } catch (e) {
-          disabled = true;
-          document.body.classList.add("sc-ambient-off");
-        }
-      };
-      setInterval(sample, 2500);
-    }
-    function initChromeAutohide() {
-      if (!isTv) return;
-      let timer = null;
-      const hide = () => document.body.classList.add("sc-chrome-hidden");
-      const show = () => {
-        document.body.classList.remove("sc-chrome-hidden");
-        if (typeof chromeState.topBarWake === "function") chromeState.topBarWake();
-        clearTimeout(timer);
-        timer = setTimeout(hide, 4e3);
-      };
-      ["mousemove", "keydown", "click", "touchstart", "wheel"].forEach((ev) => document.addEventListener(ev, show, { passive: true }));
-      chromeState.chromeWake = show;
-      timer = setTimeout(hide, 4e3);
-    }
-    const _CHAT_MODES = isTv ? ["sidebar", "overlay", "hidden"] : ["sidebar", "overlay", "hidden", "chatonly"];
-    const _CHAT_MODE_ICONS = { sidebar: "▐", overlay: "▣", hidden: "⊠", chatonly: "☰" };
-    const _CHAT_MODE_LABELS = { sidebar: "Sidebar", overlay: "Overlay", hidden: "Hidden", chatonly: "Chat Only" };
-    let _chatOnlyTimer = null, _inChatOnly = false;
-    function _coStopMedia() {
-      try {
-        const vid = document.querySelector("#videowrap video");
-        if (vid) {
-          vid.muted = true;
-          if (!vid.paused) vid.pause();
-        }
-      } catch (e) {
-      }
-      try {
-        const p = window.PLAYER && window.PLAYER.player;
-        if (p) {
-          if (typeof p.pauseVideo === "function") p.pauseVideo();
-          else if (typeof p.pause === "function") {
-            try {
-              p.pause();
-            } catch (e) {
-            }
-          }
-          if (typeof p.mute === "function") p.mute();
-          else if (typeof p.muted === "function") p.muted(true);
-        }
-      } catch (e) {
-      }
-    }
-    function enterChatOnly() {
-      _inChatOnly = true;
-      _coStopMedia();
-      clearInterval(_chatOnlyTimer);
-      _chatOnlyTimer = setInterval(_coStopMedia, 1e3);
-    }
-    function exitChatOnly() {
-      if (!_inChatOnly) return;
-      _inChatOnly = false;
-      clearInterval(_chatOnlyTimer);
-      _chatOnlyTimer = null;
-      try {
-        const vid = document.querySelector("#videowrap video");
-        if (vid) vid.muted = false;
-      } catch (e) {
-      }
-      try {
-        const p = window.PLAYER && window.PLAYER.player;
-        if (p) {
-          if (typeof p.unMute === "function") p.unMute();
-          else if (typeof p.muted === "function") p.muted(false);
-          if (typeof p.playVideo === "function") p.playVideo();
-          else if (typeof p.play === "function") {
-            try {
-              p.play();
-            } catch (e) {
-            }
-          }
-        }
-      } catch (e) {
-      }
-    }
-    function applyChatMode(mode) {
-      _CHAT_MODES.forEach((m) => document.body.classList.toggle("sc-chat-" + m, m === mode));
-      try {
-        localStorage.setItem("sc_chat_mode", mode);
-      } catch (e) {
-      }
-      if (mode === "chatonly") enterChatOnly();
-      else exitChatOnly();
-      const btn = document.getElementById("sc-chatmode-btn");
-      if (btn) {
-        btn.textContent = _CHAT_MODE_ICONS[mode] || "▐";
-        const label = _CHAT_MODE_LABELS[mode] || mode;
-        btn.title = "Chat: " + label + " (press C)";
-        btn.dataset.tvLabel = "Chat: " + label;
-      }
-      const colBtn = document.getElementById("sc-chat-collapse-btn");
-      if (colBtn) colBtn.textContent = mode === "hidden" ? "‹" : "›";
-      applyChatFontSize(getChatFontSize());
-      const buf = document.getElementById("messagebuffer");
-      if (buf) {
-        const toBottom = () => {
-          buf.scrollTop = buf.scrollHeight;
-        };
-        requestAnimationFrame(() => requestAnimationFrame(toBottom));
-        [120, 320, 600].forEach((ms) => setTimeout(toBottom, ms));
-      }
-    }
-    function cycleChatMode() {
-      let cur = "sidebar";
-      try {
-        cur = localStorage.getItem("sc_chat_mode") || "sidebar";
-      } catch (e) {
-      }
-      applyChatMode(_CHAT_MODES[(_CHAT_MODES.indexOf(cur) + 1) % _CHAT_MODES.length]);
-    }
-    function initChatModes() {
-      let saved = "sidebar";
-      try {
-        saved = localStorage.getItem("sc_chat_mode") || "sidebar";
-      } catch (e) {
-      }
-      if (!_CHAT_MODES.includes(saved)) saved = "sidebar";
-      if (!document.getElementById("sc-chatmode-btn")) {
-        const btn = document.createElement("button");
-        btn.id = "sc-chatmode-btn";
-        btn.type = "button";
-        btn.title = "Cycle chat layout (press C)";
-        btn.addEventListener("click", cycleChatMode);
-        document.body.appendChild(btn);
-      }
-      applyChatMode(saved);
-      document.addEventListener("keydown", (e) => {
-        if (e.key !== "c" && e.key !== "C") return;
-        const t = e.target;
-        if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
-        cycleChatMode();
-      });
-    }
-    function initNewMessagePill() {
-      const buf = document.getElementById("messagebuffer");
-      if (!buf) return;
-      const pill = document.createElement("div");
-      pill.id = "sc-newmsg-pill";
-      pill.textContent = "↓ New messages";
-      document.body.appendChild(pill);
-      const nearBottom = () => buf.scrollHeight - buf.scrollTop - buf.clientHeight < 80;
-      const toBottom = () => {
-        buf.scrollTop = buf.scrollHeight;
-        pill.classList.remove("sc-show");
-      };
-      pill.addEventListener("click", toBottom);
-      buf.addEventListener("scroll", () => {
-        if (nearBottom()) pill.classList.remove("sc-show");
-      }, { passive: true });
-      new MutationObserver(() => {
-        if (nearBottom()) buf.scrollTop = buf.scrollHeight;
-        else pill.classList.add("sc-show");
-      }).observe(buf, { childList: true });
-    }
-    function initMentionToast() {
-      const buf = document.getElementById("messagebuffer");
-      if (!buf) return;
-      const myName = () => {
-        try {
-          return window.CLIENT && CLIENT.name ? String(CLIENT.name) : "";
-        } catch (e) {
-          return "";
-        }
-      };
-      let toast = null, toastTimer = null;
-      const show = (name, text) => {
-        if (!toast) {
-          toast = document.createElement("div");
-          toast.id = "sc-mention-toast";
-          toast.addEventListener("click", () => toast.classList.remove("sc-show"));
-          document.body.appendChild(toast);
-        }
-        toast.innerHTML = `<span class="sc-mt-name"></span><span class="sc-mt-text"></span>`;
-        toast.querySelector(".sc-mt-name").textContent = name + ":";
-        toast.querySelector(".sc-mt-text").textContent = " " + text;
-        toast.classList.add("sc-show");
-        clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => toast.classList.remove("sc-show"), 6e3);
-      };
-      new MutationObserver((muts) => {
-        const me = myName().toLowerCase();
-        muts.forEach((m) => m.addedNodes.forEach((node) => {
-          var _a, _b, _c;
-          if (node.nodeType !== 1) return;
-          const isMention = ((_a = node.classList) == null ? void 0 : _a.contains("nick-highlight")) || me && node.textContent && node.textContent.toLowerCase().includes("@" + me);
-          if (!isMention) return;
-          const name = ((_c = (_b = node.querySelector(".username")) == null ? void 0 : _b.textContent) == null ? void 0 : _c.replace(/[:\s]+$/, "").trim()) || "Mention";
-          const clone = node.cloneNode(true);
-          clone.querySelectorAll(".timestamp, .username").forEach((el) => el.remove());
-          const text = clone.textContent.replace(/^[\s:]+/, "").trim().slice(0, 180);
-          show(name, text);
-        }));
-      }).observe(buf, { childList: true });
-    }
-    function initChatFont() {
-      applyChatFontSize(getChatFontSize());
-    }
-    function initLeftZone() {
-      let hideTimer = null;
-      const THRESH = 120;
-      const scheduleHide = (ms) => {
-        clearTimeout(hideTimer);
-        hideTimer = setTimeout(() => document.body.classList.remove("sc-leftzone"), ms);
-      };
-      const reveal = (autoHideMs) => {
-        clearTimeout(hideTimer);
-        document.body.classList.add("sc-leftzone");
-        if (autoHideMs) scheduleHide(autoHideMs);
-      };
-      chromeState.leftZoneReveal = reveal;
-      if (!document.getElementById("sc-cluster-grip")) {
-        const grip = document.createElement("div");
-        grip.id = "sc-cluster-grip";
-        grip.title = "Controls";
-        grip.addEventListener("mouseenter", reveal);
-        grip.addEventListener("click", reveal);
-        document.body.appendChild(grip);
-      }
-      document.addEventListener("mousemove", (e) => {
-        if (e.clientX <= THRESH) reveal();
-        else if (document.body.classList.contains("sc-leftzone")) scheduleHide(550);
-      }, { passive: true });
-      document.addEventListener("touchstart", (e) => {
-        const x = e.touches[0] ? e.touches[0].clientX : 1e9;
-        if (x <= THRESH) {
-          reveal(3500);
-        }
-      }, { passive: true });
-    }
-    function initVertControlBand() {
-      if (document.getElementById("sc-vert-ctrl-band")) return;
-      const band = document.createElement("div");
-      band.id = "sc-vert-ctrl-band";
-      document.body.appendChild(band);
-    }
-    function initRightZone() {
-      let hideTimer = null;
-      const THRESH = 100;
-      const scheduleHide = (ms) => {
-        clearTimeout(hideTimer);
-        hideTimer = setTimeout(() => document.body.classList.remove("sc-rightzone"), ms);
-      };
-      const reveal = (ms) => {
-        clearTimeout(hideTimer);
-        document.body.classList.add("sc-rightzone");
-        if (ms) scheduleHide(ms);
-      };
-      chromeState.rightZoneReveal = reveal;
-      if (!document.getElementById("sc-vert-ctrl-grip")) {
-        const grip = document.createElement("div");
-        grip.id = "sc-vert-ctrl-grip";
-        grip.title = "Controls";
-        grip.addEventListener("click", () => reveal(3500));
-        document.body.appendChild(grip);
-      }
-      document.addEventListener("touchstart", (e) => {
-        var _a;
-        if (!document.body.classList.contains("sc-vertical")) return;
-        const x = (_a = e.touches[0]) == null ? void 0 : _a.clientX;
-        if (x != null && window.innerWidth - x <= THRESH) reveal(3500);
-      }, { passive: true });
-    }
-    function initVideoTapReveal() {
-      const REVEAL_MS = 4e3;
-      let scrubReleaseTimer = null;
-      const tap = document.createElement("div");
-      tap.id = "sc-video-tap";
-      tap.addEventListener("click", () => {
-        if (chromeState.topBarWake) chromeState.topBarWake();
-        if (chromeState.leftZoneReveal) chromeState.leftZoneReveal(REVEAL_MS);
-        if (chromeState.rightZoneReveal) chromeState.rightZoneReveal(REVEAL_MS);
-        holdScrubber(true);
-        clearTimeout(scrubReleaseTimer);
-        scrubReleaseTimer = setTimeout(() => holdScrubber(false), REVEAL_MS);
-      });
-      document.body.appendChild(tap);
-    }
     function initCinematicChat() {
       [initAmbientGlow, initChromeAutohide, initChatModes, initNewMessagePill, initMentionToast, initChatFont, initLeftZone, initVideoTapReveal, initVertControlBand, initRightZone, applyCouchMode, applyWatchAlong].forEach((fn) => {
         try {
