@@ -80,6 +80,87 @@
     });
   }
 
+  // src/update.js
+  var LS_UPDATE_CACHE = "sc_update_cache";
+  var GH_RELEASES_API = "https://api.github.com/repos/spudzareneat/grindhouse-tv/releases/latest";
+  var GH_RELEASES_PAGE = "https://github.com/spudzareneat/grindhouse-tv/releases/latest";
+  var _updateInfo = null;
+  var _pulsedThisSession = false;
+  var _highlightRetired = false;
+  function _appVersion() {
+    try {
+      if (window.CytubeNative && CytubeNative.appVersion) return String(CytubeNative.appVersion() || "");
+    } catch (e) {
+    }
+    return "";
+  }
+  function _verTuple(s) {
+    const m = String(s || "").match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+    return m ? [+m[1] || 0, +m[2] || 0, +m[3] || 0] : [0, 0, 0];
+  }
+  function _verNewer(a, b) {
+    const x = _verTuple(a), y = _verTuple(b);
+    for (let i = 0; i < 3; i++) {
+      if (x[i] !== y[i]) return x[i] > y[i];
+    }
+    return false;
+  }
+  function _markUpdateAvailable(on) {
+    const btn = document.getElementById("sc-settings-btn");
+    if (!btn) return;
+    if (!on) {
+      btn.classList.remove("sc-has-update", "sc-has-update-pulse");
+      return;
+    }
+    if (_highlightRetired) return;
+    btn.classList.add("sc-has-update");
+    if (!_pulsedThisSession) {
+      _pulsedThisSession = true;
+      btn.classList.add("sc-has-update-pulse");
+      setTimeout(() => {
+        _highlightRetired = true;
+        const b = document.getElementById("sc-settings-btn");
+        if (b) b.classList.remove("sc-has-update", "sc-has-update-pulse");
+      }, 3e4);
+    }
+  }
+  async function checkForUpdate(force) {
+    const current = _appVersion();
+    if (!force) {
+      try {
+        const c = JSON.parse(localStorage.getItem(LS_UPDATE_CACHE) || "null");
+        if (c && c.ts && Date.now() - c.ts < 6 * 3600 * 1e3) {
+          _updateInfo = { available: _verNewer(c.tag, current), current, latest: c.tag, notes: c.notes || "", url: c.url || GH_RELEASES_PAGE };
+          _markUpdateAvailable(_updateInfo.available);
+          return _updateInfo;
+        }
+      } catch (e) {
+      }
+    }
+    const res = await nativeHttpGet(GH_RELEASES_API, {
+      "User-Agent": "GrindhouseTV-UpdateCheck",
+      "Accept": "application/vnd.github+json"
+    });
+    if (!res || res.status < 200 || res.status >= 300) throw new Error("release lookup failed (" + (res && res.status) + ")");
+    const rel = JSON.parse(res.body || "{}");
+    const tag = rel.tag_name || rel.name || "";
+    const notes = rel.body || "";
+    const url = rel.html_url || GH_RELEASES_PAGE;
+    try {
+      localStorage.setItem(LS_UPDATE_CACHE, JSON.stringify({ ts: Date.now(), tag, notes, url }));
+    } catch (e) {
+    }
+    _updateInfo = { available: _verNewer(tag, current), current, latest: tag, notes, url };
+    _markUpdateAvailable(_updateInfo.available);
+    return _updateInfo;
+  }
+  function initUpdateCheck() {
+    setTimeout(() => {
+      checkForUpdate(false).catch(() => {
+      });
+    }, 4e3);
+  }
+
   // src/styles/base.css
   var base_default = `
             /* ===== SHARED HIDDEN ELEMENTS ===== */
@@ -2950,85 +3031,6 @@
         console.warn("[CyTube SC] Kill count DB failed to load:", e);
       }
       return killCountDb;
-    }
-    const LS_UPDATE_CACHE = "sc_update_cache";
-    const GH_RELEASES_API = "https://api.github.com/repos/spudzareneat/grindhouse-tv/releases/latest";
-    const GH_RELEASES_PAGE = "https://github.com/spudzareneat/grindhouse-tv/releases/latest";
-    let _updateInfo = null;
-    let _pulsedThisSession = false;
-    let _highlightRetired = false;
-    function _appVersion() {
-      try {
-        if (window.CytubeNative && CytubeNative.appVersion) return String(CytubeNative.appVersion() || "");
-      } catch (e) {
-      }
-      return "";
-    }
-    function _verTuple(s) {
-      const m = String(s || "").match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
-      return m ? [+m[1] || 0, +m[2] || 0, +m[3] || 0] : [0, 0, 0];
-    }
-    function _verNewer(a, b) {
-      const x = _verTuple(a), y = _verTuple(b);
-      for (let i = 0; i < 3; i++) {
-        if (x[i] !== y[i]) return x[i] > y[i];
-      }
-      return false;
-    }
-    function _markUpdateAvailable(on) {
-      const btn = document.getElementById("sc-settings-btn");
-      if (!btn) return;
-      if (!on) {
-        btn.classList.remove("sc-has-update", "sc-has-update-pulse");
-        return;
-      }
-      if (_highlightRetired) return;
-      btn.classList.add("sc-has-update");
-      if (!_pulsedThisSession) {
-        _pulsedThisSession = true;
-        btn.classList.add("sc-has-update-pulse");
-        setTimeout(() => {
-          _highlightRetired = true;
-          const b = document.getElementById("sc-settings-btn");
-          if (b) b.classList.remove("sc-has-update", "sc-has-update-pulse");
-        }, 3e4);
-      }
-    }
-    async function checkForUpdate(force) {
-      const current = _appVersion();
-      if (!force) {
-        try {
-          const c = JSON.parse(localStorage.getItem(LS_UPDATE_CACHE) || "null");
-          if (c && c.ts && Date.now() - c.ts < 6 * 3600 * 1e3) {
-            _updateInfo = { available: _verNewer(c.tag, current), current, latest: c.tag, notes: c.notes || "", url: c.url || GH_RELEASES_PAGE };
-            _markUpdateAvailable(_updateInfo.available);
-            return _updateInfo;
-          }
-        } catch (e) {
-        }
-      }
-      const res = await nativeHttpGet(GH_RELEASES_API, {
-        "User-Agent": "GrindhouseTV-UpdateCheck",
-        "Accept": "application/vnd.github+json"
-      });
-      if (!res || res.status < 200 || res.status >= 300) throw new Error("release lookup failed (" + (res && res.status) + ")");
-      const rel = JSON.parse(res.body || "{}");
-      const tag = rel.tag_name || rel.name || "";
-      const notes = rel.body || "";
-      const url = rel.html_url || GH_RELEASES_PAGE;
-      try {
-        localStorage.setItem(LS_UPDATE_CACHE, JSON.stringify({ ts: Date.now(), tag, notes, url }));
-      } catch (e) {
-      }
-      _updateInfo = { available: _verNewer(tag, current), current, latest: tag, notes, url };
-      _markUpdateAvailable(_updateInfo.available);
-      return _updateInfo;
-    }
-    function initUpdateCheck() {
-      setTimeout(() => {
-        checkForUpdate(false).catch(() => {
-        });
-      }, 4e3);
     }
     function initGoogleDrive() {
       const ITAG_QMAP = { 37: 1080, 46: 1080, 22: 720, 45: 720, 59: 480, 44: 480, 35: 480, 18: 360, 43: 360, 34: 360 };
