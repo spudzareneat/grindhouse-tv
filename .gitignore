@@ -24,3 +24,6 @@ keystore.properties
 
 # Scratch / working files (source art before it's resized into res or assets)
 /tmp
+
+# Claude Code worktrees / session scaffolding
+/.claude/
