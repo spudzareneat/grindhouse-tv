@@ -1,20 +1,5 @@
 /* GENERATED FILE — do not edit. Source: web/src/**. Rebuild: cd web && npm run bundle */
 (() => {
-  // src/parse.js
-  function parseMovieFilename(raw) {
-    let s = raw.replace(/\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|divx|xvid|ogv)$/i, "");
-    let year = null;
-    const yearMatch = s.match(/[\[(](\d{4})[\])]/);
-    if (yearMatch) {
-      year = yearMatch[1];
-      s = s.slice(0, yearMatch.index);
-    }
-    s = s.replace(/[._]+/g, " ");
-    s = s.replace(/[\[(][^\])]*/g, "").replace(/[\])]/, "");
-    s = s.replace(/\s+/g, " ").trim();
-    return { title: s, year };
-  }
-
   // src/readability.js
   function detectReadabilityIssues(text) {
     const issues = [];
@@ -641,6 +626,281 @@
     };
     bindTitle();
     new MutationObserver(bindTitle).observe(document.body, { childList: true, subtree: true });
+  }
+
+  // src/parse.js
+  function parseMovieFilename(raw) {
+    let s = raw.replace(/\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|divx|xvid|ogv)$/i, "");
+    let year = null;
+    const yearMatch = s.match(/[\[(](\d{4})[\])]/);
+    if (yearMatch) {
+      year = yearMatch[1];
+      s = s.slice(0, yearMatch.index);
+    }
+    s = s.replace(/[._]+/g, " ");
+    s = s.replace(/[\[(][^\])]*/g, "").replace(/[\])]/, "");
+    s = s.replace(/\s+/g, " ").trim();
+    return { title: s, year };
+  }
+  var YT_NOISE = [
+    "full movie",
+    "full length movie",
+    "full length feature",
+    "full length film",
+    "full length",
+    "complete movie",
+    "complete film",
+    "the complete movie",
+    "entire movie",
+    "free movie",
+    "free film",
+    "free online",
+    "free to watch",
+    "watch online",
+    "watch free",
+    "watch now",
+    "online free",
+    "free with ads",
+    "with ads",
+    "no ads",
+    "ad free",
+    "official movie",
+    "official film",
+    "official",
+    "exclusive",
+    "premiere",
+    "world premiere",
+    "remastered",
+    "restored",
+    "colou?ri[sz]ed",
+    "subtitle[sd]?",
+    "subbed",
+    "dubbed",
+    "eng sub",
+    "hd",
+    "fhd",
+    "uhd",
+    "4k",
+    "2k",
+    "1080p",
+    "720p",
+    "480p",
+    "high definition",
+    "blu-?ray",
+    "dvd",
+    "web-?dl",
+    "uncut",
+    "extended",
+    "director.?s cut",
+    "special edition",
+    "classic movie",
+    "classic film",
+    "cult classic",
+    "b-?movie",
+    "feature film",
+    "feature",
+    "cinema",
+    "blockbuster",
+    "must watch",
+    "in english",
+    "english movie"
+  ];
+  var YT_GENRES = [
+    "action",
+    "thriller",
+    "horror",
+    "comedy",
+    "drama",
+    "sci-?fi",
+    "science fiction",
+    "western",
+    "romance",
+    "crime",
+    "mystery",
+    "adventure",
+    "fantasy",
+    "war",
+    "noir",
+    "slasher",
+    "martial arts",
+    "kung fu",
+    "documentary",
+    "family",
+    "musical",
+    "animation"
+  ];
+  function parseYouTubeTitle(raw) {
+    let s = " " + raw + " ";
+    let year = null;
+    const ym = s.match(/\b(19\d{2}|20\d{2})\b/);
+    if (ym) year = ym[1];
+    s = s.replace(/[\[({][^\])}]*[\])}]/g, " ");
+    if (year) s = s.replace(new RegExp("\\b" + year + "\\b", "g"), " ");
+    [...YT_NOISE, ...YT_GENRES].forEach((n) => {
+      s = s.replace(new RegExp("\\b" + n + "\\b", "gi"), " ");
+    });
+    s = s.replace(/[^\w\s&':!.,-]/g, " ");
+    const segs = s.split(/\s[|–—•:_-]+\s/).map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length >= 2);
+    let title = segs.sort(
+      (a, b) => (b.match(/[a-z]/gi) || []).length - (a.match(/[a-z]/gi) || []).length
+    )[0] || s;
+    title = title.replace(/\s+/g, " ").replace(/^[\s'":.,-]+|[\s'":.,-]+$/g, "").trim();
+    return { title, year };
+  }
+
+  // src/titleinject.js
+  function isYouTubeMedia() {
+    try {
+      const p = window.PLAYER || window.player;
+      if (p && p.type === "yt") return true;
+      if (p && p.mediaType === "yt") return true;
+    } catch (e) {
+    }
+    if (document.querySelector('#ytapiplayer iframe[src*="youtube.com"]')) return true;
+    if (document.querySelector('#ytapiplayer[src*="youtube.com"]')) return true;
+    return false;
+  }
+  function injectMovieLinks(titleEl) {
+    const rawTitle = titleEl.textContent.trim().replace(/^currently\s+playing[:\s]*/i, "").replace(/^now\s+playing[:\s]*/i, "").trim();
+    if (!rawTitle || rawTitle === movieState.lastMovieTitle || rawTitle.length < 2) return;
+    movieState.lastMovieTitle = rawTitle;
+    ["sc-movie-links", "sc-movie-stats", "sc-trivia-btn"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.remove();
+    });
+    npState.data = null;
+    const isYt = isYouTubeMedia();
+    let ytSeconds = 0;
+    if (isYt) {
+      ytSeconds = getCurrentMediaSeconds();
+      if (ytSeconds < 3600) return;
+    }
+    const { title, year } = isYt ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
+    if (!title || title.length < 2) return;
+    if (movieLinksEnabled()) {
+      const linkRow = document.createElement("span");
+      linkRow.id = "sc-movie-links";
+      linkRow.innerHTML = '<span class="sc-movie-loading">…</span>';
+      titleEl.parentElement.insertBefore(linkRow, titleEl.nextSibling);
+    }
+    lookupMovie(title, year).then((movieData) => {
+      const { links, killCount, parentalGuide, cleanTitle, cleanYear } = movieData;
+      if (isYt) {
+        if (!cleanTitle) {
+          const r = document.getElementById("sc-movie-links");
+          if (r) r.remove();
+          return;
+        }
+        if (movieData.runtime && ytSeconds) {
+          const diff = Math.abs(movieData.runtime - ytSeconds / 60);
+          if (diff > 30) {
+            const r = document.getElementById("sc-movie-links");
+            if (r) r.remove();
+            return;
+          }
+        }
+      }
+      npState.data = movieData;
+      if (_npCardEnabled() && npState.introDone) showNowPlayingCard(movieData, { autoHide: true });
+      if (cleanTitle && titleEl) {
+        const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : "");
+        let span = titleEl.querySelector(":scope > #sc-title-text") || document.getElementById("sc-title-text");
+        if (!span) {
+          span = document.createElement("span");
+          span.id = "sc-title-text";
+          span.style.cursor = "pointer";
+          span.title = "Movie info";
+          span.dataset.noTvCaption = "1";
+          span.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
+          });
+          const textNode = [...titleEl.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
+          if (textNode) textNode.parentNode.replaceChild(span, textNode);
+          else titleEl.insertBefore(span, titleEl.firstChild);
+        }
+        span.textContent = newText;
+      }
+      const currentRow = document.getElementById("sc-movie-links");
+      if (currentRow) {
+        currentRow.innerHTML = "";
+        let anyLink = false;
+        LINK_DEFS.forEach(({ key, label, color, fg, char }) => {
+          const url = links[key];
+          if (!url) return;
+          anyLink = true;
+          const a = document.createElement("a");
+          a.href = url;
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          a.title = `${label}: "${title}"${year ? ` (${year})` : ""}`;
+          a.className = "sc-movie-link";
+          a.style.background = color;
+          a.style.color = fg;
+          a.textContent = char;
+          currentRow.appendChild(a);
+        });
+        if (!anyLink) currentRow.remove();
+      }
+      const statParts = [];
+      if (killCount !== null) statParts.push(`💀 ${killCount} on-screen kills`);
+      const old = document.getElementById("sc-movie-stats");
+      if (old) old.remove();
+      if (statParts.length) {
+        const statsEl = document.createElement("div");
+        statsEl.id = "sc-movie-stats";
+        statsEl.textContent = statParts.join("  ·  ");
+        document.body.appendChild(statsEl);
+        setTimeout(() => {
+          if (statsEl.parentNode) statsEl.remove();
+        }, 12e3);
+      }
+    });
+  }
+  var _PLAYING_RE = /^\s*(currently|now)\s+playing\s*:?\s*/i;
+  function stripPlayingPrefix(el) {
+    el.querySelectorAll("strong, b, span, .label").forEach((c) => {
+      if (c.childElementCount === 0 && /^\s*(currently|now)\s+playing\s*:?\s*$/i.test(c.textContent)) {
+        c.style.display = "none";
+      }
+    });
+    el.childNodes.forEach((n) => {
+      if (n.nodeType === 3 && _PLAYING_RE.test(n.textContent)) {
+        n.textContent = n.textContent.replace(_PLAYING_RE, "");
+      }
+    });
+  }
+  function triggerTitleInject() {
+    for (const el of [
+      document.getElementById("currenttitle"),
+      document.querySelector("#videowrap-header .pull-left"),
+      document.querySelector("#videowrap-header span"),
+      document.querySelector(".video-title")
+    ]) {
+      if (el && el.textContent.trim()) {
+        stripPlayingPrefix(el);
+        injectMovieLinks(el);
+        return;
+      }
+    }
+  }
+  var _titleObsAttached = false;
+  function attachHeaderObserver() {
+    if (_titleObsAttached) return;
+    const header = document.getElementById("videowrap-header");
+    if (!header) return;
+    _titleObsAttached = true;
+    new MutationObserver(triggerTitleInject).observe(header, { childList: true, subtree: true, characterData: true });
+  }
+  function watchMovieTitle() {
+    triggerTitleInject();
+    attachHeaderObserver();
+    let tries = 0;
+    const poll = setInterval(() => {
+      attachHeaderObserver();
+      triggerTitleInject();
+      if (++tries >= 14) clearInterval(poll);
+    }, 1500);
   }
 
   // src/styles/base.css
@@ -3293,111 +3553,6 @@
         if (input.getAttribute("inputmode") !== "none") input.setAttribute("inputmode", "none");
       }
     };
-    const YT_NOISE = [
-      "full movie",
-      "full length movie",
-      "full length feature",
-      "full length film",
-      "full length",
-      "complete movie",
-      "complete film",
-      "the complete movie",
-      "entire movie",
-      "free movie",
-      "free film",
-      "free online",
-      "free to watch",
-      "watch online",
-      "watch free",
-      "watch now",
-      "online free",
-      "free with ads",
-      "with ads",
-      "no ads",
-      "ad free",
-      "official movie",
-      "official film",
-      "official",
-      "exclusive",
-      "premiere",
-      "world premiere",
-      "remastered",
-      "restored",
-      "colou?ri[sz]ed",
-      "subtitle[sd]?",
-      "subbed",
-      "dubbed",
-      "eng sub",
-      "hd",
-      "fhd",
-      "uhd",
-      "4k",
-      "2k",
-      "1080p",
-      "720p",
-      "480p",
-      "high definition",
-      "blu-?ray",
-      "dvd",
-      "web-?dl",
-      "uncut",
-      "extended",
-      "director.?s cut",
-      "special edition",
-      "classic movie",
-      "classic film",
-      "cult classic",
-      "b-?movie",
-      "feature film",
-      "feature",
-      "cinema",
-      "blockbuster",
-      "must watch",
-      "in english",
-      "english movie"
-    ];
-    const YT_GENRES = [
-      "action",
-      "thriller",
-      "horror",
-      "comedy",
-      "drama",
-      "sci-?fi",
-      "science fiction",
-      "western",
-      "romance",
-      "crime",
-      "mystery",
-      "adventure",
-      "fantasy",
-      "war",
-      "noir",
-      "slasher",
-      "martial arts",
-      "kung fu",
-      "documentary",
-      "family",
-      "musical",
-      "animation"
-    ];
-    function parseYouTubeTitle(raw) {
-      let s = " " + raw + " ";
-      let year = null;
-      const ym = s.match(/\b(19\d{2}|20\d{2})\b/);
-      if (ym) year = ym[1];
-      s = s.replace(/[\[({][^\])}]*[\])}]/g, " ");
-      if (year) s = s.replace(new RegExp("\\b" + year + "\\b", "g"), " ");
-      [...YT_NOISE, ...YT_GENRES].forEach((n) => {
-        s = s.replace(new RegExp("\\b" + n + "\\b", "gi"), " ");
-      });
-      s = s.replace(/[^\w\s&':!.,-]/g, " ");
-      const segs = s.split(/\s[|–—•:_-]+\s/).map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length >= 2);
-      let title = segs.sort(
-        (a, b) => (b.match(/[a-z]/gi) || []).length - (a.match(/[a-z]/gi) || []).length
-      )[0] || s;
-      title = title.replace(/\s+/g, " ").replace(/^[\s'":.,-]+|[\s'":.,-]+$/g, "").trim();
-      return { title, year };
-    }
     let _tvSetFocus = null;
     function wakeVideoControls() {
       try {
@@ -3516,159 +3671,6 @@
         });
       }
       console.log("[CyTube SC] Google Drive metadata helper ready");
-    }
-    function isYouTubeMedia() {
-      try {
-        const p = window.PLAYER || window.player;
-        if (p && p.type === "yt") return true;
-        if (p && p.mediaType === "yt") return true;
-      } catch (e) {
-      }
-      if (document.querySelector('#ytapiplayer iframe[src*="youtube.com"]')) return true;
-      if (document.querySelector('#ytapiplayer[src*="youtube.com"]')) return true;
-      return false;
-    }
-    function injectMovieLinks(titleEl) {
-      const rawTitle = titleEl.textContent.trim().replace(/^currently\s+playing[:\s]*/i, "").replace(/^now\s+playing[:\s]*/i, "").trim();
-      if (!rawTitle || rawTitle === movieState.lastMovieTitle || rawTitle.length < 2) return;
-      movieState.lastMovieTitle = rawTitle;
-      ["sc-movie-links", "sc-movie-stats", "sc-trivia-btn"].forEach((id) => {
-        const el = document.getElementById(id);
-        if (el) el.remove();
-      });
-      npState.data = null;
-      const isYt = isYouTubeMedia();
-      let ytSeconds = 0;
-      if (isYt) {
-        ytSeconds = getCurrentMediaSeconds();
-        if (ytSeconds < 3600) return;
-      }
-      const { title, year } = isYt ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
-      if (!title || title.length < 2) return;
-      if (movieLinksEnabled()) {
-        const linkRow = document.createElement("span");
-        linkRow.id = "sc-movie-links";
-        linkRow.innerHTML = '<span class="sc-movie-loading">…</span>';
-        titleEl.parentElement.insertBefore(linkRow, titleEl.nextSibling);
-      }
-      lookupMovie(title, year).then((movieData) => {
-        const { links, killCount, parentalGuide, cleanTitle, cleanYear } = movieData;
-        if (isYt) {
-          if (!cleanTitle) {
-            const r = document.getElementById("sc-movie-links");
-            if (r) r.remove();
-            return;
-          }
-          if (movieData.runtime && ytSeconds) {
-            const diff = Math.abs(movieData.runtime - ytSeconds / 60);
-            if (diff > 30) {
-              const r = document.getElementById("sc-movie-links");
-              if (r) r.remove();
-              return;
-            }
-          }
-        }
-        npState.data = movieData;
-        if (_npCardEnabled() && npState.introDone) showNowPlayingCard(movieData, { autoHide: true });
-        if (cleanTitle && titleEl) {
-          const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : "");
-          let span = titleEl.querySelector(":scope > #sc-title-text") || document.getElementById("sc-title-text");
-          if (!span) {
-            span = document.createElement("span");
-            span.id = "sc-title-text";
-            span.style.cursor = "pointer";
-            span.title = "Movie info";
-            span.dataset.noTvCaption = "1";
-            span.addEventListener("click", (e) => {
-              e.stopPropagation();
-              if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
-            });
-            const textNode = [...titleEl.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
-            if (textNode) textNode.parentNode.replaceChild(span, textNode);
-            else titleEl.insertBefore(span, titleEl.firstChild);
-          }
-          span.textContent = newText;
-        }
-        const currentRow = document.getElementById("sc-movie-links");
-        if (currentRow) {
-          currentRow.innerHTML = "";
-          let anyLink = false;
-          LINK_DEFS.forEach(({ key, label, color, fg, char }) => {
-            const url = links[key];
-            if (!url) return;
-            anyLink = true;
-            const a = document.createElement("a");
-            a.href = url;
-            a.target = "_blank";
-            a.rel = "noopener noreferrer";
-            a.title = `${label}: "${title}"${year ? ` (${year})` : ""}`;
-            a.className = "sc-movie-link";
-            a.style.background = color;
-            a.style.color = fg;
-            a.textContent = char;
-            currentRow.appendChild(a);
-          });
-          if (!anyLink) currentRow.remove();
-        }
-        const statParts = [];
-        if (killCount !== null) statParts.push(`💀 ${killCount} on-screen kills`);
-        const old = document.getElementById("sc-movie-stats");
-        if (old) old.remove();
-        if (statParts.length) {
-          const statsEl = document.createElement("div");
-          statsEl.id = "sc-movie-stats";
-          statsEl.textContent = statParts.join("  ·  ");
-          document.body.appendChild(statsEl);
-          setTimeout(() => {
-            if (statsEl.parentNode) statsEl.remove();
-          }, 12e3);
-        }
-      });
-    }
-    const _PLAYING_RE = /^\s*(currently|now)\s+playing\s*:?\s*/i;
-    function stripPlayingPrefix(el) {
-      el.querySelectorAll("strong, b, span, .label").forEach((c) => {
-        if (c.childElementCount === 0 && /^\s*(currently|now)\s+playing\s*:?\s*$/i.test(c.textContent)) {
-          c.style.display = "none";
-        }
-      });
-      el.childNodes.forEach((n) => {
-        if (n.nodeType === 3 && _PLAYING_RE.test(n.textContent)) {
-          n.textContent = n.textContent.replace(_PLAYING_RE, "");
-        }
-      });
-    }
-    function triggerTitleInject() {
-      for (const el of [
-        document.getElementById("currenttitle"),
-        document.querySelector("#videowrap-header .pull-left"),
-        document.querySelector("#videowrap-header span"),
-        document.querySelector(".video-title")
-      ]) {
-        if (el && el.textContent.trim()) {
-          stripPlayingPrefix(el);
-          injectMovieLinks(el);
-          return;
-        }
-      }
-    }
-    let _titleObsAttached = false;
-    function attachHeaderObserver() {
-      if (_titleObsAttached) return;
-      const header = document.getElementById("videowrap-header");
-      if (!header) return;
-      _titleObsAttached = true;
-      new MutationObserver(triggerTitleInject).observe(header, { childList: true, subtree: true, characterData: true });
-    }
-    function watchMovieTitle() {
-      triggerTitleInject();
-      attachHeaderObserver();
-      let tries = 0;
-      const poll = setInterval(() => {
-        attachHeaderObserver();
-        triggerTitleInject();
-        if (++tries >= 14) clearInterval(poll);
-      }, 1500);
     }
     function initMediaWatcher() {
       if (typeof socket === "undefined" || !socket || typeof socket.on !== "function") {
