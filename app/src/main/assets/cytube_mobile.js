@@ -396,6 +396,20 @@
     }
   };
 
+  // src/chrome/state.js
+  var chromeState = {
+    topBarWake: null,
+    // wake fn set by initTopBar; called to un-dim the top bar
+    topBarIsOpen: false,
+    // true while the poster strip (or similar) holds the bar open
+    leftZoneReveal: null,
+    // expose so video-tap can trigger both chrome systems together
+    rightZoneReveal: null,
+    // vertical-mode right-edge drawer
+    chromeWake: null
+    // re-arms the TV chrome auto-hide (remote keys bypass DOM events)
+  };
+
   // src/usercolors.js
   function hashString(str) {
     let h = 5381;
@@ -412,6 +426,281 @@
     }
     const hue = hashString(u) * 137.508 % 360;
     return `hsl(${hue.toFixed(1)}, 72%, 70%)`;
+  }
+
+  // src/posters.js
+  function initPosterStrip() {
+    const motd = document.getElementById("motdrow");
+    if (!motd) return;
+    const imgs = [...motd.querySelectorAll("img")].filter((img) => {
+      const w = parseInt(img.getAttribute("width") || 0);
+      const h = parseInt(img.getAttribute("height") || 0);
+      return h >= 100 && w <= 200;
+    });
+    if (!imgs.length) return;
+    const strip = document.createElement("div");
+    strip.id = "sc-poster-strip";
+    let zoomEl = document.getElementById("sc-poster-zoom");
+    if (!zoomEl) {
+      zoomEl = document.createElement("img");
+      zoomEl.id = "sc-poster-zoom";
+      document.body.appendChild(zoomEl);
+    }
+    const ZOOM_H = 300;
+    const calcZoomTarget = (thumb) => {
+      const rect = thumb.getBoundingClientRect();
+      const attrW = parseInt(thumb.getAttribute("width") || 125);
+      const attrH = parseInt(thumb.getAttribute("height") || 175);
+      const zoomW = Math.round(ZOOM_H * (attrW / attrH));
+      let left = rect.left + rect.width / 2 - zoomW / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - zoomW - 8));
+      let top;
+      if (rect.top >= ZOOM_H + 8) {
+        top = rect.top - ZOOM_H;
+      } else {
+        top = rect.bottom - ZOOM_H;
+        top = Math.max(8, top);
+      }
+      return { left, top, width: zoomW, height: ZOOM_H };
+    };
+    const positionZoom = (thumb) => {
+      const rect = thumb.getBoundingClientRect();
+      const target = calcZoomTarget(thumb);
+      zoomEl.classList.remove("sc-zoom-expanded");
+      zoomEl.style.transition = "none";
+      zoomEl.style.left = rect.left + "px";
+      zoomEl.style.top = rect.top + "px";
+      zoomEl.style.width = rect.width + "px";
+      zoomEl.style.height = rect.height + "px";
+      zoomEl.style.display = "block";
+      zoomEl.getBoundingClientRect();
+      zoomEl._collapsing = false;
+      zoomEl.style.transition = "";
+      zoomEl.style.left = target.left + "px";
+      zoomEl.style.top = target.top + "px";
+      zoomEl.style.width = target.width + "px";
+      zoomEl.style.height = target.height + "px";
+      zoomEl.classList.add("sc-zoom-expanded");
+    };
+    imgs.forEach((img) => {
+      const thumb = document.createElement("img");
+      thumb.src = img.src;
+      thumb.className = "sc-poster-thumb";
+      thumb.title = img.title || img.alt || "";
+      thumb.setAttribute("width", img.getAttribute("width") || "125");
+      thumb.setAttribute("height", img.getAttribute("height") || "175");
+      thumb.addEventListener("mouseenter", () => {
+        zoomEl._collapsing = false;
+        zoomEl.src = thumb.src;
+        zoomEl._activeThumb = thumb;
+        positionZoom(thumb);
+      });
+      thumb.addEventListener("mouseleave", () => {
+        zoomEl._collapsing = true;
+        const rect = thumb.getBoundingClientRect();
+        zoomEl.classList.remove("sc-zoom-expanded");
+        zoomEl.style.left = rect.left + "px";
+        zoomEl.style.top = rect.top + "px";
+        zoomEl.style.width = rect.width + "px";
+        zoomEl.style.height = rect.height + "px";
+        const onEnd = () => {
+          zoomEl.removeEventListener("transitionend", onEnd);
+          if (zoomEl._collapsing) {
+            zoomEl.style.display = "none";
+            zoomEl.src = "";
+            zoomEl._collapsing = false;
+          }
+        };
+        zoomEl.addEventListener("transitionend", onEnd);
+      });
+      const wrap = document.createElement("a");
+      wrap.appendChild(thumb);
+      strip.appendChild(wrap);
+    });
+    document.body.appendChild(strip);
+    if (!document.body._scPosterDismiss) {
+      document.body._scPosterDismiss = true;
+      document.addEventListener("click", (e) => {
+        if (zoomEl.style.display !== "block" || zoomEl._collapsing) return;
+        if (e.target && e.target.classList && e.target.classList.contains("sc-poster-thumb")) return;
+        const active = zoomEl._activeThumb;
+        if (active) active.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
+      });
+    }
+    const toggleBtn = document.createElement("button");
+    toggleBtn.id = "sc-poster-toggle";
+    toggleBtn.textContent = "Coming Attractions";
+    toggleBtn.title = "Show/hide weekend lineup";
+    toggleBtn.dataset.noTvCaption = "1";
+    toggleBtn.addEventListener("click", () => {
+      const visible = strip.classList.toggle("sc-poster-visible");
+      toggleBtn.classList.toggle("sc-poster-toggle-active", visible);
+      chromeState.topBarIsOpen = visible;
+      if (visible && chromeState.topBarWake) {
+        chromeState.topBarWake();
+      }
+    });
+    document.body.appendChild(toggleBtn);
+  }
+  function initPollWatcher() {
+    const tryInit = () => {
+      const pollwrap = document.getElementById("pollwrap");
+      if (!pollwrap) {
+        const bodyObs = new MutationObserver(() => {
+          if (document.getElementById("pollwrap")) {
+            bodyObs.disconnect();
+            tryInit();
+          }
+        });
+        bodyObs.observe(document.body, { childList: true, subtree: true });
+        return;
+      }
+      _initPollWatcher(pollwrap);
+    };
+    tryInit();
+  }
+  function _initPollWatcher(pollwrap) {
+    const header = document.getElementById("sc-chat-header");
+    if (!header) return;
+    const btn = document.createElement("button");
+    btn.id = "sc-poll-btn";
+    btn.title = "Channel announcement / poll";
+    btn.textContent = "POLL";
+    header.appendChild(btn);
+    const panel = document.createElement("div");
+    panel.id = "sc-poll-panel";
+    panel.style.display = "none";
+    document.body.appendChild(panel);
+    let panelOpen = false;
+    const renderPanel = () => {
+      var _a, _b, _c, _d, _e;
+      const well = pollwrap.querySelector(".well.active") || pollwrap.querySelector(".well");
+      if (!well) {
+        panel.innerHTML = "";
+        return;
+      }
+      const h = ((_b = (_a = well.querySelector("h3")) == null ? void 0 : _a.textContent) == null ? void 0 : _b.trim()) || "";
+      const opts = [...well.querySelectorAll(".option")].map((o) => {
+        const btn2 = o.querySelector("button");
+        const text = o.textContent.replace((btn2 == null ? void 0 : btn2.textContent) || "", "").trim();
+        const links = [...o.querySelectorAll("a")].map(
+          (a) => `<a href="${a.href}" target="_blank" rel="noopener noreferrer">${a.textContent}</a>`
+        );
+        let html = o.innerHTML.replace(/<button[^>]*>.*?<\/button>/i, "").trim();
+        return `<div class="sc-poll-option">${html}</div>`;
+      });
+      const label = ((_d = (_c = well.querySelector(".label")) == null ? void 0 : _c.textContent) == null ? void 0 : _d.trim()) || "";
+      const author = ((_e = well.querySelector(".label")) == null ? void 0 : _e.getAttribute("title")) || "";
+      panel.innerHTML = `
+            <div class="sc-poll-header">${h}</div>
+            <div class="sc-poll-options">${opts.join("")}</div>
+            ${label ? `<div class="sc-poll-meta">${author ? author + " · " : ""}${label}</div>` : ""}
+        `;
+    };
+    const hasPollContent = () => {
+      const activeWell = pollwrap.querySelector(".well.active") || pollwrap.querySelector(".well");
+      return !!(activeWell && activeWell.textContent.trim().length > 10);
+    };
+    const updateBtn = () => {
+      const hasContent = hasPollContent();
+      btn.style.display = hasContent ? "" : "none";
+      if (!hasContent && panelOpen) {
+        panel.style.display = "none";
+        panelOpen = false;
+        btn.classList.remove("sc-poll-btn-active");
+      }
+    };
+    btn.addEventListener("click", () => {
+      panelOpen = !panelOpen;
+      if (panelOpen) {
+        renderPanel();
+        panel.style.display = "block";
+        btn.classList.add("sc-poll-btn-active");
+      } else {
+        panel.style.display = "none";
+        btn.classList.remove("sc-poll-btn-active");
+      }
+    });
+    document.addEventListener("click", (e) => {
+      if (panelOpen && !btn.contains(e.target) && !panel.contains(e.target)) {
+        panel.style.display = "none";
+        panelOpen = false;
+        btn.classList.remove("sc-poll-btn-active");
+      }
+    });
+    new MutationObserver(() => {
+      updateBtn();
+      if (panelOpen) renderPanel();
+    }).observe(pollwrap, { childList: true, subtree: true, characterData: true });
+    updateBtn();
+  }
+  function initUserCount() {
+    const header = document.getElementById("sc-chat-header");
+    if (!header) return;
+    const btn = document.createElement("button");
+    btn.id = "sc-usercount-btn";
+    header.appendChild(btn);
+    const panel = document.createElement("div");
+    panel.id = "sc-users-panel";
+    document.body.appendChild(panel);
+    let open = false;
+    const getUsers = () => {
+      const items = [...document.querySelectorAll("#userlist .userlist_item")];
+      return items.map((item) => {
+        var _a;
+        const spans = item.querySelectorAll("span");
+        const nameSpan = spans.length >= 2 ? spans[1] : spans[0];
+        return ((_a = nameSpan == null ? void 0 : nameSpan.textContent) == null ? void 0 : _a.trim()) || "";
+      }).filter(Boolean).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+    };
+    const updateCount = () => {
+      var _a, _b;
+      const cytubCount = document.getElementById("usercount");
+      const raw = (_b = (_a = cytubCount == null ? void 0 : cytubCount.textContent) == null ? void 0 : _a.match(/\d+/)) == null ? void 0 : _b[0];
+      const count = raw ? parseInt(raw) : getUsers().length;
+      btn.textContent = count + " USERS";
+    };
+    const renderPanel = () => {
+      const users = getUsers();
+      panel.innerHTML = `
+            <div class="sc-users-panel-header">${users.length} connected</div>
+            ${users.map((u) => {
+        const color = usernameToColor(u);
+        return `<div class="sc-users-panel-name" style="color:${color}">${u}</div>`;
+      }).join("")}
+        `;
+    };
+    const closePanel = () => {
+      panel.style.display = "none";
+      btn.classList.remove("sc-users-active");
+      open = false;
+    };
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      open = !open;
+      if (open) {
+        renderPanel();
+        panel.style.display = "block";
+        btn.classList.add("sc-users-active");
+      } else {
+        closePanel();
+      }
+    });
+    document.addEventListener("click", (e) => {
+      if (open && !panel.contains(e.target) && e.target !== btn) closePanel();
+    });
+    const ul = document.getElementById("userlist");
+    if (ul) {
+      new MutationObserver(() => {
+        updateCount();
+        if (open) renderPanel();
+      }).observe(ul, { childList: true, subtree: true });
+    }
+    const uc = document.getElementById("usercount");
+    if (uc) {
+      new MutationObserver(updateCount).observe(uc, { childList: true, subtree: true, characterData: true });
+    }
+    updateCount();
   }
 
   // src/native.js
@@ -4279,11 +4568,6 @@
       });
       document.body.appendChild(btn);
     }
-    let _topBarWake = null;
-    let _topBarIsOpen = false;
-    let _leftZoneReveal = null;
-    let _rightZoneReveal = null;
-    let _chromeWake = null;
     function initTopBar() {
       const bar = document.createElement("div");
       bar.id = "sc-top-bar";
@@ -4298,7 +4582,7 @@
         document.getElementById("sc-movie-links")
       ].filter(Boolean);
       const dim = () => {
-        if (_topBarIsOpen || !playing) return;
+        if (chromeState.topBarIsOpen || !playing) return;
         getDimEls().forEach((el) => el.classList.add("sc-bar-dim"));
         document.body.classList.add("sc-video-dimmed");
       };
@@ -4306,9 +4590,9 @@
         getDimEls().forEach((el) => el.classList.remove("sc-bar-dim"));
         document.body.classList.remove("sc-video-dimmed");
         clearTimeout(idleTimer);
-        if (!_topBarIsOpen && playing) idleTimer = setTimeout(dim, 3500);
+        if (!chromeState.topBarIsOpen && playing) idleTimer = setTimeout(dim, 3500);
       };
-      _topBarWake = wake;
+      chromeState.topBarWake = wake;
       const onVideoPlay = () => {
         if (playing) return;
         playing = true;
@@ -4345,211 +4629,6 @@
         wake();
       }, true);
     }
-    function initPosterStrip() {
-      const motd = document.getElementById("motdrow");
-      if (!motd) return;
-      const imgs = [...motd.querySelectorAll("img")].filter((img) => {
-        const w = parseInt(img.getAttribute("width") || 0);
-        const h = parseInt(img.getAttribute("height") || 0);
-        return h >= 100 && w <= 200;
-      });
-      if (!imgs.length) return;
-      const strip = document.createElement("div");
-      strip.id = "sc-poster-strip";
-      let zoomEl = document.getElementById("sc-poster-zoom");
-      if (!zoomEl) {
-        zoomEl = document.createElement("img");
-        zoomEl.id = "sc-poster-zoom";
-        document.body.appendChild(zoomEl);
-      }
-      const ZOOM_H = 300;
-      const calcZoomTarget = (thumb) => {
-        const rect = thumb.getBoundingClientRect();
-        const attrW = parseInt(thumb.getAttribute("width") || 125);
-        const attrH = parseInt(thumb.getAttribute("height") || 175);
-        const zoomW = Math.round(ZOOM_H * (attrW / attrH));
-        let left = rect.left + rect.width / 2 - zoomW / 2;
-        left = Math.max(8, Math.min(left, window.innerWidth - zoomW - 8));
-        let top;
-        if (rect.top >= ZOOM_H + 8) {
-          top = rect.top - ZOOM_H;
-        } else {
-          top = rect.bottom - ZOOM_H;
-          top = Math.max(8, top);
-        }
-        return { left, top, width: zoomW, height: ZOOM_H };
-      };
-      const positionZoom = (thumb) => {
-        const rect = thumb.getBoundingClientRect();
-        const target = calcZoomTarget(thumb);
-        zoomEl.classList.remove("sc-zoom-expanded");
-        zoomEl.style.transition = "none";
-        zoomEl.style.left = rect.left + "px";
-        zoomEl.style.top = rect.top + "px";
-        zoomEl.style.width = rect.width + "px";
-        zoomEl.style.height = rect.height + "px";
-        zoomEl.style.display = "block";
-        zoomEl.getBoundingClientRect();
-        zoomEl._collapsing = false;
-        zoomEl.style.transition = "";
-        zoomEl.style.left = target.left + "px";
-        zoomEl.style.top = target.top + "px";
-        zoomEl.style.width = target.width + "px";
-        zoomEl.style.height = target.height + "px";
-        zoomEl.classList.add("sc-zoom-expanded");
-      };
-      imgs.forEach((img) => {
-        const thumb = document.createElement("img");
-        thumb.src = img.src;
-        thumb.className = "sc-poster-thumb";
-        thumb.title = img.title || img.alt || "";
-        thumb.setAttribute("width", img.getAttribute("width") || "125");
-        thumb.setAttribute("height", img.getAttribute("height") || "175");
-        thumb.addEventListener("mouseenter", () => {
-          zoomEl._collapsing = false;
-          zoomEl.src = thumb.src;
-          zoomEl._activeThumb = thumb;
-          positionZoom(thumb);
-        });
-        thumb.addEventListener("mouseleave", () => {
-          zoomEl._collapsing = true;
-          const rect = thumb.getBoundingClientRect();
-          zoomEl.classList.remove("sc-zoom-expanded");
-          zoomEl.style.left = rect.left + "px";
-          zoomEl.style.top = rect.top + "px";
-          zoomEl.style.width = rect.width + "px";
-          zoomEl.style.height = rect.height + "px";
-          const onEnd = () => {
-            zoomEl.removeEventListener("transitionend", onEnd);
-            if (zoomEl._collapsing) {
-              zoomEl.style.display = "none";
-              zoomEl.src = "";
-              zoomEl._collapsing = false;
-            }
-          };
-          zoomEl.addEventListener("transitionend", onEnd);
-        });
-        const wrap = document.createElement("a");
-        wrap.appendChild(thumb);
-        strip.appendChild(wrap);
-      });
-      document.body.appendChild(strip);
-      if (!document.body._scPosterDismiss) {
-        document.body._scPosterDismiss = true;
-        document.addEventListener("click", (e) => {
-          if (zoomEl.style.display !== "block" || zoomEl._collapsing) return;
-          if (e.target && e.target.classList && e.target.classList.contains("sc-poster-thumb")) return;
-          const active = zoomEl._activeThumb;
-          if (active) active.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
-        });
-      }
-      const toggleBtn = document.createElement("button");
-      toggleBtn.id = "sc-poster-toggle";
-      toggleBtn.textContent = "Coming Attractions";
-      toggleBtn.title = "Show/hide weekend lineup";
-      toggleBtn.dataset.noTvCaption = "1";
-      toggleBtn.addEventListener("click", () => {
-        const visible = strip.classList.toggle("sc-poster-visible");
-        toggleBtn.classList.toggle("sc-poster-toggle-active", visible);
-        _topBarIsOpen = visible;
-        if (visible && _topBarWake) {
-          _topBarWake();
-        }
-      });
-      document.body.appendChild(toggleBtn);
-    }
-    function initPollWatcher() {
-      const tryInit = () => {
-        const pollwrap = document.getElementById("pollwrap");
-        if (!pollwrap) {
-          const bodyObs = new MutationObserver(() => {
-            if (document.getElementById("pollwrap")) {
-              bodyObs.disconnect();
-              tryInit();
-            }
-          });
-          bodyObs.observe(document.body, { childList: true, subtree: true });
-          return;
-        }
-        _initPollWatcher(pollwrap);
-      };
-      tryInit();
-    }
-    function _initPollWatcher(pollwrap) {
-      const header = document.getElementById("sc-chat-header");
-      if (!header) return;
-      const btn = document.createElement("button");
-      btn.id = "sc-poll-btn";
-      btn.title = "Channel announcement / poll";
-      btn.textContent = "POLL";
-      header.appendChild(btn);
-      const panel = document.createElement("div");
-      panel.id = "sc-poll-panel";
-      panel.style.display = "none";
-      document.body.appendChild(panel);
-      let panelOpen = false;
-      const renderPanel = () => {
-        var _a, _b, _c, _d, _e;
-        const well = pollwrap.querySelector(".well.active") || pollwrap.querySelector(".well");
-        if (!well) {
-          panel.innerHTML = "";
-          return;
-        }
-        const h = ((_b = (_a = well.querySelector("h3")) == null ? void 0 : _a.textContent) == null ? void 0 : _b.trim()) || "";
-        const opts = [...well.querySelectorAll(".option")].map((o) => {
-          const btn2 = o.querySelector("button");
-          const text = o.textContent.replace((btn2 == null ? void 0 : btn2.textContent) || "", "").trim();
-          const links = [...o.querySelectorAll("a")].map(
-            (a) => `<a href="${a.href}" target="_blank" rel="noopener noreferrer">${a.textContent}</a>`
-          );
-          let html = o.innerHTML.replace(/<button[^>]*>.*?<\/button>/i, "").trim();
-          return `<div class="sc-poll-option">${html}</div>`;
-        });
-        const label = ((_d = (_c = well.querySelector(".label")) == null ? void 0 : _c.textContent) == null ? void 0 : _d.trim()) || "";
-        const author = ((_e = well.querySelector(".label")) == null ? void 0 : _e.getAttribute("title")) || "";
-        panel.innerHTML = `
-                <div class="sc-poll-header">${h}</div>
-                <div class="sc-poll-options">${opts.join("")}</div>
-                ${label ? `<div class="sc-poll-meta">${author ? author + " · " : ""}${label}</div>` : ""}
-            `;
-      };
-      const hasPollContent = () => {
-        const activeWell = pollwrap.querySelector(".well.active") || pollwrap.querySelector(".well");
-        return !!(activeWell && activeWell.textContent.trim().length > 10);
-      };
-      const updateBtn = () => {
-        const hasContent = hasPollContent();
-        btn.style.display = hasContent ? "" : "none";
-        if (!hasContent && panelOpen) {
-          panel.style.display = "none";
-          panelOpen = false;
-          btn.classList.remove("sc-poll-btn-active");
-        }
-      };
-      btn.addEventListener("click", () => {
-        panelOpen = !panelOpen;
-        if (panelOpen) {
-          renderPanel();
-          panel.style.display = "block";
-          btn.classList.add("sc-poll-btn-active");
-        } else {
-          panel.style.display = "none";
-          btn.classList.remove("sc-poll-btn-active");
-        }
-      });
-      document.addEventListener("click", (e) => {
-        if (panelOpen && !btn.contains(e.target) && !panel.contains(e.target)) {
-          panel.style.display = "none";
-          panelOpen = false;
-          btn.classList.remove("sc-poll-btn-active");
-        }
-      });
-      new MutationObserver(() => {
-        updateBtn();
-        if (panelOpen) renderPanel();
-      }).observe(pollwrap, { childList: true, subtree: true, characterData: true });
-      updateBtn();
-    }
     function initChatHeader() {
       if (document.getElementById("sc-chat-header")) return;
       const header = document.createElement("div");
@@ -4564,74 +4643,6 @@
         if (typeof cycleChatMode === "function") cycleChatMode();
       });
       header.appendChild(colBtn);
-    }
-    function initUserCount() {
-      const header = document.getElementById("sc-chat-header");
-      if (!header) return;
-      const btn = document.createElement("button");
-      btn.id = "sc-usercount-btn";
-      header.appendChild(btn);
-      const panel = document.createElement("div");
-      panel.id = "sc-users-panel";
-      document.body.appendChild(panel);
-      let open = false;
-      const getUsers = () => {
-        const items = [...document.querySelectorAll("#userlist .userlist_item")];
-        return items.map((item) => {
-          var _a;
-          const spans = item.querySelectorAll("span");
-          const nameSpan = spans.length >= 2 ? spans[1] : spans[0];
-          return ((_a = nameSpan == null ? void 0 : nameSpan.textContent) == null ? void 0 : _a.trim()) || "";
-        }).filter(Boolean).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-      };
-      const updateCount = () => {
-        var _a, _b;
-        const cytubCount = document.getElementById("usercount");
-        const raw = (_b = (_a = cytubCount == null ? void 0 : cytubCount.textContent) == null ? void 0 : _a.match(/\d+/)) == null ? void 0 : _b[0];
-        const count = raw ? parseInt(raw) : getUsers().length;
-        btn.textContent = count + " USERS";
-      };
-      const renderPanel = () => {
-        const users = getUsers();
-        panel.innerHTML = `
-                <div class="sc-users-panel-header">${users.length} connected</div>
-                ${users.map((u) => {
-          const color = usernameToColor(u);
-          return `<div class="sc-users-panel-name" style="color:${color}">${u}</div>`;
-        }).join("")}
-            `;
-      };
-      const closePanel = () => {
-        panel.style.display = "none";
-        btn.classList.remove("sc-users-active");
-        open = false;
-      };
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        open = !open;
-        if (open) {
-          renderPanel();
-          panel.style.display = "block";
-          btn.classList.add("sc-users-active");
-        } else {
-          closePanel();
-        }
-      });
-      document.addEventListener("click", (e) => {
-        if (open && !panel.contains(e.target) && e.target !== btn) closePanel();
-      });
-      const ul = document.getElementById("userlist");
-      if (ul) {
-        new MutationObserver(() => {
-          updateCount();
-          if (open) renderPanel();
-        }).observe(ul, { childList: true, subtree: true });
-      }
-      const uc = document.getElementById("usercount");
-      if (uc) {
-        new MutationObserver(updateCount).observe(uc, { childList: true, subtree: true, characterData: true });
-      }
-      updateCount();
     }
     const waitForBody = () => {
       if (!document.body) {
@@ -4986,12 +4997,12 @@
       const hide = () => document.body.classList.add("sc-chrome-hidden");
       const show = () => {
         document.body.classList.remove("sc-chrome-hidden");
-        if (typeof _topBarWake === "function") _topBarWake();
+        if (typeof chromeState.topBarWake === "function") chromeState.topBarWake();
         clearTimeout(timer);
         timer = setTimeout(hide, 4e3);
       };
       ["mousemove", "keydown", "click", "touchstart", "wheel"].forEach((ev) => document.addEventListener(ev, show, { passive: true }));
-      _chromeWake = show;
+      chromeState.chromeWake = show;
       timer = setTimeout(hide, 4e3);
     }
     const _CHAT_MODES = isTv ? ["sidebar", "overlay", "hidden"] : ["sidebar", "overlay", "hidden", "chatonly"];
@@ -5189,7 +5200,7 @@
         document.body.classList.add("sc-leftzone");
         if (autoHideMs) scheduleHide(autoHideMs);
       };
-      _leftZoneReveal = reveal;
+      chromeState.leftZoneReveal = reveal;
       if (!document.getElementById("sc-cluster-grip")) {
         const grip = document.createElement("div");
         grip.id = "sc-cluster-grip";
@@ -5227,7 +5238,7 @@
         document.body.classList.add("sc-rightzone");
         if (ms) scheduleHide(ms);
       };
-      _rightZoneReveal = reveal;
+      chromeState.rightZoneReveal = reveal;
       if (!document.getElementById("sc-vert-ctrl-grip")) {
         const grip = document.createElement("div");
         grip.id = "sc-vert-ctrl-grip";
@@ -5248,9 +5259,9 @@
       const tap = document.createElement("div");
       tap.id = "sc-video-tap";
       tap.addEventListener("click", () => {
-        if (_topBarWake) _topBarWake();
-        if (_leftZoneReveal) _leftZoneReveal(REVEAL_MS);
-        if (_rightZoneReveal) _rightZoneReveal(REVEAL_MS);
+        if (chromeState.topBarWake) chromeState.topBarWake();
+        if (chromeState.leftZoneReveal) chromeState.leftZoneReveal(REVEAL_MS);
+        if (chromeState.rightZoneReveal) chromeState.rightZoneReveal(REVEAL_MS);
         holdScrubber(true);
         clearTimeout(scrubReleaseTimer);
         scrubReleaseTimer = setTimeout(() => holdScrubber(false), REVEAL_MS);
@@ -5600,11 +5611,11 @@
         return false;
       }
       function revealChrome() {
-        if (typeof _leftZoneReveal === "function") _leftZoneReveal(4e3);
+        if (typeof chromeState.leftZoneReveal === "function") chromeState.leftZoneReveal(4e3);
         else document.body.classList.add("sc-leftzone");
-        if (typeof _chromeWake === "function") _chromeWake();
+        if (typeof chromeState.chromeWake === "function") chromeState.chromeWake();
         else document.body.classList.remove("sc-chrome-hidden");
-        if (typeof _topBarWake === "function") _topBarWake();
+        if (typeof chromeState.topBarWake === "function") chromeState.topBarWake();
       }
       window.__scTvKey = function(dir) {
         try {

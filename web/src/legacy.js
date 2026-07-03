@@ -3,6 +3,8 @@ import { syncNativeInputFocus } from './chat/inputfocus.js';
 import { emoteState, startEmoteWatcher } from './chat/emotemirror.js';
 import { attemptSend } from './chat/grammar.js';
 import { handleTabComplete, clearTabCandidates, relocateEmoteButton, applyInputMode } from './chat/input.js';
+import { chromeState } from './chrome/state.js';
+import { initPosterStrip, initPollWatcher, initUserCount } from './posters.js';
 import { usernameToColor } from './usercolors.js';
 import { nativeHttpGet } from './native.js';
 import { _appVersion, checkForUpdate, initUpdateCheck, _updateInfo, GH_RELEASES_PAGE } from './update.js';
@@ -911,12 +913,6 @@ import tvCss from './styles/tv.css';
     ========================================================== */
 
     // Global wake/dim control — exposed so initPosterStrip can call wake()
-    let _topBarWake = null;
-    let _topBarIsOpen = false;
-    let _leftZoneReveal  = null;  // expose so video-tap can trigger both chrome systems together
-    let _rightZoneReveal = null;  // vertical-mode right-edge drawer
-    let _chromeWake = null;       // re-arms the TV chrome auto-hide (remote keys bypass DOM events)
-
     function initTopBar() {
         // Gradient overlay — pointer-events:none so it never blocks clicks
         const bar = document.createElement('div');
@@ -936,7 +932,7 @@ import tvCss from './styles/tv.css';
         ].filter(Boolean);
 
         const dim = () => {
-            if (_topBarIsOpen || !playing) return;
+            if (chromeState.topBarIsOpen || !playing) return;
             getDimEls().forEach(el => el.classList.add('sc-bar-dim'));
             document.body.classList.add('sc-video-dimmed');
         };
@@ -945,9 +941,9 @@ import tvCss from './styles/tv.css';
             getDimEls().forEach(el => el.classList.remove('sc-bar-dim'));
             document.body.classList.remove('sc-video-dimmed');
             clearTimeout(idleTimer);
-            if (!_topBarIsOpen && playing) idleTimer = setTimeout(dim, 3500);
+            if (!chromeState.topBarIsOpen && playing) idleTimer = setTimeout(dim, 3500);
         };
-        _topBarWake = wake;
+        chromeState.topBarWake = wake;
 
         // Start the countdown only when a video element starts playing
         const onVideoPlay = () => {
@@ -1000,279 +996,6 @@ import tvCss from './styles/tv.css';
         }, true); // capture phase: intercept before the element's own handler
     }
 
-    function initPosterStrip() {
-        const motd = document.getElementById('motdrow');
-        if (!motd) return;
-
-        // Build the poster strip container from MOTD images
-        const imgs = [...motd.querySelectorAll('img')].filter(img => {
-            // Read HTML attributes (not rendered dimensions — motdrow is hidden so rendered = 0)
-            const w = parseInt(img.getAttribute('width') || 0);
-            const h = parseInt(img.getAttribute('height') || 0);
-            // Poster images in the MOTD are 125x175 — keep portrait-ish images, skip wide banners
-            return h >= 100 && w <= 200;
-        });
-        if (!imgs.length) return;
-
-        // Create our strip outside of #motdrow so we control it fully
-        const strip = document.createElement('div');
-        strip.id = 'sc-poster-strip';
-        // Single shared zoom element — lives on body, above everything
-        let zoomEl = document.getElementById('sc-poster-zoom');
-        if (!zoomEl) {
-            zoomEl = document.createElement('img');
-            zoomEl.id = 'sc-poster-zoom';
-            document.body.appendChild(zoomEl);
-        }
-
-        const ZOOM_H = 300;
-
-        const calcZoomTarget = (thumb) => {
-            const rect  = thumb.getBoundingClientRect();
-            const attrW = parseInt(thumb.getAttribute('width')  || 125);
-            const attrH = parseInt(thumb.getAttribute('height') || 175);
-            const zoomW = Math.round(ZOOM_H * (attrW / attrH));
-
-            // Always centre horizontally over the thumb, clamped to viewport
-            let left = rect.left + rect.width / 2 - zoomW / 2;
-            left = Math.max(8, Math.min(left, window.innerWidth - zoomW - 8));
-
-            // Anchor to the top of the thumb — expand upward from there
-            // If not enough room above, expand downward instead
-            let top;
-            if (rect.top >= ZOOM_H + 8) {
-                top = rect.top - ZOOM_H;          // expands upward, bottom edge at thumb top
-            } else {
-                top = rect.bottom - ZOOM_H;        // anchor bottom to thumb bottom, grows up into video
-                top = Math.max(8, top);
-            }
-
-            return { left, top, width: zoomW, height: ZOOM_H };
-        };
-
-        const positionZoom = (thumb) => {
-            const rect   = thumb.getBoundingClientRect();
-            const target = calcZoomTarget(thumb);
-
-            // Immediately place at thumb position/size (no transition yet)
-            zoomEl.classList.remove('sc-zoom-expanded');
-            zoomEl.style.transition = 'none';
-            zoomEl.style.left   = rect.left   + 'px';
-            zoomEl.style.top    = rect.top    + 'px';
-            zoomEl.style.width  = rect.width  + 'px';
-            zoomEl.style.height = rect.height + 'px';
-            zoomEl.style.display = 'block';
-
-            // Force a reflow so the browser registers the start state
-            zoomEl.getBoundingClientRect();
-
-            // Re-enable transition and animate to final size/position
-            zoomEl._collapsing = false;
-            zoomEl.style.transition = '';
-            zoomEl.style.left   = target.left   + 'px';
-            zoomEl.style.top    = target.top    + 'px';
-            zoomEl.style.width  = target.width  + 'px';
-            zoomEl.style.height = target.height + 'px';
-            zoomEl.classList.add('sc-zoom-expanded');
-        };
-
-        imgs.forEach(img => {
-            const thumb = document.createElement('img');
-            thumb.src = img.src;
-            thumb.className = 'sc-poster-thumb';
-            thumb.title = img.title || img.alt || '';
-            thumb.setAttribute('width',  img.getAttribute('width')  || '125');
-            thumb.setAttribute('height', img.getAttribute('height') || '175');
-
-            thumb.addEventListener('mouseenter', () => {
-                // Cancel any in-progress collapse
-                zoomEl._collapsing = false;
-                zoomEl.src = thumb.src;
-                zoomEl._activeThumb = thumb;   // remembered so an outside tap can collapse it
-                positionZoom(thumb);
-            });
-            thumb.addEventListener('mouseleave', () => {
-                zoomEl._collapsing = true;
-                // Animate back to thumb size then hide
-                const rect = thumb.getBoundingClientRect();
-                zoomEl.classList.remove('sc-zoom-expanded');
-                zoomEl.style.left   = rect.left   + 'px';
-                zoomEl.style.top    = rect.top    + 'px';
-                zoomEl.style.width  = rect.width  + 'px';
-                zoomEl.style.height = rect.height + 'px';
-                // Hide only if still collapsing when transition ends
-                const onEnd = () => {
-                    zoomEl.removeEventListener('transitionend', onEnd);
-                    if (zoomEl._collapsing) {
-                        zoomEl.style.display = 'none';
-                        zoomEl.src = '';
-                        zoomEl._collapsing = false;
-                    }
-                };
-                zoomEl.addEventListener('transitionend', onEnd);
-            });
-
-            // Wrapper stays an <a> so TV-nav (strip.querySelectorAll('a')) can still
-            // enumerate/focus each poster, but it intentionally has NO href — opening the
-            // raw image URL on click/OK navigated the WebView and broke the app.
-            const wrap = document.createElement('a');
-            wrap.appendChild(thumb);
-            strip.appendChild(wrap);
-        });
-        document.body.appendChild(strip);
-
-        // Tapping a poster zooms it (via mouseenter on touch), but touch never fires the
-        // thumb's mouseleave — so a tap anywhere that ISN'T a poster collapses the zoom,
-        // reusing the existing mouseleave animation. Added once (initPosterStrip re-runs).
-        if (!document.body._scPosterDismiss) {
-            document.body._scPosterDismiss = true;
-            document.addEventListener('click', (e) => {
-                if (zoomEl.style.display !== 'block' || zoomEl._collapsing) return;
-                if (e.target && e.target.classList && e.target.classList.contains('sc-poster-thumb')) return;
-                const active = zoomEl._activeThumb;
-                if (active) active.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-            });
-        }
-
-        // Toggle button — injected below the video title
-        const toggleBtn = document.createElement('button');
-        toggleBtn.id = 'sc-poster-toggle';
-        toggleBtn.textContent = "Coming Attractions";
-        toggleBtn.title = 'Show/hide weekend lineup';
-        toggleBtn.dataset.noTvCaption = '1'; // button text is self-explanatory; no remote caption
-        toggleBtn.addEventListener('click', () => {
-            const visible = strip.classList.toggle('sc-poster-visible');
-            toggleBtn.classList.toggle('sc-poster-toggle-active', visible);
-            // Tell the top bar system whether strip is open
-            _topBarIsOpen = visible;
-            if (visible && _topBarWake) {
-                _topBarWake(); // wake and keep awake
-            }
-            // If closing, restart the idle timer via a mousemove wake
-            // (the next mousemove in the zone will restart it naturally)
-        });
-        document.body.appendChild(toggleBtn);
-    }
-
-    /* ==========================================================
-       POLL / ANNOUNCEMENT WATCHER
-    ========================================================== */
-
-    function initPollWatcher() {
-        // pollwrap may not exist yet or may be empty — watch for it
-        const tryInit = () => {
-            const pollwrap = document.getElementById('pollwrap');
-            if (!pollwrap) {
-                // Not in DOM yet, watch body
-                const bodyObs = new MutationObserver(() => {
-                    if (document.getElementById('pollwrap')) {
-                        bodyObs.disconnect();
-                        tryInit();
-                    }
-                });
-                bodyObs.observe(document.body, { childList: true, subtree: true });
-                return;
-            }
-            _initPollWatcher(pollwrap);
-        };
-        tryInit();
-    }
-
-    function _initPollWatcher(pollwrap) {
-
-        // Create the notification button — only shown when poll has content
-        const header = document.getElementById('sc-chat-header');
-        if (!header) return;
-        const btn = document.createElement('button');
-        btn.id = 'sc-poll-btn';
-        btn.title = 'Channel announcement / poll';
-        btn.textContent = 'POLL';
-        header.appendChild(btn);
-
-        // Create the floating panel
-        const panel = document.createElement('div');
-        panel.id = 'sc-poll-panel';
-        panel.style.display = 'none';
-        document.body.appendChild(panel);
-
-        let panelOpen = false;
-
-        const renderPanel = () => {
-            // Clone pollwrap content so we can restyle without affecting original
-            const well = pollwrap.querySelector('.well.active') || pollwrap.querySelector('.well');
-            if (!well) { panel.innerHTML = ''; return; }
-
-            // Extract just the useful parts: heading + options
-            const h = well.querySelector('h3')?.textContent?.trim() || '';
-            const opts = [...well.querySelectorAll('.option')].map(o => {
-                // Get text without the vote count button text
-                const btn = o.querySelector('button');
-                const text = o.textContent.replace(btn?.textContent || '', '').trim();
-                // Preserve links
-                const links = [...o.querySelectorAll('a')].map(a =>
-                    `<a href="${a.href}" target="_blank" rel="noopener noreferrer">${a.textContent}</a>`
-                );
-                let html = o.innerHTML.replace(/<button[^>]*>.*?<\/button>/i, '').trim();
-                return `<div class="sc-poll-option">${html}</div>`;
-            });
-
-            // Time/author label
-            const label = well.querySelector('.label')?.textContent?.trim() || '';
-            const author = well.querySelector('.label')?.getAttribute('title') || '';
-
-            panel.innerHTML = `
-                <div class="sc-poll-header">${h}</div>
-                <div class="sc-poll-options">${opts.join('')}</div>
-                ${label ? `<div class="sc-poll-meta">${author ? author + ' · ' : ''}${label}</div>` : ''}
-            `;
-        };
-
-        const hasPollContent = () => {
-            // CyTube marks open polls with .well.active
-            // Fall back to any .well with content if no active class
-            const activeWell = pollwrap.querySelector('.well.active') || pollwrap.querySelector('.well');
-            return !!(activeWell && activeWell.textContent.trim().length > 10);
-        };
-
-        const updateBtn = () => {
-            const hasContent = hasPollContent();
-            btn.style.display = hasContent ? '' : 'none';
-            if (!hasContent && panelOpen) {
-                panel.style.display = 'none';
-                panelOpen = false;
-                btn.classList.remove('sc-poll-btn-active');
-            }
-        };
-
-        btn.addEventListener('click', () => {
-            panelOpen = !panelOpen;
-            if (panelOpen) {
-                renderPanel();
-                panel.style.display = 'block';
-                btn.classList.add('sc-poll-btn-active');
-            } else {
-                panel.style.display = 'none';
-                btn.classList.remove('sc-poll-btn-active');
-            }
-        });
-
-        // Close on outside click
-        document.addEventListener('click', e => {
-            if (panelOpen && !btn.contains(e.target) && !panel.contains(e.target)) {
-                panel.style.display = 'none';
-                panelOpen = false;
-                btn.classList.remove('sc-poll-btn-active');
-            }
-        });
-
-        // Watch for poll changes
-        new MutationObserver(() => {
-            updateBtn();
-            if (panelOpen) renderPanel();
-        }).observe(pollwrap, { childList: true, subtree: true, characterData: true });
-
-        updateBtn();
-    } // end _initPollWatcher
 
     /* ==========================================================
        USER COUNT PANEL
@@ -1293,94 +1016,6 @@ import tvCss from './styles/tv.css';
         colBtn.textContent = '›';
         colBtn.addEventListener('click', () => { if (typeof cycleChatMode === 'function') cycleChatMode(); });
         header.appendChild(colBtn);
-    }
-
-    function initUserCount() {
-        const header = document.getElementById('sc-chat-header');
-        if (!header) return;
-        const btn = document.createElement('button');
-        btn.id = 'sc-usercount-btn';
-        header.appendChild(btn);
-
-        // Create users panel
-        const panel = document.createElement('div');
-        panel.id = 'sc-users-panel';
-        document.body.appendChild(panel);
-
-        let open = false;
-
-        const getUsers = () => {
-            const items = [...document.querySelectorAll('#userlist .userlist_item')];
-            return items
-                .map(item => {
-                    // CyTube structure: <span>(rank icon)</span><span (optional class)>Name</span>
-                    // Get the second span which always contains the username
-                    const spans = item.querySelectorAll('span');
-                    const nameSpan = spans.length >= 2 ? spans[1] : spans[0];
-                    return nameSpan?.textContent?.trim() || '';
-                })
-                .filter(Boolean)
-                .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-        };
-
-        const updateCount = () => {
-            // Prefer CyTube's own count (accurate, socket-driven)
-            const cytubCount = document.getElementById('usercount');
-            const raw = cytubCount?.textContent?.match(/\d+/)?.[0];
-            const count = raw ? parseInt(raw) : getUsers().length;
-            btn.textContent = count + ' USERS';
-        };
-
-        const renderPanel = () => {
-            const users = getUsers();
-            panel.innerHTML = `
-                <div class="sc-users-panel-header">${users.length} connected</div>
-                ${users.map(u => {
-                    const color = usernameToColor(u);
-                    return `<div class="sc-users-panel-name" style="color:${color}">${u}</div>`;
-                }).join('')}
-            `;
-        };
-
-        const closePanel = () => {
-            panel.style.display = 'none';
-            btn.classList.remove('sc-users-active');
-            open = false;
-        };
-
-        btn.addEventListener('click', e => {
-            e.stopPropagation();
-            open = !open;
-            if (open) {
-                renderPanel();
-                panel.style.display = 'block';
-                btn.classList.add('sc-users-active');
-            } else {
-                closePanel();
-            }
-        });
-
-        document.addEventListener('click', e => {
-            if (open && !panel.contains(e.target) && e.target !== btn) closePanel();
-        });
-
-        // Update count and panel when userlist changes
-        const ul = document.getElementById('userlist');
-        if (ul) {
-            new MutationObserver(() => {
-                updateCount();
-                if (open) renderPanel();
-            }).observe(ul, { childList: true, subtree: true });
-        }
-
-        // Also watch CyTube's usercount element for socket-driven updates
-        const uc = document.getElementById('usercount');
-        if (uc) {
-            new MutationObserver(updateCount)
-                .observe(uc, { childList: true, subtree: true, characterData: true });
-        }
-
-        updateCount();
     }
 
     /* ==========================================================
@@ -1750,15 +1385,15 @@ import tvCss from './styles/tv.css';
         const hide = () => document.body.classList.add('sc-chrome-hidden');
         const show = () => {
             document.body.classList.remove('sc-chrome-hidden');
-            if (typeof _topBarWake === 'function') _topBarWake();
+            if (typeof chromeState.topBarWake === 'function') chromeState.topBarWake();
             clearTimeout(timer);
             timer = setTimeout(hide, 4000);
         };
         ['mousemove', 'keydown', 'click', 'touchstart', 'wheel'].forEach(ev =>
             document.addEventListener(ev, show, { passive: true }));
         // Remote D-pad keys are consumed by native and never fire DOM keydown, so the
-        // TV nav code re-arms this timer directly via _chromeWake on every remote press.
-        _chromeWake = show;
+        // TV nav code re-arms this timer directly via chromeState.chromeWake on every remote press.
+        chromeState.chromeWake = show;
         timer = setTimeout(hide, 4000);
     }
 
@@ -1934,7 +1569,7 @@ import tvCss from './styles/tv.css';
         const THRESH = 120; // px from the left edge
         const scheduleHide = (ms) => { clearTimeout(hideTimer); hideTimer = setTimeout(() => document.body.classList.remove('sc-leftzone'), ms); };
         const reveal = (autoHideMs) => { clearTimeout(hideTimer); document.body.classList.add('sc-leftzone'); if (autoHideMs) scheduleHide(autoHideMs); };
-        _leftZoneReveal = reveal;
+        chromeState.leftZoneReveal = reveal;
 
         if (!document.getElementById('sc-cluster-grip')) {
             const grip = document.createElement('div');
@@ -1978,7 +1613,7 @@ import tvCss from './styles/tv.css';
             document.body.classList.add('sc-rightzone');
             if (ms) scheduleHide(ms);
         };
-        _rightZoneReveal = reveal;
+        chromeState.rightZoneReveal = reveal;
 
         if (!document.getElementById('sc-vert-ctrl-grip')) {
             const grip = document.createElement('div');
@@ -2004,9 +1639,9 @@ import tvCss from './styles/tv.css';
         const tap = document.createElement('div');
         tap.id = 'sc-video-tap';
         tap.addEventListener('click', () => {
-            if (_topBarWake) _topBarWake();
-            if (_leftZoneReveal) _leftZoneReveal(REVEAL_MS);
-            if (_rightZoneReveal) _rightZoneReveal(REVEAL_MS);
+            if (chromeState.topBarWake) chromeState.topBarWake();
+            if (chromeState.leftZoneReveal) chromeState.leftZoneReveal(REVEAL_MS);
+            if (chromeState.rightZoneReveal) chromeState.rightZoneReveal(REVEAL_MS);
             // Tie the scrubber to the fly-out: this overlay swallows the tap, so the
             // video.js control bar would otherwise need a second tap. Hold it up for the
             // same window the buttons stay revealed (holdScrubber refreshes activity
@@ -2361,11 +1996,11 @@ import tvCss from './styles/tv.css';
             // Reveal the left cluster WITH an auto-hide timer (re-armed on every remote
             // press) so it fades back out a few seconds after navigation stops. Raw
             // classList.add left it stuck on, since remote keys don't fire DOM events.
-            if (typeof _leftZoneReveal === 'function') _leftZoneReveal(4000);
+            if (typeof chromeState.leftZoneReveal === 'function') chromeState.leftZoneReveal(4000);
             else document.body.classList.add('sc-leftzone');
-            if (typeof _chromeWake === 'function') _chromeWake();
+            if (typeof chromeState.chromeWake === 'function') chromeState.chromeWake();
             else document.body.classList.remove('sc-chrome-hidden');
-            if (typeof _topBarWake === 'function') _topBarWake();
+            if (typeof chromeState.topBarWake === 'function') chromeState.topBarWake();
         }
 
         window.__scTvKey = function (dir) {
