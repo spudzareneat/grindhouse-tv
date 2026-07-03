@@ -161,6 +161,24 @@
     }, 4e3);
   }
 
+  // src/store.js
+  var LS_TMDB = "sc_tmdb_key";
+  var LS_ONBOARDED = "sc_onboarded";
+  var LS_SPELLCHECK = "sc_spellcheck";
+  var LS_CHAT_FONT = "sc_chat_fontsize";
+  var LS_MOVIE_LINKS = "sc_movie_links";
+  var LS_COUCH = "sc_couch_mode";
+  var LS_WATCHALONG = "sc_watch_along";
+  var LS_CAST_MUTE = "sc_cast_fallback_mute";
+  var getKey = (id) => localStorage.getItem(id) || "";
+  var setKey = (id, v) => localStorage.setItem(id, v.trim());
+  var hasKey = (id) => !!getKey(id);
+  var spellCheckEnabled = () => getKey(LS_SPELLCHECK) !== "off";
+  var movieLinksEnabled = () => getKey(LS_MOVIE_LINKS) !== "off";
+  var couchModeEnabled = () => getKey(LS_COUCH) === "on";
+  var watchAlongEnabled = () => getKey(LS_WATCHALONG) === "on";
+  var castFallbackMuted = () => getKey(LS_CAST_MUTE) === "on";
+
   // src/styles/base.css
   var base_default = `
             /* ===== SHARED HIDDEN ELEMENTS ===== */
@@ -2200,22 +2218,6 @@
   // src/legacy.js
   (function() {
     "use strict";
-    const LS_TMDB = "sc_tmdb_key";
-    const LS_ONBOARDED = "sc_onboarded";
-    const LS_SPELLCHECK = "sc_spellcheck";
-    const LS_CHAT_FONT = "sc_chat_fontsize";
-    const LS_MOVIE_LINKS = "sc_movie_links";
-    const LS_COUCH = "sc_couch_mode";
-    const LS_WATCHALONG = "sc_watch_along";
-    const LS_CAST_MUTE = "sc_cast_fallback_mute";
-    const getKey = (id) => localStorage.getItem(id) || "";
-    const setKey = (id, v) => localStorage.setItem(id, v.trim());
-    const hasKey = (id) => !!getKey(id);
-    const spellCheckEnabled = () => getKey(LS_SPELLCHECK) !== "off";
-    const movieLinksEnabled = () => getKey(LS_MOVIE_LINKS) !== "off";
-    const couchModeEnabled = () => getKey(LS_COUCH) === "on";
-    const watchAlongEnabled = () => getKey(LS_WATCHALONG) === "on";
-    const castFallbackMuted = () => getKey(LS_CAST_MUTE) === "on";
     function applyWatchAlong() {
       if (!document.body) return;
       document.body.classList.toggle("sc-watchalong", watchAlongEnabled());

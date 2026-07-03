@@ -3,6 +3,10 @@ import { detectReadabilityIssues } from './readability.js';
 import { usernameToColor } from './usercolors.js';
 import { nativeHttpGet } from './native.js';
 import { _appVersion, checkForUpdate, initUpdateCheck, _updateInfo, GH_RELEASES_PAGE } from './update.js';
+import {
+    LS_TMDB, LS_ONBOARDED, LS_SPELLCHECK, LS_CHAT_FONT, LS_MOVIE_LINKS, LS_COUCH, LS_WATCHALONG, LS_CAST_MUTE,
+    getKey, setKey, hasKey, spellCheckEnabled, movieLinksEnabled, couchModeEnabled, watchAlongEnabled, castFallbackMuted,
+} from './store.js';
 import baseCss from './styles/base.css';
 import overlaysCss from './styles/overlays.css';
 import tvCss from './styles/tv.css';
@@ -14,22 +18,6 @@ import tvCss from './styles/tv.css';
        API KEYS — stored in localStorage, managed via settings modal.
        Keys are never hard-coded; the settings modal handles first-run.
     ========================================================== */
-    const LS_TMDB       = 'sc_tmdb_key';
-    const LS_ONBOARDED  = 'sc_onboarded';  // set once the settings have been shown on first launch
-    const LS_SPELLCHECK = 'sc_spellcheck'; // 'off' to disable, anything else = enabled
-    const LS_CHAT_FONT  = 'sc_chat_fontsize';
-    const LS_MOVIE_LINKS = 'sc_movie_links'; // 'off' to hide IMDb/Letterboxd/Wiki links
-    const LS_COUCH      = 'sc_couch_mode'; // 'on' = chat input grows big & readable while typing
-    const LS_WATCHALONG = 'sc_watch_along'; // 'on' = hide the chat input + guest login (read-only)
-    const LS_CAST_MUTE  = 'sc_cast_fallback_mute'; // 'on' = mute fallback (YouTube) playback on this device while casting
-    const getKey   = id => localStorage.getItem(id) || '';
-    const setKey   = (id, v) => localStorage.setItem(id, v.trim());
-    const hasKey   = id => !!getKey(id);
-    const spellCheckEnabled = () => getKey(LS_SPELLCHECK) !== 'off';
-    const movieLinksEnabled = () => getKey(LS_MOVIE_LINKS) !== 'off';
-    const couchModeEnabled  = () => getKey(LS_COUCH) === 'on';
-    const watchAlongEnabled = () => getKey(LS_WATCHALONG) === 'on';
-    const castFallbackMuted = () => getKey(LS_CAST_MUTE) === 'on'; // default: unmuted
 
     // Watch-Only mode: hide the chat input and the guest-login box so the room is
     // purely read-along. Works in both sidebar and overlay chat layouts (CSS-gated).
