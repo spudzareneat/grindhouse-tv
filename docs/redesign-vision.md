@@ -30,9 +30,16 @@ The redesign therefore restructures the injected layer and improves UX on top of
 
 ### New features
 
-- **Tonight's Lineup screen** — full-screen, D-pad-navigable weekend schedule on TV.
-  - **Letterboxd integration (feasibility verified 2026-07-03):** `letterboxd.com/420grindhouse/lists/` returns 200 with a browser UA (the native HTTP bridge already fetches IMDb this way; generic bots get 403). Lists are newest-first and every weekly slug contains `grindhouse-schedule`, so "current week" = first matching `/420grindhouse/list/*schedule*/` link. The list page carries film titles in `alt` attributes and the `<meta name="description">` includes titles **with years** ("American Hunter (1988), …") for clean TMDB matching via the existing pipeline; list notes carry showtime text.
-  - Fallback when no list matches: build the lineup from CyTube's own (currently CSS-hidden) playlist data.
+- **Tonight's Lineup screen** — full-screen, D-pad-navigable weekend schedule on TV. Letterboxd supplies the *what*; live room telemetry supplies the *when*.
+  - **Letterboxd integration (feasibility verified 2026-07-03):** `letterboxd.com/420grindhouse/lists/` returns 200 with a browser UA (the native HTTP bridge already fetches IMDb this way; generic bots get 403). Lists are newest-first and every weekly slug contains `grindhouse-schedule`, so "current week" = first matching `/420grindhouse/list/*schedule*/` link. The list page carries film titles in `alt` attributes and the `<meta name="description">` includes titles **with years** ("American Hunter (1988), …") for clean TMDB matching via the existing pipeline. The list notes only say "Showtime starts each day at about Noon PST" — never a source of per-film times.
+  - **Timing model (viewer rank only — verified against the live room 2026-07-03):** the channel hides playlist *items* below moderator rank (`seeplaylist: 2`, not changeable for us), but a plain viewer still receives `changeMedia` (exact title + duration of **every** item as it starts, bumpers included), `mediaUpdate` (~5 s position + pause state), and `setPlaylistMeta` (queue **count** and **total** runtime — 31 items / 12 h 25 m when probed mid-marathon, so the room does queue far ahead). Times are therefore *estimated*, not read:
+    1. TMDB-match the current item against the list (existing `parseMovieFilename` pipeline) → which feature is on + exact remaining time.
+    2. Future features use TMDB runtimes.
+    3. Bumper gaps are **learned live**: any `changeMedia` item that doesn't match the list is a bumper with an observed exact duration; keep a running median inter-feature gap. Calibration: `setPlaylistMeta.rawTime − Σ(remaining features' runtimes) ≈ total remaining bumper time` when the queue plausibly covers the rest of the day. Persist the learned gap across nights as the cold-start default.
+    4. Re-anchor every ETA on each `changeMedia`; freeze while paused.
+  - **Honest precision decay in the UI:** next feature "≈ 9:20 PM" (±5 min: exact remainder + one gap), mid-evening "~", tail of the night "LATE" (running order only, no time). Never display precision the data can't support.
+  - **OK on any film opens the existing Now-Playing card in browse mode** (TMDB backdrop/poster/runtime, IMDb parent-guide chips, trivia) — the card renderer decouples from "currently playing" and is otherwise reused as-is.
+  - Fallback when the Letterboxd fetch fails: Now/Next only, from `changeMedia`.
 - **In-app update install** — extend the existing GitHub release checker with DownloadManager + a PackageInstaller intent: one-click update on TV instead of a link-out.
 - **Watch stats** — local counters keyed off `changeMedia` ("34 features, 61 hours with this room").
 - **Accessibility pass** — TalkBack labels on all injected buttons (there are none today); caption size/style controls surfaced in Settings.
