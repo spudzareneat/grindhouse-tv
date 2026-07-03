@@ -45,6 +45,2042 @@
     return `hsl(${hue.toFixed(1)}, 72%, 70%)`;
   }
 
+  // src/styles/base.css
+  var base_default = `
+            /* ===== SHARED HIDDEN ELEMENTS ===== */
+            nav.navbar, #drinkbarwrap, #announcements, #playlistrow,
+            #resizewrap, footer, #userlisttoggle, #rightcontrols,
+            .modal-header, .timestamp, .modal-footer { display: none !important; }
+            body { background-image: none !important; background: #000 !important; }
+            .modal, .popover, .dropdown-menu { z-index: 20001 !important; }
+            .modal-dialog { margin: 0 auto !important; }
+
+            /* Video tap-to-wake interceptor.
+               z-index 10000 = above the video (9999) but below all controls (10001+).
+               pointer-events:none normally so video controls work; flips to auto only
+               when the top bar is dimmed (sc-video-dimmed on body), intercepting the
+               first tap to reveal chrome. Works for iframes (YouTube/Drive) where
+               document-level click listeners never receive iframe taps. */
+            #sc-video-tap {
+                position: fixed !important; top: 0 !important; left: 0 !important;
+                width: 79vw !important; height: 100vh !important;
+                z-index: 10000 !important; pointer-events: none !important;
+                -webkit-tap-highlight-color: transparent !important;
+                cursor: pointer !important;
+            }
+            body.sc-vertical #sc-video-tap { width: 100vw !important; height: 55vh !important; }
+            body.sc-chat-hidden #sc-video-tap { width: 100vw !important; height: 100vh !important; }
+            body.sc-chat-overlay.sc-horizontal #sc-video-tap { width: 100vw !important; }
+            body.sc-video-dimmed #sc-video-tap { pointer-events: auto !important; }
+            #resize-video-smaller, #resize-video-larger { display: none !important; }
+            /* Remove pause and fullscreen from video.js control bar */
+            .video-js .vjs-play-control { display: none !important; }
+            .video-js .vjs-fullscreen-control { display: none !important; }
+            /* Userlist — hidden but fully rendered so all users appear in DOM */
+            #userlist {
+                visibility: hidden !important;
+                position: absolute !important;
+                pointer-events: none !important;
+                height: auto !important;
+                overflow: hidden !important;
+            }
+            #userlisttoggle { display: none !important; }
+            /* ── TOP BAR SYSTEM ────────────────────────────────────────────────────
+               A single gradient band overlays the top of the video.
+               After a few seconds the gradient, icons and Coming Attractions
+               fade out leaving only the title. Mouse-over restores everything.
+               If the poster strip is open nothing fades.
+
+               States driven by .sc-bar-dim on #sc-top-bar:
+                 (no class)    = fully visible
+                 .sc-bar-dim   = gradient/icons/toggle faded, title stays
+            ─────────────────────────────────────────────────────────────────── */
+
+            /* Gradient overlay behind the whole bar */
+            /* Gradient starts below the header row so it never alpha-composites
+               over the title/pills/toggle — those have their own background */
+            #sc-top-bar {
+                position: fixed !important;
+                top: 20px !important; /* start below the header bar */
+                left: 0 !important;
+                width: 80vw !important; height: 40px !important;
+                z-index: 10001 !important; /* above video */
+                pointer-events: none !important;
+                background: linear-gradient(
+                    to bottom,
+                    rgba(0,0,0,0.35) 0%,
+                    rgba(0,0,0,0)    100%
+                ) !important;
+                transition: opacity 1.5s ease !important;
+                opacity: 1 !important;
+            }
+            /* Vertical: title bar is a solid strip — no gradient overlay needed */
+            body.sc-vertical #sc-top-bar { display: none !important; }
+            #sc-top-bar.sc-bar-dim { opacity: 0 !important; }
+
+            /* Header — dark background fades out with gradient when dimmed */
+            #videowrap-header {
+                border: 0 !important;
+                background: rgba(0,0,0,0.55) !important;
+                padding: 3px 8px !important;
+                font-size: 12px !important;
+                font-weight: 500 !important;
+                color: #fff !important;
+                text-shadow: 0 1px 4px rgba(0,0,0,1), 0 0 10px rgba(0,0,0,0.9) !important;
+                letter-spacing: 0.01em !important;
+                white-space: nowrap !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+                width: 80vw !important;
+                box-sizing: border-box !important;
+                position: fixed !important;
+                top: 0 !important; left: 0 !important;
+                z-index: 10002 !important;
+                pointer-events: auto !important;
+                transition: background 1.5s ease, color 1.5s ease, text-shadow 1.5s ease !important;
+            }
+            #videowrap-header.sc-bar-dim {
+                background: transparent !important;
+                color: rgba(255,255,255,0.32) !important;
+                text-shadow: none !important;
+            }
+            /* Vertical: header is a real title bar above the video, not an overlay */
+            body.sc-vertical #videowrap-header {
+                width: 100vw !important;
+                height: 36px !important; line-height: 36px !important;
+                padding: 0 8px !important;
+                background: rgba(12,10,20,0.92) !important;
+                border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+                z-index: 10003 !important;
+                text-shadow: none !important;
+            }
+            /* Title bar dims text but keeps its solid background */
+            body.sc-vertical #videowrap-header.sc-bar-dim {
+                background: rgba(12,10,20,0.92) !important;
+                color: rgba(255,255,255,0.35) !important;
+                text-shadow: none !important;
+            }
+            /* Hide the "Currently Playing:" prefix label */
+            /* Hide CyTube's original usercount */
+            #usercount { display: none !important; }
+
+            /* Chat header bar — sits above #chatwrap */
+            #sc-chat-header {
+                position: fixed !important;
+                top: 0 !important; right: 5px !important;
+                width: calc(19vw - 5px) !important; height: 28px !important;
+                z-index: 10003 !important;
+                background: rgba(0,0,0,0.7) !important;
+                border: none !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: space-between !important;
+                padding: 0 8px !important;
+                box-sizing: border-box !important;
+            }
+            /* Vertical: chat header repositioned into the left side of the control band */
+            body.sc-vertical #sc-chat-header {
+                display: flex !important;
+                position: fixed !important;
+                left: 0 !important; right: auto !important; width: auto !important;
+                top: 50vh !important; height: 44px !important; bottom: auto !important;
+                background: transparent !important;
+                z-index: 10001 !important;
+                padding: 0 12px !important;
+                border: none !important; box-shadow: none !important;
+            }
+            /* Collapse button not needed in vertical — chatmode btn in band handles it */
+            body.sc-vertical #sc-chat-collapse-btn { display: none !important; }
+            #sc-usercount-btn, #sc-poll-btn {
+                background: transparent !important;
+                border: none !important;
+                font-size: 10px !important;
+                font-weight: 700 !important;
+                letter-spacing: 0.06em !important;
+                text-transform: uppercase !important;
+                color: rgba(255,255,255,0.5) !important;
+                cursor: pointer !important;
+                padding: 0 4px !important;
+                font-family: inherit !important;
+                transition: color 0.2s !important;
+                line-height: 28px !important;
+            }
+            body.sc-vertical #sc-usercount-btn,
+            body.sc-vertical #sc-poll-btn {
+                line-height: 44px !important;
+                height: 44px !important;
+                padding: 0 8px !important;
+                -webkit-appearance: none !important;
+                appearance: none !important;
+            }
+            #sc-usercount-btn:hover, #sc-poll-btn:hover { color: rgba(255,255,255,0.9) !important; }
+            #sc-usercount-btn.sc-users-active,
+            #sc-poll-btn.sc-poll-btn-active { color: white !important; }
+
+            /* Collapse/cycle button — far right of chat header */
+            #sc-chat-collapse-btn {
+                background: none !important; border: none !important;
+                color: rgba(255,255,255,0.4) !important;
+                font-size: 18px !important; font-weight: 300 !important;
+                cursor: pointer !important; padding: 0 4px !important;
+                line-height: 1 !important; margin-left: auto !important;
+                order: 999 !important; flex-shrink: 0 !important;
+                transition: color 0.2s !important;
+                -webkit-tap-highlight-color: transparent !important;
+            }
+            #sc-chat-collapse-btn:hover { color: rgba(255,255,255,0.9) !important; }
+            body.sc-tv #sc-chat-collapse-btn { font-size: 26px !important; padding: 0 6px !important; }
+
+            /* Users panel — drops down from usercount, same style as poll panel */
+            #sc-users-panel {
+                position: fixed !important;
+                top: 28px !important;
+                right: 5px !important;
+                width: calc(19vw - 5px) !important;
+                z-index: 19000 !important;
+                background: rgba(10,10,20,0.95) !important;
+                border: 1px solid #3a3a3a !important;
+                border-top: none !important;
+                border-radius: 0 0 0 8px !important;
+                padding: 10px 12px !important;
+                color: rgba(255,255,255,0.88) !important;
+                font-size: 12px !important;
+                line-height: 1.6 !important;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.7) !important;
+                max-height: 60vh !important;
+                overflow-y: auto !important;
+                scrollbar-width: thin !important;
+                scrollbar-color: rgba(255,255,255,0.15) transparent !important;
+                display: none;
+            }
+            body.sc-vertical #sc-users-panel {
+                top: auto !important;
+                bottom: calc(50vh - 44px) !important;
+                right: 5px !important;
+                width: calc(100vw - 5px) !important;
+                max-height: 40vh !important;
+            }
+            .sc-users-panel-header {
+                font-size: 10px !important;
+                font-weight: 700 !important;
+                letter-spacing: 0.06em !important;
+                text-transform: uppercase !important;
+                color: rgba(255,255,255,0.4) !important;
+                margin-bottom: 8px !important;
+                padding-bottom: 6px !important;
+                border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+            }
+            .sc-users-panel-name {
+                padding: 1px 0 !important;
+                white-space: nowrap !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+            }
+
+            #videowrap-header .pull-left > span:first-child,
+            #videowrap-header .label,
+            #videowrap-header b { display: none !important; }
+            #videowrap-header strong { font-weight: 500 !important; }
+
+            /* Movie link icons — background fades to transparent when dimmed,
+               /* Coming Attractions button — fades with gradient */
+            #sc-poster-toggle {
+                color: rgba(255,255,255,0.55) !important;
+                transition: opacity 1.5s ease, color 0.2s ease !important;
+                opacity: 1 !important;
+                pointer-events: auto !important;
+                cursor: pointer !important;
+            }
+            #sc-poster-toggle.sc-bar-dim {
+                opacity: 0 !important;
+                /* stays tap-targetable so the first tap can wake the bar, not act */
+            }
+            #sc-poster-toggle:hover { color: rgba(255,255,255,0.9) !important; }
+            #sc-poster-toggle.sc-poster-toggle-active {
+                color: rgba(255,255,255,0.9) !important;
+            }
+            /* Pull the control bar out of embed-responsive's constrained box
+               and pin it as a fixed element flush to the bottom of the screen.
+               Right edge stops just before the settings button. */
+            /* ===== VIDEO.JS CONTROL BAR — pill style matching our UI buttons ===== */
+            .video-js .vjs-control-bar {
+                position: fixed !important;
+                bottom: 4px !important;
+                left: 4px !important;
+                right: calc(20vw + 150px) !important;
+                width: auto !important;
+                margin: 0 !important;
+                z-index: 10001 !important;
+                /* Pill-style bar */
+                background: rgba(255,255,255,0.08) !important;
+                border-radius: 999px !important;
+                padding: 0 8px !important;
+                height: 32px !important;
+                display: flex !important;
+                align-items: center !important;
+                backdrop-filter: blur(4px) !important;
+            }
+            body.sc-vertical .video-js .vjs-control-bar {
+                /* Sit at the bottom of the video (just above the 50vh chat header),
+                   not pinned to the screen bottom where it would land over chat. */
+                bottom: calc(50vh + 4px) !important;
+                right: 4px !important;
+                left: 4px !important;
+            }
+
+            /* Individual control buttons — match pill button style */
+            .video-js .vjs-control {
+                color: rgba(255,255,255,0.55) !important;
+                transition: color 0.3s ease, background 0.3s ease !important;
+                border-radius: 999px !important;
+            }
+            .video-js .vjs-control:hover {
+                color: white !important;
+                background: rgba(255,255,255,0.12) !important;
+            }
+
+            /* Progress / seek bar */
+            .video-js .vjs-progress-control {
+                border-radius: 999px !important;
+                overflow: visible !important;
+            }
+            .video-js .vjs-progress-holder {
+                background: rgba(255,255,255,0.15) !important;
+                border-radius: 999px !important;
+                height: 4px !important;
+                transition: height 0.15s !important;
+            }
+            .video-js .vjs-progress-holder:hover { height: 6px !important; }
+            .video-js .vjs-play-progress {
+                background: rgba(255,255,255,0.75) !important;
+                border-radius: 999px !important;
+            }
+            .video-js .vjs-play-progress::before {
+                color: white !important;
+                font-size: 10px !important;
+                top: -3px !important;
+            }
+            .video-js .vjs-load-progress {
+                background: rgba(255,255,255,0.1) !important;
+                border-radius: 999px !important;
+            }
+
+            /* Volume slider */
+            .video-js .vjs-volume-bar {
+                background: rgba(255,255,255,0.15) !important;
+                border-radius: 999px !important;
+            }
+            .video-js .vjs-volume-level {
+                background: rgba(255,255,255,0.75) !important;
+                border-radius: 999px !important;
+            }
+            .video-js .vjs-volume-level::before {
+                color: white !important;
+                font-size: 10px !important;
+            }
+
+            /* Time display */
+            .video-js .vjs-time-control {
+                color: rgba(255,255,255,0.55) !important;
+                font-size: 11px !important;
+                line-height: 32px !important;
+                padding: 0 4px !important;
+                min-width: 0 !important;
+            }
+
+            /* Big play button — pill style */
+            .video-js .vjs-big-play-button {
+                top: 50% !important;
+                left: 50% !important;
+                transform: translate(-50%, -50%) !important;
+                margin: 0 !important;
+                background: rgba(255,255,255,0.08) !important;
+                border: 1px solid rgba(255,255,255,0.2) !important;
+                border-radius: 999px !important;
+                width: 60px !important;
+                height: 60px !important;
+                line-height: 60px !important;
+                font-size: 24px !important;
+                color: rgba(255,255,255,0.8) !important;
+                transition: background 0.3s ease, color 0.3s ease !important;
+                backdrop-filter: blur(4px) !important;
+            }
+            .video-js .vjs-big-play-button:hover {
+                background: rgba(255,255,255,0.18) !important;
+                color: white !important;
+            }
+            .video-js:hover .vjs-big-play-button { opacity: 1 !important; }
+
+            /* ===== MOTD — keep hidden, we extract images ourselves ===== */
+            #motdrow { display: none !important; }
+
+            /* ===== POSTER STRIP ===== */
+            #sc-poster-strip {
+                display: none !important; /* hidden by default */
+                position: fixed !important;
+                top: 20px !important;   /* drops down from the header bar */
+                left: 0 !important;
+                z-index: 19500 !important;
+                width: 80vw !important;
+                background: rgba(0,0,0,0.93) !important;
+                padding: 8px 12px !important;
+                overflow-x: auto !important;
+                overflow-y: hidden !important;
+                white-space: nowrap !important;
+                border-bottom: 1px solid rgba(255,255,255,0.12) !important;
+                scrollbar-width: thin !important;
+                scrollbar-color: rgba(255,255,255,0.2) transparent !important;
+            }
+            body.sc-vertical #sc-poster-strip {
+                width: 100vw !important;
+                top: 20px !important;
+                bottom: auto !important;
+            }
+            #sc-poster-strip.sc-poster-visible {
+                display: block !important;
+            }
+            .sc-poster-thumb {
+                height: 110px !important;
+                width: auto !important;
+                border-radius: 4px !important;
+                margin-right: 6px !important;
+                opacity: 0.82 !important;
+                transition: opacity 0.15s !important;
+                vertical-align: top !important;
+                cursor: pointer !important;
+                display: inline-block !important;
+                flex-shrink: 0 !important;
+            }
+            .sc-poster-thumb:hover { opacity: 1 !important; }
+
+            #sc-poster-zoom {
+                display: none;
+                position: fixed !important;
+                z-index: 99990 !important;
+                pointer-events: none !important;
+                border-radius: 4px !important;
+                box-shadow: 0 0 0 rgba(0,0,0,0) !important;
+                border: 1px solid rgba(255,255,255,0.0) !important;
+                /* transition animates position, size, shadow, border together */
+                transition:
+                    top 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+                    left 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+                    width 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+                    height 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+                    box-shadow 0.22s ease,
+                    border-color 0.22s ease,
+                    border-radius 0.22s ease !important;
+            }
+            #sc-poster-zoom.sc-zoom-expanded {
+                box-shadow: 0 12px 48px rgba(0,0,0,0.92) !important;
+                border-color: rgba(255,255,255,0.2) !important;
+                border-radius: 6px !important;
+            }
+
+
+            /* Toggle button — right side of the header bar, same line as the title */
+            #sc-poster-toggle {
+                position: fixed !important;
+                top: 0 !important;
+                right: 20vw !important;  /* stops at the chat panel edge */
+                left: auto !important;
+                z-index: 10003 !important;
+                background: transparent !important;
+                border: none !important;
+                border-radius: 0 !important;
+                padding: 2px 8px !important;
+                font-size: 10px !important;
+                cursor: pointer !important;
+                letter-spacing: 0.06em !important;
+                text-transform: uppercase !important;
+                white-space: nowrap !important;
+                line-height: 1 !important;
+                height: 20px !important;
+                display: flex !important;
+                align-items: center !important;
+            }
+            body.sc-vertical #sc-poster-toggle {
+                top: 0 !important;
+                right: 0 !important;
+                left: auto !important;
+                bottom: auto !important;
+            }
+
+            /* Phones draw edge-to-edge, so rounded display corners / cutouts clip the
+               top-corner chrome (movie title at the left, Coming Attractions at the right).
+               Nudge them in from the very edge. Scoped to phones (≤540px on the short side,
+               either orientation) so TV and tablets — which are larger — are untouched;
+               env() adds extra room on devices that actually report a display cutout. */
+            @media (max-width: 540px), (max-height: 540px) {
+                body.sc-horizontal #videowrap-header,
+                body.sc-vertical   #videowrap-header {
+                    padding-left: max(18px, env(safe-area-inset-left, 0px)) !important;
+                }
+                body.sc-vertical #sc-poster-toggle {
+                    right: max(16px, env(safe-area-inset-right, 0px)) !important;
+                    top: env(safe-area-inset-top, 0px) !important;
+                }
+            }
+
+            /* ===== MOVIE LINKS ===== */
+            #sc-movie-links {
+                display: inline-flex !important;
+                gap: 3px !important;
+                margin-left: 8px !important;
+                vertical-align: middle !important;
+            }
+            /* Dim: override inline background with transparent, fade text to ghost */
+            #sc-movie-links.sc-bar-dim .sc-movie-link {
+                background: transparent !important;
+                color: rgba(255,255,255,0.3) !important;
+                box-shadow: inset 0 0 0 1px rgba(255,255,255,0.15) !important;
+            }
+            .sc-movie-link {
+                display: inline-flex !important;
+                align-items: center !important; justify-content: center !important;
+                width: 17px !important; height: 17px !important;
+                border-radius: 3px !important;
+                font-size: 10px !important; font-weight: 900 !important;
+                text-decoration: none !important;
+                line-height: 1 !important; font-family: Georgia, serif !important;
+                flex-shrink: 0 !important; cursor: pointer !important;
+                transition: background 2s ease, color 2s ease, box-shadow 2s ease, filter 0.2s ease !important;
+            }
+            .sc-movie-link:hover { filter: brightness(1.3) !important; }
+            .sc-movie-loading { font-size: 11px !important; color: rgba(255,255,255,0.3) !important; margin-left: 6px !important; }
+            /* Stats bar — floats over bottom-left of video, auto-hides after 12s */
+            #sc-movie-stats {
+                position: fixed !important;
+                bottom: 40px !important;
+                left: 12px !important;
+                z-index: 19000 !important;
+                background: rgba(0,0,0,0.75) !important;
+                color: rgba(255,255,255,0.9) !important;
+                font-size: 13px !important;
+                padding: 6px 12px !important;
+                border-radius: 6px !important;
+                letter-spacing: 0.03em !important;
+                line-height: 1.4 !important;
+                pointer-events: none !important;
+                max-width: 75vw !important;
+                animation: sc-stats-fadein 0.4s ease !important;
+            }
+            @keyframes sc-stats-fadein {
+                from { opacity: 0; transform: translateY(6px); }
+                to   { opacity: 1; transform: translateY(0); }
+            }
+
+
+            /* ===== FLOATING BUTTONS (body-level, always visible) ===== */
+            #sc-desync-btn {
+                position: fixed !important;
+                z-index: 20002 !important;
+                background: rgba(255,255,255,0.08) !important;
+                color: rgba(255,255,255,0.55) !important;
+                border: none !important;
+                border-radius: 50% !important;
+                width: 28px !important; height: 28px !important;
+                padding: 0 !important;
+                font-size: 15px !important;
+                cursor: pointer !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                transition: color 0.3s ease, background 0.3s ease !important;
+            }
+            #sc-desync-btn:hover {
+                color: white !important;
+                background: rgba(255,255,255,0.22) !important;
+            }
+            #sc-desync-btn.sc-desync-active {
+                color: #ffcc44 !important;
+                background: rgba(255,200,50,0.18) !important;
+            }
+            body.sc-horizontal #sc-desync-btn {
+                bottom: 6px !important;
+                right: calc(20vw + 38px) !important;
+            }
+            body.sc-vertical #sc-desync-btn {
+                bottom: 43vh !important;
+                right: 46px !important;
+            }
+
+            #fs-toggle-btn {
+                position: fixed !important;
+                z-index: 20002 !important;
+                background: rgba(255,255,255,0.08) !important;
+                color: rgba(255,255,255,0.55) !important;
+                border: none !important;
+                border-radius: 50% !important;
+                width: 28px !important;
+                height: 28px !important;
+                padding: 0 !important;
+                font-size: 15px !important;
+                cursor: pointer !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                transition: color 0.3s ease, background 0.3s ease !important;
+            }
+            #fs-toggle-btn:hover {
+                color: white !important;
+                background: rgba(255,255,255,0.22) !important;
+            }
+            /* Emote button — absolute inside the input row, overlapping the textarea's
+               right edge. Takes zero flex space; textarea gets matching padding-right. */
+            #sc-mobile-input-row { position: relative !important; }
+            #sc-emote-proxy {
+                position: absolute !important;
+                right: 6px !important; top: 50% !important;
+                transform: translateY(-50%) !important;
+                z-index: 1 !important;
+                background: none !important; border: none !important;
+                color: rgba(255,255,255,0.4) !important;
+                cursor: pointer !important; padding: 4px !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                -webkit-tap-highlight-color: transparent !important;
+                transition: color 0.2s ease !important;
+            }
+            /* Portrait: shift left to clear the send button */
+            body.sc-vertical #sc-emote-proxy { right: calc(44px + 14px) !important; }
+            /* Overlay mode: chat is too compact for an emote icon */
+            body.sc-chat-overlay #sc-emote-proxy { display: none !important; }
+            #sc-emote-proxy:hover { color: rgba(255,255,255,0.85) !important; }
+            #sc-emote-proxy svg { width: 20px !important; height: auto !important; display: block !important; }
+            body.sc-tv #sc-emote-proxy svg { width: 26px !important; }
+            /* Stop text running behind the icon */
+            #sc-chat-textarea { padding-right: 34px !important; }
+            #fs-toggle-btn:focus { outline: none !important; }
+
+            /* ===== HORIZONTAL LAYOUT (widescreen) ===== */
+            body.sc-horizontal #videowrap {
+                position: fixed !important; top: 0 !important; left: 0 !important;
+                width: 79vw !important; height: 100vh !important;
+                z-index: 9999 !important; background: black !important;
+            }
+            body.sc-horizontal #videowrap .embed-responsive,
+            body.sc-horizontal #ytapiplayer {
+                width: 79vw !important; height: 100vh !important;
+            }
+            body.sc-horizontal #chatwrap {
+                position: fixed !important; top: 28px !important; right: 0 !important;
+                width: 19vw !important; height: calc(100vh - 28px) !important;
+                z-index: 9999 !important; background: rgba(0,0,0,0.7) !important;
+                overflow: hidden !important; padding: 0 !important; margin: 0 !important;
+                box-sizing: border-box !important;
+                border: none !important;
+                display: flex !important; flex-direction: column !important;
+            }
+            /* One consistent 8px inset for everything in the chat column, so the
+               messages, input and header all share the same left/right edge. */
+            body.sc-horizontal #chatwrap > * { margin-left: 0 !important; margin-right: 0 !important; box-sizing: border-box !important; width: 100% !important; }
+            body.sc-horizontal #messagebuffer,
+            body.sc-horizontal #sc-mobile-input-row { padding-left: 8px !important; padding-right: 8px !important; }
+            body.sc-horizontal #sc-chat-header { padding: 0 8px !important; margin: 0 !important; }
+            /* Hide send button in horizontal — Enter key sends */
+            body.sc-horizontal #sc-send-btn { display: none !important; }
+            body.sc-horizontal #sc-mobile-input-row { padding: 4px 0 !important; }
+            body.sc-horizontal #leftcontrols { display: none !important; }
+            body.sc-horizontal #fs-toggle-btn {
+                bottom: 6px !important; right: calc(20vw + 70px) !important;
+            }
+
+            /* ===== VERTICAL LAYOUT (portrait) — YouTube-style stack =====
+               Title strip (36px) → video (ends at 50vh) → control band (44px) → chat */
+            body.sc-vertical #videowrap {
+                position: fixed !important; top: 36px !important; left: 0 !important;
+                width: 100vw !important; height: calc(50vh - 36px) !important;
+                z-index: 9999 !important; background: black !important;
+                border: none !important; outline: none !important;
+                box-shadow: none !important;
+            }
+            body.sc-vertical #videowrap .embed-responsive,
+            body.sc-vertical #ytapiplayer {
+                width: 100vw !important; height: calc(50vh - 36px) !important;
+                border: none !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            body.sc-vertical .video-js {
+                margin: 0 !important;
+                padding: 0 !important;
+                left: 0 !important;
+            }
+            body.sc-vertical .vjs-tech {
+                left: 0 !important;
+                margin: 0 !important;
+            }
+            body.sc-vertical #chatwrap {
+                position: fixed !important; bottom: 0 !important; left: 0 !important;
+                width: 100vw !important; height: calc(50vh - 44px) !important;
+                z-index: 9999 !important; background: rgba(16,14,24,0.97) !important;
+                overflow: hidden !important; padding: 0 5px !important;
+                display: flex !important; flex-direction: column !important;
+            }
+            body.sc-vertical #messagebuffer { font-size: 15px !important; }
+
+            /* Vertical: all buttons in one right-pinned row flush on top of the chat panel.
+               leftcontrols hides its own internal layout; we show a proxy row instead. */
+            body.sc-vertical #leftcontrols { display: none !important; }
+
+            /* fs button: right-pinned, sitting exactly on the chat top edge */
+            body.sc-vertical #fs-toggle-btn {
+                bottom: 43vh !important;
+                right: 84px !important; left: auto !important;
+            }
+
+            /* ===== SHARED CHAT ELEMENTS ===== */
+            /* No borders anywhere in the chat column except the message input box */
+            #chatwrap, #chatwrap *:not(#sc-chat-textarea),
+            #sc-chat-header, #sc-chat-header * {
+                border: none !important; box-shadow: none !important;
+            }
+            /* Vertical: header band shares the chat's background so there's no seam */
+            body.sc-vertical #sc-chat-header { background: rgba(0,0,0,0.85) !important; }
+            #messagebuffer {
+                flex: 1 !important; height: auto !important;
+                width: 100% !important; box-sizing: border-box !important;
+                padding-left: 0 !important; padding-right: 0 !important; margin: 0 !important;
+                background: transparent !important; color: white !important; border: none !important;
+                font-size: 14px !important; overflow-x: hidden !important; overflow-y: auto !important; padding-bottom: 5px !important;
+            }
+            /* Long usernames / links must wrap, never widen the panel */
+            #messagebuffer, #messagebuffer * {
+                overflow-wrap: anywhere !important; word-break: break-word !important;
+                max-width: 100% !important;
+            }
+            #sc-chat-textarea {
+                width: 100% !important; min-height: 44px !important; max-height: 120px !important;
+                background: rgba(255,255,255,0.1) !important; color: white !important;
+                border: 1px solid rgba(255,255,255,0.3) !important; border-radius: 4px !important;
+                padding: 6px 8px !important; font-size: 14px !important; font-family: inherit !important;
+                resize: none !important; overflow-y: auto !important;
+                box-sizing: border-box !important; line-height: 1.4 !important;
+                outline: none !important; transition: border-color 0.2s !important; flex-shrink: 0 !important;
+            }
+            #sc-chat-textarea:focus {
+                border-color: rgba(255,255,255,0.7) !important;
+                background: rgba(255,255,255,0.15) !important;
+            }
+            #sc-chat-textarea::placeholder { color: rgba(255,255,255,0.4) !important; }
+            #sc-checking {
+                font-size: 11px !important; color: rgba(255,255,200,0.6) !important;
+                padding: 2px 4px !important; flex-shrink: 0 !important;
+            }
+
+`;
+
+  // src/styles/overlays.css
+  var overlays_default = `            /* ===== REVIEW MODAL ===== */
+            #sc-modal-overlay {
+                position: fixed !important; inset: 0 !important;
+                background: rgba(0,0,0,0.8) !important; z-index: 99999 !important;
+                display: flex !important; align-items: center !important;
+                justify-content: center !important; font-family: system-ui, sans-serif !important;
+            }
+            #sc-modal {
+                background: #13131f !important; border: 1px solid rgba(255,255,255,0.15) !important;
+                border-radius: 12px !important; padding: 20px !important;
+                max-width: 520px !important; width: 94vw !important; color: white !important;
+                box-shadow: 0 12px 40px rgba(0,0,0,0.7) !important; max-height: 85vh !important;
+                overflow-y: auto !important; display: flex !important; flex-direction: column !important; gap: 12px !important;
+            }
+            #sc-modal-title { font-size: 16px !important; font-weight: 700 !important; color: #f0c040 !important; margin: 0 !important; }
+            #sc-readability { display: flex !important; flex-direction: column !important; gap: 4px !important; }
+            .sc-readability-issue {
+                font-size: 12px !important; color: #ffd080 !important;
+                background: rgba(255,200,80,0.08) !important; border-radius: 4px !important; padding: 4px 8px !important;
+            }
+            #sc-preview-wrap {
+                background: rgba(255,255,255,0.05) !important; border: 1px solid rgba(255,255,255,0.1) !important;
+                border-radius: 6px !important; padding: 10px 12px !important;
+                line-height: 1.6 !important; font-size: 14px !important; color: #e0e0e0 !important; word-break: break-word !important;
+            }
+            .sc-error-span {
+                background: rgba(255,80,80,0.25) !important; border-bottom: 2px solid #ff5555 !important;
+                border-radius: 2px !important; cursor: pointer !important; padding: 0 1px !important; transition: background 0.15s !important;
+            }
+            .sc-error-span:hover { background: rgba(255,80,80,0.45) !important; }
+            #sc-error-detail {
+                background: rgba(255,255,255,0.04) !important; border-radius: 6px !important;
+                padding: 8px 10px !important; font-size: 13px !important; min-height: 36px !important; color: #ccc !important;
+            }
+            #sc-error-detail:empty { display: none !important; }
+            .sc-detail-msg { margin-bottom: 8px !important; color: #ffcccc !important; }
+            .sc-detail-actions { display: flex !important; flex-wrap: wrap !important; gap: 6px !important; }
+            .sc-sug-btn {
+                background: rgba(60,180,100,0.2) !important; color: #90ffa0 !important;
+                border: 1px solid rgba(60,200,100,0.4) !important; border-radius: 5px !important;
+                padding: 4px 10px !important; cursor: pointer !important; font-size: 12px !important;
+            }
+            .sc-sug-btn:hover { background: rgba(60,180,100,0.4) !important; }
+            .sc-reject-btn {
+                background: rgba(255,255,255,0.07) !important; color: #aaa !important;
+                border: 1px solid rgba(255,255,255,0.15) !important; border-radius: 5px !important;
+                padding: 4px 10px !important; cursor: pointer !important; font-size: 12px !important;
+            }
+            .sc-reject-btn:hover { background: rgba(255,255,255,0.14) !important; }
+            #sc-modal-actions { display: flex !important; gap: 10px !important; justify-content: flex-end !important; }
+            #sc-btn-cancel {
+                background: rgba(255,255,255,0.08) !important; color: #ccc !important;
+                border: 1px solid rgba(255,255,255,0.2) !important; border-radius: 6px !important;
+                padding: 7px 16px !important; cursor: pointer !important; font-size: 13px !important;
+            }
+            #sc-btn-cancel:hover { background: rgba(255,255,255,0.16) !important; }
+            #sc-btn-send {
+                background: rgba(60,180,100,0.25) !important; color: #90ffa0 !important;
+                border: 1px solid rgba(60,200,100,0.5) !important; border-radius: 6px !important;
+                padding: 7px 16px !important; cursor: pointer !important; font-size: 13px !important; font-weight: 600 !important;
+            }
+            #sc-btn-send:hover { background: rgba(60,180,100,0.4) !important; }
+            #sc-lt-credit { font-size: 10px !important; color: rgba(255,255,255,0.25) !important; text-align: right !important; }
+            #sc-lt-credit a { color: rgba(255,255,255,0.35) !important; }
+
+            /* ===== SETTINGS BUTTON ===== */
+            #sc-settings-btn {
+                position: fixed !important;
+                z-index: 20002 !important;
+                background: rgba(255,255,255,0.08) !important;
+                color: rgba(255,255,255,0.55) !important;
+                border: none !important;
+                border-radius: 50% !important;
+                width: 28px !important;
+                height: 28px !important;
+                padding: 0 !important;
+                font-size: 13px !important;
+                cursor: pointer !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                transition: color 0.3s ease, background 0.3s ease !important;
+                line-height: 1 !important;
+            }
+            #sc-settings-btn:hover {
+                color: white !important;
+                background: rgba(255,255,255,0.22) !important;
+            }
+            /* A newer release is available — static green highlight (always while available) */
+            #sc-settings-btn.sc-has-update {
+                color: #7dffa0 !important;
+                box-shadow: 0 0 0 2px rgba(125,255,160,0.32), 0 0 6px rgba(125,255,160,0.28) !important;
+            }
+            /* …and a brief attention pulse, removed after ~30s so it isn't endless */
+            #sc-settings-btn.sc-has-update.sc-has-update-pulse {
+                animation: sc-gear-update-pulse 2s ease-in-out infinite !important;
+            }
+            @keyframes sc-gear-update-pulse {
+                0%, 100% { box-shadow: 0 0 0 2px rgba(125,255,160,0.35), 0 0 6px rgba(125,255,160,0.35) !important; }
+                50%      { box-shadow: 0 0 0 2px rgba(125,255,160,0.7), 0 0 16px rgba(125,255,160,0.8) !important; }
+            }
+
+            body.sc-horizontal #sc-settings-btn {
+                bottom: 6px !important; right: calc(20vw + 102px) !important;
+            }
+            body.sc-vertical #sc-settings-btn {
+                bottom: 43vh !important; right: 122px !important;
+            }
+
+            /* ===== CAST BUTTON (mobile only) — fly-out cluster, one slot past settings ===== */
+            #sc-cast-btn {
+                position: fixed !important;
+                z-index: 20002 !important;
+                background: rgba(255,255,255,0.08) !important;
+                color: rgba(255,255,255,0.55) !important;
+                border: none !important;
+                border-radius: 50% !important;
+                width: 28px !important;
+                height: 28px !important;
+                padding: 0 !important;
+                cursor: pointer !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                transition: color 0.3s ease, background 0.3s ease, opacity 0.25s ease, transform 0.25s ease !important;
+                line-height: 1 !important;
+            }
+            #sc-cast-btn:hover { color: white !important; background: rgba(255,255,255,0.22) !important; }
+            #sc-cast-btn.sc-cast-active { color: #7dffa0 !important; background: rgba(125,255,160,0.18) !important; }
+            /* Horizontal: vertical stack at the left edge, directly under settings (56px pitch) */
+            body.sc-horizontal #sc-cast-btn {
+                left: 10px !important; right: auto !important; bottom: auto !important;
+                top: calc(50% + 112px) !important;
+                opacity: 0 !important; pointer-events: none !important;
+                transform: translateX(-14px) !important;
+            }
+            body.sc-horizontal.sc-leftzone #sc-cast-btn {
+                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
+            }
+            /* Vertical: control-band row, one slot left of settings */
+            body.sc-vertical #sc-cast-btn {
+                top: calc(50vh + 4px) !important; bottom: auto !important;
+                right: 140px !important; left: auto !important;
+                opacity: 0 !important; pointer-events: none !important;
+                transform: translateX(16px) !important;
+            }
+            body.sc-vertical.sc-rightzone #sc-cast-btn {
+                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
+            }
+            /* Hide with the rest of the cluster while the keyboard is up */
+            body.sc-kb-open #sc-cast-btn { opacity: 0 !important; pointer-events: none !important; }
+
+            /* ===== SETTINGS MODAL ===== */
+            #sc-settings-overlay {
+                position: fixed !important; inset: 0 !important;
+                background: rgba(0,0,0,0.85) !important;
+                z-index: 99998 !important;
+                display: flex !important;
+                align-items: center !important; justify-content: center !important;
+                font-family: system-ui, sans-serif !important;
+            }
+            #sc-settings-modal {
+                background: #0e0e1a !important;
+                border: 1px solid rgba(255,255,255,0.15) !important;
+                border-radius: 12px !important;
+                padding: 24px !important;
+                width: min(480px, 94vw) !important;
+                color: white !important;
+                box-shadow: 0 16px 48px rgba(0,0,0,0.8) !important;
+                display: flex !important; flex-direction: column !important; gap: 16px !important;
+                max-height: 90vh !important; overflow-y: auto !important;
+                -webkit-overflow-scrolling: touch !important;
+            }
+            /* Validate-key button sits inline with each key input */
+            .sc-settings-input-row { display: flex !important; gap: 8px !important; align-items: stretch !important; }
+            .sc-settings-input-row .sc-settings-input { flex: 1 !important; }
+            .sc-settings-test {
+                flex-shrink: 0 !important;
+                background: rgba(192,176,255,0.15) !important;
+                color: #c0b0ff !important;
+                border: 1px solid rgba(192,176,255,0.35) !important;
+                border-radius: 6px !important;
+                padding: 0 16px !important; font-size: 13px !important; font-weight: 600 !important;
+                cursor: pointer !important;
+            }
+            .sc-settings-test:disabled { opacity: 0.5 !important; cursor: default !important; }
+            .sc-settings-test-status { font-size: 12px !important; min-height: 14px !important; }
+            .sc-settings-test-status.sc-test-ok      { color: #7dffa0 !important; }
+            .sc-settings-test-status.sc-test-bad     { color: #ff8080 !important; }
+            .sc-settings-test-status.sc-test-pending { color: rgba(255,255,255,0.55) !important; }
+            /* Chat font-size slider + live sample */
+            .sc-settings-range { width: 100% !important; accent-color: #c0b0ff !important; cursor: pointer !important; }
+            .sc-font-sample {
+                margin-top: 10px !important; padding: 10px 12px !important;
+                background: rgba(255,255,255,0.05) !important;
+                border: 1px solid rgba(255,255,255,0.1) !important;
+                border-radius: 6px !important; color: rgba(255,255,255,0.88) !important;
+                line-height: 1.4 !important;
+            }
+            #sc-settings-title {
+                font-size: 17px !important; font-weight: 700 !important;
+                color: #c0b0ff !important;
+            }
+            .sc-settings-intro {
+                font-size: 13px !important; color: rgba(255,255,255,0.6) !important;
+                line-height: 1.5 !important;
+                background: rgba(255,255,255,0.04) !important;
+                border-radius: 6px !important; padding: 8px 10px !important;
+            }
+            .sc-settings-group {
+                display: flex !important; flex-direction: column !important; gap: 5px !important;
+            }
+            .sc-settings-label {
+                font-size: 13px !important; font-weight: 600 !important;
+                color: rgba(255,255,255,0.85) !important;
+                display: flex !important; flex-direction: column !important; gap: 2px !important;
+            }
+            .sc-settings-note {
+                font-weight: 400 !important; font-size: 11px !important;
+                color: rgba(255,255,255,0.4) !important;
+            }
+            .sc-settings-input {
+                background: rgba(255,255,255,0.07) !important;
+                border: 1px solid rgba(255,255,255,0.2) !important;
+                border-radius: 6px !important;
+                color: white !important;
+                padding: 8px 10px !important;
+                font-size: 13px !important;
+                font-family: monospace !important;
+                outline: none !important;
+                width: 100% !important; box-sizing: border-box !important;
+            }
+            .sc-settings-input:focus {
+                border-color: rgba(192,176,255,0.6) !important;
+                background: rgba(255,255,255,0.1) !important;
+            }
+            .sc-settings-link {
+                font-size: 11px !important; color: rgba(192,176,255,0.7) !important;
+                text-decoration: none !important; align-self: flex-start !important;
+            }
+            .sc-settings-link:hover { color: #c0b0ff !important; text-decoration: underline !important; }
+            .sc-settings-toggle-group, .sc-settings-divider {
+                border-top: 1px solid rgba(255,255,255,0.08) !important; padding-top: 12px !important;
+            }
+            .sc-settings-toggle-label {
+                display: flex !important; flex-direction: column !important; gap: 4px !important;
+                cursor: pointer !important; font-size: 13px !important;
+                font-weight: 600 !important; color: rgba(255,255,255,0.85) !important;
+            }
+            /* checkbox sits INLINE with its label; the note drops underneath */
+            .sc-toggle-row {
+                display: flex !important; align-items: center !important; gap: 9px !important;
+            }
+            .sc-toggle-row input[type="checkbox"] {
+                width: 17px !important; height: 17px !important; margin: 0 !important;
+                flex: 0 0 auto !important; cursor: pointer !important; accent-color: #c0b0ff !important;
+            }
+            .sc-toggle-text { line-height: 1.2 !important; }
+            #sc-tmdb-fields {
+                display: flex !important; flex-direction: column !important; gap: 6px !important;
+                margin: 8px 0 0 26px !important;
+            }
+            #sc-tmdb-fields.sc-hidden { display: none !important; }
+            .sc-settings-btn-wide {
+                background: rgba(192,176,255,0.2) !important; color: #c0b0ff !important;
+                border: 1px solid rgba(192,176,255,0.4) !important; border-radius: 6px !important;
+                padding: 9px 18px !important; font-size: 13px !important; font-weight: 600 !important;
+                cursor: pointer !important; width: 100% !important;
+            }
+            .sc-settings-btn-wide:hover { background: rgba(192,176,255,0.32) !important; }
+            /* App-update section + the settings-gear "update available" highlight */
+            #sc-update-notes {
+                white-space: pre-wrap !important; max-height: 130px !important; overflow-y: auto !important;
+                margin: 6px 0 8px !important; padding: 8px 10px !important;
+                background: rgba(255,255,255,0.05) !important; border-radius: 6px !important;
+                font-size: 12px !important; line-height: 1.45 !important; color: rgba(255,255,255,0.78) !important;
+            }
+            #sc-update-notes.sc-hidden, #sc-update-download.sc-hidden { display: none !important; }
+            #sc-update-status.sc-update-yes { color: #7dffa0 !important; font-weight: 600 !important; }
+            #sc-update-status.sc-update-no  { color: rgba(255,255,255,0.5) !important; }
+            #sc-update-download { margin-top: 8px !important; background: rgba(125,255,160,0.16) !important;
+                color: #7dffa0 !important; border-color: rgba(125,255,160,0.4) !important; }
+            #sc-update-download:hover { background: rgba(125,255,160,0.28) !important; }
+            #sc-settings-actions {
+                display: flex !important; gap: 10px !important; justify-content: flex-end !important;
+                margin-top: 4px !important;
+            }
+            #sc-settings-cancel {
+                background: rgba(255,255,255,0.08) !important; color: #aaa !important;
+                border: 1px solid rgba(255,255,255,0.15) !important;
+                border-radius: 6px !important; padding: 8px 18px !important;
+                cursor: pointer !important; font-size: 13px !important;
+            }
+            #sc-settings-cancel:hover { background: rgba(255,255,255,0.14) !important; }
+            #sc-settings-save {
+                background: rgba(192,176,255,0.2) !important; color: #c0b0ff !important;
+                border: 1px solid rgba(192,176,255,0.4) !important;
+                border-radius: 6px !important; padding: 8px 18px !important;
+                cursor: pointer !important; font-size: 13px !important; font-weight: 600 !important;
+            }
+            #sc-settings-save:hover { background: rgba(192,176,255,0.35) !important; }
+
+
+            /* Poll panel */
+            #sc-poll-panel {
+                position: fixed !important;
+                top: 28px !important;
+                right: 5px !important;
+                width: calc(19vw - 5px) !important;
+                z-index: 19000 !important;
+                background: rgba(10,10,20,0.95) !important;
+                border: 1px solid rgba(255,255,255,0.12) !important;
+                border-radius: 8px !important;
+                padding: 12px 14px !important;
+                max-width: 100% !important;
+                color: rgba(255,255,255,0.88) !important;
+                font-size: 13px !important;
+                line-height: 1.5 !important;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.7) !important;
+                font-family: system-ui, sans-serif !important;
+            }
+            body.sc-vertical #sc-poll-panel {
+                right: 0 !important;
+                top: auto !important;
+                bottom: calc(42vh + 42px) !important;
+                max-width: 98vw !important;
+            }
+            .sc-poll-header {
+                font-weight: 600 !important;
+                font-size: 14px !important;
+                color: #f0c040 !important;
+                margin-bottom: 8px !important;
+                padding-bottom: 6px !important;
+                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+            }
+            .sc-poll-option {
+                margin-bottom: 6px !important;
+                color: rgba(255,255,255,0.82) !important;
+                font-size: 13px !important;
+            }
+            .sc-poll-option a {
+                color: #7eb8f7 !important;
+                word-break: break-all !important;
+            }
+            .sc-poll-meta {
+                margin-top: 8px !important;
+                font-size: 11px !important;
+                color: rgba(255,255,255,0.35) !important;
+                text-align: right !important;
+            }
+
+            #sc-settings-status {
+                font-size: 12px !important; color: #90ffa0 !important;
+                text-align: center !important; min-height: 16px !important;
+            }
+
+            /* DRM (YouTube Movies) fallback overlay — covers the dead YT iframe */
+            #sc-drm-overlay {
+                position: absolute !important; inset: 0 !important;
+                z-index: 60 !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                background: radial-gradient(ellipse at center, rgba(20,12,28,0.92), rgba(8,6,12,0.97)) !important;
+                font-family: 'Inter', system-ui, sans-serif !important;
+                padding: 24px !important; text-align: center !important;
+            }
+            #sc-drm-box { max-width: 560px !important; }
+            #sc-drm-icon { font-size: 40px !important; margin-bottom: 10px !important; }
+            #sc-drm-title {
+                font-size: 22px !important; font-weight: 700 !important; color: #fff !important;
+                margin-bottom: 10px !important; line-height: 1.25 !important;
+            }
+            #sc-drm-msg {
+                font-size: 14px !important; color: rgba(255,255,255,0.72) !important;
+                line-height: 1.5 !important; margin-bottom: 20px !important;
+            }
+            #sc-drm-msg b { color: #c0b0ff !important; }
+            .sc-drm-btn {
+                background: #c0b0ff !important; color: #1a1020 !important; border: none !important;
+                border-radius: 8px !important; padding: 12px 26px !important;
+                font-size: 15px !important; font-weight: 700 !important; cursor: pointer !important;
+                font-family: inherit !important;
+            }
+            .sc-drm-btn:focus { outline: 3px solid #fff !important; outline-offset: 2px !important; }
+`;
+
+  // src/styles/tv.css
+  var tv_default = `            html, body { width: 100vw !important; overflow-x: hidden !important; background: #000 !important; }
+
+            /* Clean, distance-legible chat type (Inter, falling back to Roboto/system) */
+            #messagebuffer, #messagebuffer *, #sc-chat-textarea {
+                font-family: 'Inter', 'Roboto', system-ui, -apple-system, sans-serif !important;
+                letter-spacing: 0.005em !important;
+            }
+            #messagebuffer { line-height: 1.35 !important; }
+            body.sc-tv #messagebuffer { font-weight: 500 !important; }
+            /* Poll notifications carry a hardcoded 14pt size — make them match chat */
+            #messagebuffer .poll-notify { font-size: inherit !important; }
+
+            /* App is always fullscreen — the toggle is redundant */
+            #fs-toggle-btn { display: none !important; }
+
+            /* Compact control icons on phones (TV scales these up to 52px below) */
+            #sc-desync-btn, #sc-settings-btn, #sc-cast-btn {
+                width: 36px !important; height: 36px !important; font-size: 15px !important;
+                -webkit-tap-highlight-color: transparent !important;
+            }
+            /* Prevent input zoom on mobile */
+            #sc-chat-textarea { font-size: 16px !important; }
+
+            /* ── VERTICAL (portrait phone): YouTube-style stack ─── */
+            /* Title strip (36px) → video (50vh total) → ctrl band (44px) → chat */
+            body.sc-vertical #videowrap,
+            body.sc-vertical #videowrap .embed-responsive,
+            body.sc-vertical #ytapiplayer    { height: calc(50vh - 36px) !important; }
+            body.sc-vertical #chatwrap       { height: calc(50vh - 44px) !important; }
+            body.sc-vertical #sc-users-panel { bottom: calc(50vh - 44px) !important; }
+            body.sc-vertical #sc-poll-panel  { bottom: calc(50vh - 44px) !important; }
+            /* Three buttons sit inside the control band — evenly spaced from the right */
+            body.sc-vertical #sc-chatmode-btn {
+                bottom: auto !important; top: calc(50vh + 4px) !important;
+                right: 8px !important; left: auto !important; transform: none !important;
+                opacity: 1 !important; pointer-events: auto !important;
+            }
+            body.sc-vertical #sc-desync-btn {
+                bottom: auto !important; top: calc(50vh + 4px) !important;
+                right: 52px !important; left: auto !important;
+                opacity: 1 !important; pointer-events: auto !important;
+            }
+            body.sc-vertical #sc-settings-btn {
+                bottom: auto !important; top: calc(50vh + 4px) !important;
+                right: 96px !important; left: auto !important;
+                opacity: 1 !important; pointer-events: auto !important;
+            }
+            body.sc-vertical .video-js .vjs-control-bar { bottom: calc(50vh + 4px) !important; left: 4px !important; right: 4px !important; }
+
+            /* Control band element — dark strip between video and chat */
+            #sc-vert-ctrl-band { display: none !important; }
+            body.sc-vertical #sc-vert-ctrl-band {
+                display: block !important;
+                position: fixed !important; left: 0 !important; right: 0 !important;
+                top: 50vh !important; height: 44px !important;
+                background: rgba(8,6,12,0.95) !important;
+                z-index: 10000 !important;
+                border-top: 1px solid rgba(255,255,255,0.10) !important;
+                border-bottom: 1px solid rgba(255,255,255,0.07) !important;
+            }
+            /* Right-zone slide drawer — buttons hidden off-screen right, revealed on edge swipe */
+            body.sc-vertical #sc-chatmode-btn,
+            body.sc-vertical #sc-desync-btn,
+            body.sc-vertical #sc-settings-btn {
+                opacity: 0 !important; pointer-events: none !important;
+                transform: translateX(16px) !important;
+                transition: opacity 0.25s ease, transform 0.25s ease !important;
+            }
+            body.sc-vertical.sc-rightzone #sc-chatmode-btn,
+            body.sc-vertical.sc-rightzone #sc-desync-btn,
+            body.sc-vertical.sc-rightzone #sc-settings-btn {
+                opacity: 1 !important; pointer-events: auto !important;
+                transform: translateX(0) !important;
+            }
+            /* Grip — thin pill on the right edge of the control band */
+            #sc-vert-ctrl-grip { display: none !important; }
+            body.sc-vertical #sc-vert-ctrl-grip {
+                display: block !important;
+                position: fixed !important; right: 0 !important; top: 50vh !important;
+                width: 4px !important; height: 44px !important;
+                background: rgba(255,255,255,0.22) !important;
+                z-index: 10002 !important; cursor: pointer !important;
+                border-radius: 2px 0 0 2px !important;
+                transition: width 0.15s ease, background 0.2s ease !important;
+            }
+            body.sc-vertical #sc-vert-ctrl-grip:active { background: rgba(255,255,255,0.5) !important; width: 6px !important; }
+            body.sc-vertical.sc-rightzone #sc-vert-ctrl-grip { opacity: 0 !important; pointer-events: none !important; }
+
+            /* Hide ctrl band, grip, and buttons while keyboard is up */
+            body.sc-kb-open.sc-vertical #sc-vert-ctrl-band,
+            body.sc-kb-open.sc-vertical #sc-vert-ctrl-grip {
+                opacity: 0 !important; pointer-events: none !important;
+            }
+
+            /* ── KEYBOARD OPEN (sc-kb-open) ──────────────────── */
+            /* edge-to-edge mode breaks adjustResize — vh never updates,
+               so we drive layout with explicit px values from visualViewport */
+            body.sc-kb-open.sc-vertical #videowrap,
+            body.sc-kb-open.sc-vertical #videowrap .embed-responsive,
+            body.sc-kb-open.sc-vertical #ytapiplayer {
+                height: var(--sc-vid-h) !important;
+            }
+            body.sc-kb-open.sc-vertical #chatwrap {
+                height: var(--sc-chat-h) !important;
+                bottom: var(--sc-kb-h) !important;
+            }
+            /* ── VERTICAL keyboard open ─────────────────────── */
+            /* Hide floating buttons while typing */
+            body.sc-kb-open.sc-vertical #sc-chatmode-btn,
+            body.sc-kb-open.sc-vertical #sc-desync-btn,
+            body.sc-kb-open.sc-vertical #sc-settings-btn,
+            body.sc-kb-open #sc-top-bar,
+            body.sc-kb-open #sc-chat-header {
+                opacity: 0 !important;
+                pointer-events: none !important;
+            }
+
+            /* ── HORIZONTAL keyboard open ───────────────────── */
+            body.sc-kb-open.sc-horizontal #videowrap,
+            body.sc-kb-open.sc-horizontal #videowrap .embed-responsive,
+            body.sc-kb-open.sc-horizontal #ytapiplayer {
+                height: var(--sc-vid-h) !important;
+            }
+            body.sc-kb-open.sc-horizontal #chatwrap {
+                height: var(--sc-chat-h) !important;
+                bottom: var(--sc-kb-h) !important;
+            }
+            /* Lift floating buttons above the keyboard */
+            body.sc-kb-open.sc-horizontal #sc-desync-btn,
+            body.sc-kb-open.sc-horizontal #fs-toggle-btn,
+            body.sc-kb-open.sc-horizontal #sc-settings-btn {
+                bottom: calc(var(--sc-kb-h) + 6px) !important;
+            }
+
+            /* ── HORIZONTAL (landscape phone / tablet / TV) ──── */
+            /* Control cluster — vertical stack pinned to the mid-left edge.
+               Hidden until the mouse moves to the left side (sc-leftzone),
+               then revealed and clickable; fades out again afterwards. */
+            body.sc-horizontal #sc-chatmode-btn,
+            body.sc-horizontal #sc-desync-btn,
+            body.sc-horizontal #sc-settings-btn {
+                left: 10px !important; right: auto !important; bottom: auto !important;
+                opacity: 0 !important; pointer-events: none !important;
+                transform: translateX(-14px) !important;
+                transition: opacity 0.25s ease, transform 0.25s ease !important;
+            }
+            /* Slide/fade in when the mouse reaches the left edge (or the grip) */
+            body.sc-horizontal.sc-leftzone #sc-chatmode-btn,
+            body.sc-horizontal.sc-leftzone #sc-desync-btn,
+            body.sc-horizontal.sc-leftzone #sc-settings-btn {
+                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
+            }
+
+            /* Subtle drawer "grip" — the only thing visible until you reach the edge */
+            #sc-cluster-grip { display: none !important; }
+            body.sc-horizontal #sc-cluster-grip {
+                display: block !important;
+                position: fixed !important; left: 0 !important; top: 50% !important;
+                transform: translateY(-50%) !important;
+                width: 5px !important; height: 56px !important;
+                border-radius: 0 4px 4px 0 !important;
+                background: rgba(255,255,255,0.16) !important;
+                z-index: 20049 !important; cursor: pointer !important;
+                transition: background 0.2s ease, width 0.15s ease, opacity 0.25s ease !important;
+            }
+            body.sc-horizontal #sc-cluster-grip:hover { background: rgba(255,255,255,0.5) !important; width: 7px !important; }
+            body.sc-tv.sc-horizontal #sc-cluster-grip { height: 72px !important; width: 6px !important; }
+            /* Hide the grip once the cluster is open */
+            body.sc-leftzone #sc-cluster-grip { opacity: 0 !important; pointer-events: none !important; }
+            /* Vertical positions (44px buttons, 56px pitch) */
+            body.sc-horizontal #sc-chatmode-btn { top: calc(50% - 56px) !important; }
+            body.sc-horizontal #sc-desync-btn   { top: 50% !important; }
+            body.sc-horizontal #sc-settings-btn { top: calc(50% + 56px) !important; }
+            /* TV — bigger buttons, wider pitch */
+            body.sc-tv.sc-horizontal #sc-chatmode-btn { top: calc(50% - 64px) !important; }
+            body.sc-tv.sc-horizontal #sc-desync-btn   { top: 50% !important; }
+            body.sc-tv.sc-horizontal #sc-settings-btn { top: calc(50% + 64px) !important; }
+            /* Seek bar (raw video only) spans the video, stopping at the chat edge */
+            body.sc-horizontal .video-js .vjs-control-bar { left: 4px !important; right: calc(19vw + 12px) !important; }
+
+            /* ── TV: larger text, focus ring on interactive items ─ */
+            body.sc-tv #messagebuffer { font-size: 18px !important; }
+            body.sc-tv #sc-chat-textarea { font-size: 18px !important; }
+            body.sc-tv #sc-desync-btn, body.sc-tv #fs-toggle-btn,
+            body.sc-tv #sc-settings-btn {
+                width: 52px !important; height: 52px !important; font-size: 22px !important;
+            }
+            body.sc-tv :focus { outline: 3px solid rgba(255,255,255,0.8) !important; }
+            /* D-pad focus highlight (remote navigation) */
+            body.sc-tv .sc-tv-focus {
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(224,112,26,0.32) !important;
+                border-radius: 5px !important;
+            }
+            /* TV caption — label that appears beside the D-pad focused element */
+            body.sc-tv #sc-tv-caption {
+                position: fixed !important; z-index: 30001 !important;
+                background: rgba(0,0,0,0.82) !important; color: #fff !important;
+                font-size: 12px !important; font-weight: 700 !important;
+                padding: 5px 14px !important; border-radius: 6px !important;
+                pointer-events: none !important; white-space: nowrap !important;
+                opacity: 0 !important; transition: opacity 0.15s ease !important;
+                letter-spacing: 0.06em !important; text-transform: uppercase !important;
+            }
+            body.sc-tv #sc-tv-caption.sc-show { opacity: 1 !important; }
+
+            /* ── TV: slick chat input ─────────────────────────── */
+            body.sc-tv #sc-mobile-input-row { gap: 10px !important; padding: 6px 0 8px !important; }
+            body.sc-tv #sc-chat-textarea {
+                min-height: 50px !important;
+                background: rgba(255,255,255,0.07) !important;
+                border: 1.5px solid rgba(255,255,255,0.14) !important;
+                border-radius: 14px !important;
+                padding: 12px 16px !important;
+                caret-color: #e0701a !important;
+                transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease !important;
+            }
+            /* Typing focus: soft amber glow instead of the harsh white outline */
+            body.sc-tv #sc-chat-textarea:focus {
+                outline: none !important;
+                border-color: rgba(224,112,26,0.85) !important;
+                background: rgba(255,255,255,0.10) !important;
+                box-shadow: 0 0 0 1px rgba(224,112,26,0.30), 0 0 20px rgba(224,112,26,0.22) !important;
+            }
+            /* D-pad landing on the input uses the same glow, not the boxy ring */
+            body.sc-tv #sc-chat-textarea.sc-tv-focus {
+                outline: none !important;
+                border-color: rgba(224,112,26,0.85) !important;
+                box-shadow: 0 0 0 1px rgba(224,112,26,0.30), 0 0 20px rgba(224,112,26,0.22) !important;
+            }
+            body.sc-tv #sc-send-btn {
+                width: 50px !important; height: 50px !important; font-size: 20px !important;
+                background: rgba(255,255,255,0.09) !important;
+                border: 1.5px solid rgba(255,255,255,0.14) !important;
+                transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease !important;
+            }
+            body.sc-tv #sc-send-btn:focus,
+            body.sc-tv #sc-send-btn.sc-tv-focus {
+                outline: none !important;
+                border-color: rgba(224,112,26,0.85) !important;
+                background: rgba(224,112,26,0.18) !important;
+                box-shadow: 0 0 0 1px rgba(224,112,26,0.30), 0 0 20px rgba(224,112,26,0.22) !important;
+            }
+            body.sc-tv #sc-chat-textarea::placeholder { color: rgba(255,255,255,0.32) !important; }
+
+            /* ── COUCH MODE — input swells into a big readable compose box while typing ──
+               Active when the setting is on (body.sc-couch) and you're typing in the
+               horizontal sidebar layout. The box lifts out of the chat column over the video.
+
+               Open is a TWO-STEP move so it's smooth even on older TV hardware:
+               • body.sc-couch-prep  — pins the input as a FIXED box at its COLLAPSED size.
+                 JS flushes layout here so the browser has a clean start state.
+               • body.sc-couch-typing — then animates only width + height/padding to the big
+                 box. Because position is already fixed, nothing snaps; the box just grows.
+               We never transition "all" (it flashes through bad intermediate layout states),
+               and the costly frosted blur is switched on only AFTER the grow settles. */
+            body.sc-couch #sc-mobile-input-row {
+                transition: width 0.34s cubic-bezier(0.22, 1, 0.36, 1) !important;
+            }
+            body.sc-couch #sc-chat-textarea {
+                transition: min-height 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+                            max-height 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+                            font-size  0.34s cubic-bezier(0.22, 1, 0.36, 1),
+                            padding    0.34s cubic-bezier(0.22, 1, 0.36, 1),
+                            border-radius 0.34s ease,
+                            background-color 0.3s ease,
+                            backdrop-filter 0.25s ease,
+                            -webkit-backdrop-filter 0.25s ease !important;
+            }
+            body.sc-couch #messagebuffer {
+                transition: padding-bottom 0.34s cubic-bezier(0.22, 1, 0.36, 1) !important;
+            }
+            /* Lift the chat column's stacking context above the video (both sit at z-index
+               9999, with the video later in the DOM) so the fixed box can paint over it. */
+            body.sc-couch.sc-couch-prep.sc-horizontal #chatwrap {
+                z-index: 10010 !important; overflow: visible !important;
+            }
+            /* PREP: the input becomes a fixed box at (about) its normal collapsed footprint.
+               Explicit width avoids width:100% resolving to the whole viewport once fixed. */
+            body.sc-couch.sc-couch-prep.sc-horizontal #sc-mobile-input-row {
+                position: fixed !important;
+                right: 0 !important; bottom: 0 !important; left: auto !important; top: auto !important;
+                width: 19vw !important; z-index: 10011 !important;
+                margin: 0 !important; box-sizing: border-box !important;
+            }
+            body.sc-couch.sc-couch-prep.sc-horizontal #messagebuffer { padding-bottom: 56px !important; }
+            /* EXPANDED: grow width + add the panel gradient (position inherited from prep). */
+            body.sc-couch.sc-couch-typing.sc-horizontal #sc-mobile-input-row {
+                width: 46vw !important;
+                padding: 18px 20px 20px !important;
+                align-items: stretch !important;
+                background: linear-gradient(to top, rgba(0,0,0,0.72) 52%, rgba(0,0,0,0) 100%) !important;
+            }
+            body.sc-couch.sc-couch-typing.sc-horizontal #sc-chat-textarea {
+                min-height: 26vh !important; max-height: 26vh !important;
+                line-height: 1.45 !important;
+                padding: 16px 18px !important; border-radius: 16px !important;
+                background-color: rgba(14,14,18,0.62) !important;
+            }
+            /* Frosted blur (+ a touch more transparency) only once the box has finished
+               expanding — cheap during the grow, lush once it's settled. */
+            body.sc-couch.sc-couch-typing.sc-couch-settled.sc-horizontal #sc-chat-textarea {
+                background-color: rgba(14,14,18,0.55) !important;
+                backdrop-filter: blur(7px) !important;
+                -webkit-backdrop-filter: blur(7px) !important;
+            }
+            /* Bigger box on a TV viewed from the couch (font itself is set inline from JS). */
+            body.sc-couch.sc-couch-typing.sc-tv.sc-horizontal #sc-chat-textarea {
+                min-height: 30vh !important; max-height: 30vh !important;
+            }
+            /* Reserve space at the bottom of the chat so no messages sit BEHIND the
+               translucent box and bleed through it. They slide up as the box grows. */
+            body.sc-couch.sc-couch-typing.sc-horizontal #messagebuffer { padding-bottom: 34vh !important; }
+            body.sc-couch.sc-couch-typing.sc-tv.sc-horizontal #messagebuffer { padding-bottom: 38vh !important; }
+            /* Keep the compose box clean — drop the floating emote icon while it's open */
+            body.sc-couch-typing #sc-emote-proxy { opacity: 0 !important; pointer-events: none !important; }
+
+            /* TV: keep the settings modal inside the overscan-safe area and scrollable */
+            body.sc-tv #sc-settings-overlay { padding: 6vh 8vw !important; box-sizing: border-box !important; }
+            body.sc-tv #sc-settings-modal {
+                max-height: 84vh !important; width: min(620px, 84vw) !important;
+                padding: 28px !important;
+            }
+            body.sc-tv #sc-settings-title { font-size: 22px !important; }
+            body.sc-tv .sc-settings-input,
+            body.sc-tv .sc-settings-test { font-size: 16px !important; }
+            body.sc-tv #sc-settings-save,
+            body.sc-tv #sc-settings-cancel,
+            body.sc-tv #sc-login-btn { font-size: 16px !important; padding: 12px 22px !important; }
+
+            /* Send button */
+            #sc-send-btn {
+                flex-shrink: 0 !important; background: rgba(255,255,255,0.12) !important;
+                border: none !important; border-radius: 50% !important;
+                width: 44px !important; height: 44px !important;
+                color: rgba(255,255,255,0.85) !important; font-size: 18px !important;
+                cursor: pointer !important; display: flex !important;
+                align-items: center !important; justify-content: center !important;
+                -webkit-tap-highlight-color: transparent !important;
+            }
+            #sc-mobile-input-row {
+                display: flex !important; align-items: flex-end !important;
+                gap: 8px !important; width: 100% !important; padding: 4px 0 !important;
+            }
+            #sc-mobile-input-row #sc-chat-textarea { flex: 1 !important; }
+
+            /* ── WATCH-ONLY MODE — hide chat input + guest login ─ */
+            /* #sc-mobile-input-row wraps the textarea, send + emote buttons;
+               #chatline is CyTube's original input; #guestlogin is the guest box
+               that appears below the input when not signed in. Hidden in both the
+               sidebar and overlay chat layouts. messagebuffer reflows to fill. */
+            body.sc-watchalong #sc-mobile-input-row,
+            body.sc-watchalong #chatline,
+            body.sc-watchalong #guestlogin,
+            body.sc-watchalong #sc-emote-proxy { display: none !important; }
+
+            /* ── NOW-PLAYING HERO CARD ───────────────────────── */
+            #sc-np-card {
+                position: fixed !important; inset: 0 !important;
+                z-index: 21000 !important;
+                background: #000 !important;   /* black base when there's no backdrop image */
+                opacity: 0 !important; pointer-events: none !important;
+                transition: opacity 0.5s ease !important;
+                overflow: hidden !important;
+                font-family: system-ui, sans-serif !important;
+            }
+            #sc-np-card.sc-np-visible { opacity: 1 !important; pointer-events: auto !important; }
+            #sc-np-backdrop {
+                position: absolute !important; inset: 0 !important;
+                background-size: cover !important; background-position: center !important;
+                transform: scale(1.05) !important;
+                filter: saturate(1.1) !important;
+            }
+            #sc-np-scrim {
+                position: absolute !important; inset: 0 !important;
+                background:
+                    linear-gradient(90deg, rgba(8,3,6,0.97) 0%, rgba(8,3,6,0.82) 40%, rgba(8,3,6,0.45) 100%),
+                    linear-gradient(0deg, rgba(8,3,6,0.95) 0%, rgba(8,3,6,0) 45%) !important;
+            }
+            #sc-np-content {
+                position: absolute !important;
+                left: 6% !important; bottom: 12% !important; right: 6% !important;
+                display: flex !important; gap: 32px !important; align-items: flex-end !important;
+            }
+            #sc-np-poster {
+                width: 200px !important; border-radius: 10px !important;
+                box-shadow: 0 16px 48px rgba(0,0,0,0.8) !important;
+                flex-shrink: 0 !important;
+            }
+            #sc-np-info { color: #fff !important; max-width: 60% !important; }
+            #sc-np-eyebrow {
+                font-size: 13px !important; font-weight: 700 !important;
+                letter-spacing: 0.18em !important; text-transform: uppercase !important;
+                color: var(--np-accent, #ff5b73) !important; margin-bottom: 10px !important;
+            }
+            #sc-np-title {
+                font-size: 44px !important; font-weight: 800 !important; line-height: 1.05 !important;
+                text-shadow: 0 2px 16px rgba(0,0,0,0.8) !important; margin-bottom: 14px !important;
+            }
+            #sc-np-meta {
+                font-size: 17px !important; color: rgba(255,255,255,0.82) !important;
+                margin-bottom: 16px !important; font-weight: 500 !important;
+            }
+            #sc-np-overview {
+                font-size: 16px !important; line-height: 1.5 !important;
+                color: rgba(255,255,255,0.72) !important; margin-bottom: 16px !important;
+                /* Fixed window (≈4 lines, scales with font-size via em) that we then
+                   auto-scroll to reveal the rest — no scrollbar, just a clipped glide. */
+                max-height: 6em !important; overflow: hidden !important;
+            }
+            #sc-np-overview::-webkit-scrollbar { display: none !important; }
+            #sc-np-chips { display: flex !important; flex-wrap: wrap !important; gap: 8px !important; }
+            #sc-np-progress { margin-top: 18px !important; max-width: 520px !important; }
+            #sc-np-prog-bar {
+                height: 6px !important; border-radius: 3px !important;
+                background: rgba(255,255,255,0.18) !important; overflow: hidden !important;
+            }
+            #sc-np-prog-fill {
+                height: 100% !important; width: 0% !important;
+                background: var(--np-accent, #e0701a) !important; border-radius: 3px !important;
+                transition: width 0.45s linear !important;
+            }
+            #sc-np-prog-times {
+                display: flex !important; justify-content: space-between !important;
+                align-items: baseline !important; margin-top: 8px !important;
+                font-variant-numeric: tabular-nums !important;
+                font-size: 14px !important; color: rgba(255,255,255,0.85) !important;
+            }
+            #sc-np-prog-remain { color: rgba(255,255,255,0.6) !important; font-size: 13px !important; }
+            body.sc-tv #sc-np-prog-bar { height: 8px !important; }
+            body.sc-tv #sc-np-prog-times { font-size: 18px !important; }
+            body.sc-tv #sc-np-prog-remain { font-size: 16px !important; }
+            .sc-np-chip {
+                font-size: 13px !important; color: rgba(255,255,255,0.9) !important;
+                background: rgba(255,255,255,0.12) !important;
+                border: 1px solid rgba(255,255,255,0.18) !important;
+                border-radius: 999px !important; padding: 5px 12px !important;
+                backdrop-filter: blur(4px) !important;
+            }
+            /* Parent-guide severity colors */
+            .sc-np-chip.sc-sev-none     { background: rgba(120,120,130,0.30) !important; border-color: rgba(160,160,170,0.4) !important; }
+            .sc-np-chip.sc-sev-mild     { background: rgba(60,160,80,0.32)  !important; border-color: rgba(90,200,110,0.5) !important; color: #c9ffd4 !important; }
+            .sc-np-chip.sc-sev-moderate { background: rgba(200,150,40,0.34)  !important; border-color: rgba(230,180,60,0.55) !important; color: #ffe9b8 !important; }
+            .sc-np-chip.sc-sev-severe   { background: rgba(200,60,50,0.38)   !important; border-color: rgba(235,90,80,0.6) !important; color: #ffd2cc !important; }
+            :root { --np-accent: #ff5b73; }
+
+            /* TV: scale the card up for the couch */
+            body.sc-tv #sc-np-poster { width: 260px !important; }
+            body.sc-tv #sc-np-title { font-size: 60px !important; }
+            body.sc-tv #sc-np-meta { font-size: 22px !important; }
+            body.sc-tv #sc-np-overview { font-size: 20px !important; }
+            body.sc-tv .sc-np-chip { font-size: 16px !important; padding: 7px 16px !important; }
+
+            /* ── TRIVIA LINK (subtle, top-right next to Coming Attractions) + CARD ── */
+            #sc-trivia-btn {
+                position: fixed !important; top: 0 !important;
+                right: calc(20vw + 150px) !important; left: auto !important;
+                z-index: 10003 !important;
+                background: transparent !important; border: none !important;
+                color: rgba(255,255,255,0.55) !important;
+                font-size: 10px !important; letter-spacing: 0.06em !important;
+                text-transform: uppercase !important; white-space: nowrap !important;
+                line-height: 1 !important; height: 20px !important; padding: 2px 8px !important;
+                display: flex !important; align-items: center !important; cursor: pointer !important;
+                opacity: 1 !important; transition: opacity 1.5s ease, color 0.2s ease !important;
+                -webkit-tap-highlight-color: transparent !important;
+            }
+            #sc-trivia-btn:hover { color: rgba(255,255,255,0.9) !important; }
+            #sc-trivia-btn.sc-bar-dim { opacity: 0 !important; }
+            /* Trivia button hidden in vertical — title bar is too narrow */
+            body.sc-vertical #sc-trivia-btn { display: none !important; }
+            body.sc-tv #sc-trivia-btn { font-size: 12px !important; }
+
+            #sc-trivia-card {
+                position: fixed !important; inset: 0 !important; z-index: 21800 !important;
+                background: rgba(0,0,0,0.62) !important; backdrop-filter: blur(3px) !important;
+                display: none !important; align-items: center !important; justify-content: center !important;
+                font-family: 'Inter','Roboto',system-ui,sans-serif !important;
+            }
+            #sc-trivia-card.sc-show { display: flex !important; }
+            #sc-trivia-panel {
+                width: min(820px, 86vw) !important; max-height: 82vh !important;
+                background: rgba(14,10,18,0.97) !important;
+                border: 1px solid rgba(255,255,255,0.14) !important;
+                border-radius: 14px !important; overflow: hidden !important;
+                display: flex !important; flex-direction: column !important;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.7) !important;
+            }
+            #sc-trivia-head {
+                display: flex !important; align-items: center !important; justify-content: space-between !important;
+                padding: 16px 20px !important; border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+                flex-shrink: 0 !important;
+            }
+            #sc-trivia-title { font-size: 18px !important; font-weight: 800 !important; color: var(--np-accent,#ff5b73) !important; }
+            #sc-trivia-close {
+                background: rgba(255,255,255,0.1) !important; border: none !important; color: #fff !important;
+                width: 32px !important; height: 32px !important; border-radius: 50% !important;
+                cursor: pointer !important; font-size: 14px !important; flex-shrink: 0 !important;
+            }
+            #sc-trivia-close:hover { background: rgba(255,255,255,0.2) !important; }
+            #sc-trivia-list {
+                overflow-y: auto !important; padding: 4px 20px 20px !important;
+                -webkit-overflow-scrolling: touch !important;
+                scrollbar-width: thin !important;
+                scrollbar-color: rgba(255,255,255,0.28) transparent !important;
+            }
+            #sc-trivia-list::-webkit-scrollbar { width: 10px !important; }
+            #sc-trivia-list::-webkit-scrollbar-track { background: rgba(255,255,255,0.05) !important; border-radius: 10px !important; margin: 6px 0 !important; }
+            #sc-trivia-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.28) !important; border-radius: 10px !important; border: 2px solid transparent !important; background-clip: padding-box !important; }
+            #sc-trivia-list::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.45) !important; background-clip: padding-box !important; }
+            body.sc-tv #sc-trivia-list::-webkit-scrollbar { width: 14px !important; }
+            .sc-trivia-item {
+                color: rgba(255,255,255,0.86) !important; font-size: 14px !important; line-height: 1.5 !important;
+                padding: 12px 0 !important; border-bottom: 1px solid rgba(255,255,255,0.07) !important;
+            }
+            body.sc-tv #sc-trivia-panel { width: min(1100px, 84vw) !important; max-height: 84vh !important; }
+            body.sc-tv #sc-trivia-title { font-size: 26px !important; }
+            body.sc-tv #sc-trivia-close { width: 44px !important; height: 44px !important; font-size: 20px !important; }
+            body.sc-tv .sc-trivia-item { font-size: 20px !important; padding: 16px 0 !important; }
+
+            /* Vertical phones (if enabled there): stack poster above text */
+            body.sc-vertical #sc-np-content { flex-direction: column !important; align-items: flex-start !important; gap: 18px !important; bottom: 8% !important; }
+            body.sc-vertical #sc-np-poster { width: 130px !important; }
+            body.sc-vertical #sc-np-title { font-size: 30px !important; }
+            body.sc-vertical #sc-np-info { max-width: 90% !important; }
+
+            /* ── AMBIENT GLOW ────────────────────────────────── */
+            #sc-ambient {
+                position: fixed !important; inset: 0 !important;
+                z-index: 10000 !important; pointer-events: none !important;
+                box-shadow: inset 0 0 160px 36px var(--sc-ambient-color, rgba(0,0,0,0)) !important;
+                transition: box-shadow 1.6s ease !important;
+            }
+            body.sc-ambient-off #sc-ambient { display: none !important; }
+            /* Ambient glow is a TV-only cinematic touch — no edge glow on phones */
+            body:not(.sc-tv) #sc-ambient { display: none !important; }
+
+            /* ── PICTURE-IN-PICTURE: show ONLY the video, full-bleed ──────────────
+               html-prefixed so these win over the body.sc-vertical / .sc-horizontal
+               layout rules (which otherwise tie on specificity and come later). */
+            html body.sc-pip #videowrap,
+            html body.sc-pip #videowrap .embed-responsive,
+            html body.sc-pip #ytapiplayer,
+            html body.sc-pip #ytapiplayer iframe,
+            html body.sc-pip .video-js,
+            html body.sc-pip .vjs-tech {
+                position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+                width: 100vw !important; height: 100vh !important; z-index: 2147483647 !important;
+                margin: 0 !important; background: #000 !important;
+            }
+            html body.sc-pip #chatwrap, html body.sc-pip #sc-chat-header, html body.sc-pip #sc-ambient,
+            html body.sc-pip #sc-top-bar, html body.sc-pip #videowrap-header, html body.sc-pip #sc-movie-links,
+            html body.sc-pip #sc-movie-stats, html body.sc-pip #sc-poster-toggle, html body.sc-pip #sc-poster-strip,
+            html body.sc-pip #sc-trivia-btn, html body.sc-pip #sc-chatmode-btn, html body.sc-pip #sc-cluster-grip,
+            html body.sc-pip #sc-desync-btn, html body.sc-pip #sc-settings-btn,
+            html body.sc-pip #sc-users-panel, html body.sc-pip #sc-poll-panel,
+            html body.sc-pip #sc-np-card, html body.sc-pip #sc-trivia-card,
+            html body.sc-pip #sc-mobile-input-row, html body.sc-pip .video-js .vjs-control-bar {
+                display: none !important;
+            }
+
+            /* ── CAST MODE: phone becomes a chat remote with a top control bar ─────
+               While casting, the movie plays on the TV, so on the device we hide the
+               player and give the screen to chat. A dedicated top bar (#sc-cast-bar,
+               built in JS) holds the title plus the relocated controls (coming
+               attractions, trivia, users, poll, settings) and a Stop Casting button.
+               The player must keep PLAYING for the sync conductor's clock, so we make it
+               invisible via opacity/z-index rather than display:none (which can pause it). */
+            html body.sc-cast #videowrap,
+            html body.sc-cast #videowrap .embed-responsive,
+            html body.sc-cast #ytapiplayer,
+            html body.sc-cast #ytapiplayer iframe,
+            html body.sc-cast .video-js,
+            html body.sc-cast .vjs-tech {
+                opacity: 0 !important; z-index: -1 !important; pointer-events: none !important;
+            }
+            /* The cast top bar — only present/visible in cast mode */
+            #sc-cast-bar { display: none !important; }
+            html body.sc-cast #sc-cast-bar {
+                display: flex !important; align-items: center !important;
+                position: fixed !important; top: 0 !important; left: 0 !important;
+                width: 100vw !important; height: 40px !important;
+                padding: 0 12px !important; gap: 14px !important; box-sizing: border-box !important;
+                background: rgba(12,10,20,0.97) !important;
+                border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+                z-index: 10006 !important;
+            }
+            /* Title takes the remaining width and ellipsises; still opens the now-playing card */
+            html body.sc-cast #sc-cast-title-slot {
+                flex: 1 1 auto !important; min-width: 0 !important;
+                overflow: hidden !important; white-space: nowrap !important; text-overflow: ellipsis !important;
+                color: #fff !important; font-size: 13px !important; font-weight: 500 !important;
+            }
+            /* The relocated title header sits inline inside the slot (strip its fixed-overlay
+               styling). It always carries the current title, raw text or #sc-title-text span. */
+            html body.sc-cast #sc-cast-title-slot #videowrap-header {
+                position: static !important; width: auto !important; max-width: 100% !important;
+                height: auto !important; line-height: normal !important;
+                padding: 0 !important; margin: 0 !important;
+                background: transparent !important; border: none !important; box-shadow: none !important;
+                z-index: auto !important; color: #fff !important;
+                font-size: 13px !important; font-weight: 500 !important; opacity: 1 !important;
+                white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important;
+            }
+            /* Don't let the idle dimmer fade the title while it's in the cast bar */
+            html body.sc-cast #sc-cast-title-slot #videowrap-header.sc-bar-dim {
+                opacity: 1 !important; color: #fff !important; background: transparent !important;
+            }
+            html body.sc-cast #sc-cast-title-slot #sc-title-text {
+                color: #fff !important; opacity: 1 !important; pointer-events: auto !important;
+            }
+            html body.sc-cast #sc-cast-controls {
+                display: flex !important; align-items: center !important;
+                gap: 14px !important; flex: 0 0 auto !important;
+            }
+            /* Neutralise each relocated control's own fixed positioning / hover-hide so
+               they simply flow inside the bar. */
+            html body.sc-cast #sc-cast-bar #sc-poster-toggle,
+            html body.sc-cast #sc-cast-bar #sc-trivia-btn,
+            html body.sc-cast #sc-cast-bar #sc-usercount-btn,
+            html body.sc-cast #sc-cast-bar #sc-poll-btn,
+            html body.sc-cast #sc-cast-bar #sc-settings-btn,
+            html body.sc-cast #sc-cast-bar #sc-cast-stop-btn {
+                position: static !important; top: auto !important; left: auto !important;
+                right: auto !important; bottom: auto !important;
+                opacity: 1 !important; transform: none !important; pointer-events: auto !important;
+                margin: 0 !important; box-shadow: none !important;
+                display: inline-flex !important; align-items: center !important;
+            }
+            html body.sc-cast #sc-cast-stop-btn {
+                background: #b3261e !important; color: #fff !important; border: none !important;
+                border-radius: 6px !important; padding: 5px 12px !important;
+                font-size: 12px !important; font-weight: 600 !important; cursor: pointer !important;
+                white-space: nowrap !important;
+            }
+            html body.sc-cast #sc-cast-stop-btn:hover { background: #c8352c !important; }
+            /* Chat fills everything under the bar down to the bottom */
+            html body.sc-cast #chatwrap {
+                position: fixed !important; top: 40px !important; bottom: 0 !important;
+                left: 0 !important; right: 0 !important;
+                width: 100vw !important; height: auto !important;
+                z-index: 9999 !important; background: rgba(16,14,24,0.97) !important;
+                display: flex !important; flex-direction: column !important;
+                padding: 0 8px !important;
+            }
+            /* Respect the on-screen keyboard (vars driven by the existing IME logic) and
+               don't inherit the video/chat split heights — chat owns the screen here. */
+            html body.sc-cast.sc-kb-open #chatwrap {
+                top: 40px !important; height: auto !important;
+                bottom: var(--sc-kb-h, 0px) !important;
+            }
+            /* Keep the send button usable on a touch tablet even in landscape */
+            html body.sc-cast #sc-send-btn { display: inline-flex !important; }
+            /* The send button is visible in cast mode, so push the emote icon left of it
+               (back into the chat area) the same way portrait does — otherwise they overlap. */
+            html body.sc-cast #sc-emote-proxy { right: calc(44px + 14px) !important; }
+            /* Coming Attractions reel: full width, dropping just below the 40px cast bar
+               (normally it's 80vw and tucked under a 20px header). */
+            html body.sc-cast #sc-poster-strip {
+                width: 100vw !important; top: 40px !important; bottom: auto !important;
+            }
+            /* Hide video-only chrome that isn't relocated into the bar (the pop-up panels
+               triggered from the bar — users/poll/trivia/now-playing — stay available). */
+            html body.sc-cast #sc-chatmode-btn,
+            html body.sc-cast #sc-desync-btn,
+            html body.sc-cast #fs-toggle-btn,
+            html body.sc-cast #sc-cast-btn,
+            html body.sc-cast #sc-top-bar,
+            html body.sc-cast #sc-movie-links,
+            html body.sc-cast #sc-movie-stats,
+            html body.sc-cast #sc-vert-ctrl-band,
+            html body.sc-cast #sc-vert-ctrl-grip {
+                display: none !important;
+            }
+
+            /* ── AUTO-HIDING CHROME (TV) ─────────────────────── */
+            body.sc-tv .video-js .vjs-control-bar { transition: opacity 0.6s ease !important; }
+            /* The control cluster is governed by the left-edge reveal, not this.
+               Here we just fade the seek bar + hide the cursor when idle. */
+            body.sc-tv.sc-chrome-hidden .video-js .vjs-control-bar {
+                opacity: 0 !important; pointer-events: none !important;
+            }
+            body.sc-tv.sc-chrome-hidden { cursor: none !important; }
+
+            /* ── CHAT LAYOUT MODES ───────────────────────────── */
+            /* Hidden: full-bleed cinema — drop chat AND the title / coming-attractions chrome */
+            body.sc-chat-hidden #chatwrap, body.sc-chat-hidden #sc-chat-header,
+            body.sc-chat-hidden #sc-users-panel, body.sc-chat-hidden #sc-poll-panel,
+            body.sc-chat-hidden #sc-top-bar, body.sc-chat-hidden #videowrap-header,
+            body.sc-chat-hidden #sc-poster-toggle, body.sc-chat-hidden #sc-poster-strip,
+            body.sc-chat-hidden #sc-movie-links { display: none !important; }
+            body.sc-chat-hidden.sc-horizontal #videowrap,
+            body.sc-chat-hidden.sc-horizontal #videowrap .embed-responsive,
+            body.sc-chat-hidden.sc-horizontal #ytapiplayer { width: 100vw !important; }
+            body.sc-chat-hidden.sc-horizontal .video-js .vjs-control-bar { right: 16px !important; }
+            body.sc-chat-hidden.sc-vertical #videowrap,
+            body.sc-chat-hidden.sc-vertical #videowrap .embed-responsive,
+            body.sc-chat-hidden.sc-vertical #ytapiplayer { height: 100vh !important; }
+            /* chat-hidden vertical: suppress the ctrl band (no black bar mid-screen); slide buttons from bottom-right */
+            body.sc-chat-hidden.sc-vertical #sc-vert-ctrl-band { display: none !important; }
+            body.sc-chat-hidden.sc-vertical #sc-vert-ctrl-grip {
+                top: auto !important; bottom: 0 !important;
+            }
+            /* The control row sits just ABOVE the bottom scrubber (≈32px tall at bottom:4px)
+               so the two don't overlap; the cast button joins the row (it otherwise floats
+               mid-screen at the 50vh control-band position). */
+            body.sc-chat-hidden.sc-vertical #sc-chatmode-btn,
+            body.sc-chat-hidden.sc-vertical #sc-desync-btn,
+            body.sc-chat-hidden.sc-vertical #sc-settings-btn,
+            body.sc-chat-hidden.sc-vertical #sc-cast-btn {
+                top: auto !important; bottom: 48px !important;
+            }
+            /* Video-only fills the screen, so the scrubber belongs at the screen bottom —
+               not at the 50vh "above the chat header" spot used when chat is present. */
+            body.sc-chat-hidden.sc-vertical .video-js .vjs-control-bar {
+                bottom: 4px !important;
+            }
+
+            /* ── CHAT-ONLY: a keyboard-free, video-free chat screen — turns the device
+               (handy on a TV) into a pure chat client. The player is hidden here AND
+               paused/muted in JS, so the whole screen is chat. Works in both orientations. */
+            body.sc-chat-chatonly #videowrap,
+            body.sc-chat-chatonly #videowrap .embed-responsive,
+            body.sc-chat-chatonly #ytapiplayer,
+            body.sc-chat-chatonly #ytapiplayer iframe,
+            body.sc-chat-chatonly .video-js,
+            body.sc-chat-chatonly .vjs-tech,
+            body.sc-chat-chatonly .video-js .vjs-control-bar,
+            body.sc-chat-chatonly #sc-top-bar,
+            body.sc-chat-chatonly #videowrap-header,
+            body.sc-chat-chatonly #sc-movie-links,
+            body.sc-chat-chatonly #sc-movie-stats,
+            body.sc-chat-chatonly #sc-poster-toggle,
+            body.sc-chat-chatonly #sc-poster-strip,
+            body.sc-chat-chatonly #sc-trivia-btn,
+            body.sc-chat-chatonly #sc-desync-btn,
+            body.sc-chat-chatonly #fs-toggle-btn,
+            body.sc-chat-chatonly #sc-cast-btn,
+            body.sc-chat-chatonly #sc-vert-ctrl-band {
+                display: none !important;
+            }
+            body.sc-chat-chatonly #sc-cluster-grip { display: none !important; }
+            /* The top header doubles as a control band (like the vertical band at 50vh, but
+               pinned to the top): a right-edge grip slides the chat-mode + settings buttons
+               out. Reuses the right-zone drawer (right-edge swipe in portrait, or tap the grip). */
+            body.sc-chat-chatonly #sc-vert-ctrl-grip {
+                display: block !important;
+                position: fixed !important; right: 0 !important; top: 0 !important; bottom: auto !important;
+                height: 32px !important; width: 4px !important;
+                border-radius: 2px 0 0 2px !important;
+                background: rgba(255,255,255,0.3) !important;
+                z-index: 10012 !important; cursor: pointer !important;
+            }
+            body.sc-chat-chatonly.sc-rightzone #sc-vert-ctrl-grip { opacity: 0 !important; pointer-events: none !important; }
+            body.sc-chat-chatonly #sc-chatmode-btn,
+            body.sc-chat-chatonly #sc-settings-btn {
+                display: flex !important;
+                position: fixed !important;
+                top: -2px !important; bottom: auto !important; left: auto !important;
+                opacity: 0 !important; pointer-events: none !important;
+                transform: translateX(16px) !important;
+                transition: opacity 0.25s ease, transform 0.25s ease !important;
+                z-index: 10012 !important;
+            }
+            body.sc-chat-chatonly #sc-chatmode-btn { right: 8px !important; }
+            body.sc-chat-chatonly #sc-settings-btn { right: 50px !important; }
+            body.sc-chat-chatonly.sc-rightzone #sc-chatmode-btn,
+            body.sc-chat-chatonly.sc-rightzone #sc-settings-btn {
+                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
+            }
+            /* Chat header is a clean full-width top bar; the fly-out grip on its right edge
+               (above) is the way out, so the inline "›" collapse button is hidden here. */
+            body.sc-chat-chatonly #sc-chat-header {
+                display: flex !important; position: fixed !important;
+                top: 0 !important; left: 0 !important; right: auto !important;
+                width: 100vw !important; height: 32px !important;
+                background: rgba(12,10,20,0.97) !important;
+                z-index: 10010 !important;
+                padding: 0 10px !important; box-sizing: border-box !important;
+            }
+            body.sc-chat-chatonly #sc-chat-collapse-btn { display: none !important; }
+            /* Chat fills the screen under the header bar */
+            body.sc-chat-chatonly #chatwrap {
+                position: fixed !important;
+                top: 32px !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+                width: 100vw !important; height: auto !important;
+                z-index: 9999 !important;
+                background: rgba(16,14,24,0.97) !important;
+                display: flex !important; flex-direction: column !important;
+                box-sizing: border-box !important; padding: 0 8px !important;
+            }
+            /* Respect the on-screen keyboard if it opens (vars driven by the IME logic) */
+            body.sc-chat-chatonly.sc-kb-open #chatwrap {
+                top: 32px !important; height: auto !important; bottom: var(--sc-kb-h, 0px) !important;
+            }
+            /* Message list takes all the room above the input row */
+            body.sc-chat-chatonly #messagebuffer { flex: 1 1 auto !important; }
+            /* Keep the send button usable (no physical keyboard assumed), and shift the
+               emote icon left of it so the two don't stack (send is hidden in plain
+               horizontal, so the emote normally sits at the right edge). */
+            body.sc-chat-chatonly #sc-send-btn { display: inline-flex !important; }
+            body.sc-chat-chatonly #sc-emote-proxy { right: calc(44px + 14px) !important; }
+
+            /* Overlay: video full width, chat floats translucent over the right */
+            /* ── OVERLAY: minimal chat in the top-right corner over full video ── */
+            body.sc-chat-overlay.sc-horizontal #videowrap,
+            body.sc-chat-overlay.sc-horizontal #videowrap .embed-responsive,
+            body.sc-chat-overlay.sc-horizontal #ytapiplayer { width: 100vw !important; }
+            /* No sidebar in overlay — the scrubber spans the full video width (the default
+               horizontal rule reserves 19vw for the chat column that isn't there here). */
+            body.sc-chat-overlay.sc-horizontal .video-js .vjs-control-bar { right: 16px !important; }
+
+            /* Hide every bit of chrome — title bar, coming attractions, user/poll header */
+            body.sc-chat-overlay.sc-horizontal #sc-top-bar,
+            body.sc-chat-overlay.sc-horizontal #videowrap-header,
+            body.sc-chat-overlay.sc-horizontal #sc-movie-links,
+            body.sc-chat-overlay.sc-horizontal #sc-movie-stats,
+            body.sc-chat-overlay.sc-horizontal #sc-poster-toggle,
+            body.sc-chat-overlay.sc-horizontal #sc-poster-strip,
+            body.sc-chat-overlay.sc-horizontal #sc-chat-header { display: none !important; }
+
+            /* Chat = small top-right corner panel, dark transparent, no borders */
+            body.sc-chat-overlay.sc-horizontal #chatwrap {
+                top: 0 !important; right: 0 !important; left: auto !important;
+                width: 30vw !important; height: 46vh !important;
+                background: rgba(8,6,12,0.42) !important;
+                border: none !important; border-radius: 0 0 0 10px !important;
+                padding: 10px !important; box-sizing: border-box !important;
+                z-index: 10002 !important;
+            }
+            body.sc-chat-overlay.sc-horizontal #messagebuffer {
+                text-shadow: 0 1px 4px rgba(0,0,0,0.9) !important;
+            }
+            /* Kill any stray borders/outlines/shadows around the chat in overlay */
+            body.sc-chat-overlay.sc-horizontal #chatwrap,
+            body.sc-chat-overlay.sc-horizontal #chatwrap *,
+            body.sc-chat-overlay.sc-horizontal #messagebuffer,
+            body.sc-chat-overlay.sc-horizontal #sc-mobile-input-row,
+            body.sc-chat-overlay.sc-horizontal #chatwrap .input-group,
+            body.sc-chat-overlay.sc-horizontal #chatwrap .form-control {
+                border: none !important; box-shadow: none !important; outline: none !important;
+            }
+            /* Shrink posted images / emotes to a quarter size in the corner chat */
+            body.sc-chat-overlay.sc-horizontal #messagebuffer img {
+                zoom: 0.25 !important;
+                max-width: 100% !important; height: auto !important;
+            }
+            /* One-line, borderless, no-placeholder input on the same transparent bg */
+            body.sc-chat-overlay.sc-horizontal #sc-mobile-input-row { padding: 2px 0 0 !important; }
+            body.sc-chat-overlay.sc-horizontal #sc-chat-textarea {
+                min-height: 0 !important; height: 26px !important; max-height: 26px !important;
+                background: rgba(0,0,0,0.5) !important; border: none !important; box-shadow: none !important;
+                border-radius: 6px !important;
+                padding: 3px 8px !important; font-size: 13px !important; line-height: 1.4 !important;
+                overflow-y: auto !important; resize: none !important;
+            }
+            body.sc-chat-overlay.sc-horizontal #sc-chat-textarea:focus {
+                background: rgba(0,0,0,0.68) !important; border: none !important;
+            }
+            body.sc-chat-overlay.sc-horizontal #sc-chat-textarea::placeholder { color: transparent !important; }
+            body.sc-chat-overlay.sc-horizontal #sc-newmsg-pill {
+                right: 2vw !important; top: calc(46vh - 38px) !important; bottom: auto !important;
+            }
+
+            /* Sidebar: header matches the chat panel exactly (same box, same padding) */
+            body.sc-horizontal #sc-chat-header {
+                right: 0 !important; width: 19vw !important;
+                box-sizing: border-box !important; padding: 0 8px !important;
+            }
+
+            /* Control cluster — chat-mode icon on top, then emote / free-watch / settings
+               in a row beneath it, pinned to the mid-left edge over the video.
+               Clear of YouTube's own controls and the chat, so everything clicks. */
+            #sc-chatmode-btn {
+                position: fixed !important;
+                left: 10px !important; top: calc(50% - 60px) !important;
+                z-index: 20050 !important;
+                width: 36px !important; height: 36px !important; border-radius: 50% !important;
+                background: rgba(0,0,0,0.6) !important;
+                border: 1px solid rgba(255,255,255,0.25) !important;
+                color: rgba(255,255,255,0.9) !important; cursor: pointer !important;
+                font-size: 15px !important; line-height: 1 !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                transition: opacity 0.6s ease, background 0.2s ease !important;
+                -webkit-tap-highlight-color: transparent !important;
+            }
+            #sc-chatmode-btn:hover { background: rgba(0,0,0,0.85) !important; }
+            body.sc-tv #sc-chatmode-btn { width: 52px !important; height: 52px !important; font-size: 22px !important; top: calc(50% - 70px) !important; }
+
+            /* ── NEW-MESSAGES PILL ───────────────────────────── */
+            #sc-newmsg-pill {
+                position: fixed !important; z-index: 19500 !important;
+                background: var(--np-accent, #ff5b73) !important; color: #160409 !important;
+                font-size: 13px !important; font-weight: 800 !important;
+                padding: 7px 16px !important; border-radius: 999px !important;
+                cursor: pointer !important; box-shadow: 0 6px 20px rgba(0,0,0,0.55) !important;
+                opacity: 0 !important; pointer-events: none !important;
+                transition: opacity 0.25s ease !important;
+            }
+            #sc-newmsg-pill.sc-show { opacity: 1 !important; pointer-events: auto !important; }
+            body.sc-horizontal #sc-newmsg-pill { right: calc(19vw + 16px) !important; bottom: 56px !important; }
+            body.sc-vertical   #sc-newmsg-pill { left: 50% !important; transform: translateX(-50%) !important; bottom: calc(50vh - 44px + 12px) !important; }
+            body.sc-tv #sc-newmsg-pill { font-size: 17px !important; padding: 10px 22px !important; }
+            /* Hide CyTube's native "New Messages Below" bar — our pill replaces it. */
+            #newmessages-indicator, #newmessages-indicator-bghack { display: none !important; }
+
+            /* ── MENTION TOAST ───────────────────────────────── */
+            #sc-mention-toast {
+                position: fixed !important; top: 26px !important; left: 50% !important;
+                transform: translateX(-50%) translateY(-20px) !important;
+                z-index: 21500 !important;
+                background: rgba(20,8,14,0.97) !important; color: #fff !important;
+                border: 1px solid var(--np-accent, #ff5b73) !important;
+                border-radius: 12px !important; padding: 12px 18px !important;
+                max-width: 72vw !important; box-shadow: 0 10px 36px rgba(0,0,0,0.65) !important;
+                opacity: 0 !important; pointer-events: none !important; cursor: pointer !important;
+                transition: opacity 0.35s ease, transform 0.35s ease !important;
+                font-size: 14px !important; line-height: 1.4 !important;
+            }
+            #sc-mention-toast.sc-show { opacity: 1 !important; transform: translateX(-50%) translateY(0) !important; pointer-events: auto !important; }
+            #sc-mention-toast .sc-mt-name { color: var(--np-accent, #ff5b73) !important; font-weight: 800 !important; margin-right: 6px !important; }
+            body.sc-tv #sc-mention-toast { font-size: 21px !important; padding: 16px 26px !important; top: 40px !important; }
+`;
+
   // src/legacy.js
   (function() {
     "use strict";
@@ -2715,1113 +4751,7 @@
         }, 2e3);
       }
       const style = document.createElement("style");
-      style.textContent = `
-
-            /* ===== SHARED HIDDEN ELEMENTS ===== */
-            nav.navbar, #drinkbarwrap, #announcements, #playlistrow,
-            #resizewrap, footer, #userlisttoggle, #rightcontrols,
-            .modal-header, .timestamp, .modal-footer { display: none !important; }
-            body { background-image: none !important; background: #000 !important; }
-            .modal, .popover, .dropdown-menu { z-index: 20001 !important; }
-            .modal-dialog { margin: 0 auto !important; }
-
-            /* Video tap-to-wake interceptor.
-               z-index 10000 = above the video (9999) but below all controls (10001+).
-               pointer-events:none normally so video controls work; flips to auto only
-               when the top bar is dimmed (sc-video-dimmed on body), intercepting the
-               first tap to reveal chrome. Works for iframes (YouTube/Drive) where
-               document-level click listeners never receive iframe taps. */
-            #sc-video-tap {
-                position: fixed !important; top: 0 !important; left: 0 !important;
-                width: 79vw !important; height: 100vh !important;
-                z-index: 10000 !important; pointer-events: none !important;
-                -webkit-tap-highlight-color: transparent !important;
-                cursor: pointer !important;
-            }
-            body.sc-vertical #sc-video-tap { width: 100vw !important; height: 55vh !important; }
-            body.sc-chat-hidden #sc-video-tap { width: 100vw !important; height: 100vh !important; }
-            body.sc-chat-overlay.sc-horizontal #sc-video-tap { width: 100vw !important; }
-            body.sc-video-dimmed #sc-video-tap { pointer-events: auto !important; }
-            #resize-video-smaller, #resize-video-larger { display: none !important; }
-            /* Remove pause and fullscreen from video.js control bar */
-            .video-js .vjs-play-control { display: none !important; }
-            .video-js .vjs-fullscreen-control { display: none !important; }
-            /* Userlist — hidden but fully rendered so all users appear in DOM */
-            #userlist {
-                visibility: hidden !important;
-                position: absolute !important;
-                pointer-events: none !important;
-                height: auto !important;
-                overflow: hidden !important;
-            }
-            #userlisttoggle { display: none !important; }
-            /* ── TOP BAR SYSTEM ────────────────────────────────────────────────────
-               A single gradient band overlays the top of the video.
-               After a few seconds the gradient, icons and Coming Attractions
-               fade out leaving only the title. Mouse-over restores everything.
-               If the poster strip is open nothing fades.
-
-               States driven by .sc-bar-dim on #sc-top-bar:
-                 (no class)    = fully visible
-                 .sc-bar-dim   = gradient/icons/toggle faded, title stays
-            ─────────────────────────────────────────────────────────────────── */
-
-            /* Gradient overlay behind the whole bar */
-            /* Gradient starts below the header row so it never alpha-composites
-               over the title/pills/toggle — those have their own background */
-            #sc-top-bar {
-                position: fixed !important;
-                top: 20px !important; /* start below the header bar */
-                left: 0 !important;
-                width: 80vw !important; height: 40px !important;
-                z-index: 10001 !important; /* above video */
-                pointer-events: none !important;
-                background: linear-gradient(
-                    to bottom,
-                    rgba(0,0,0,0.35) 0%,
-                    rgba(0,0,0,0)    100%
-                ) !important;
-                transition: opacity 1.5s ease !important;
-                opacity: 1 !important;
-            }
-            /* Vertical: title bar is a solid strip — no gradient overlay needed */
-            body.sc-vertical #sc-top-bar { display: none !important; }
-            #sc-top-bar.sc-bar-dim { opacity: 0 !important; }
-
-            /* Header — dark background fades out with gradient when dimmed */
-            #videowrap-header {
-                border: 0 !important;
-                background: rgba(0,0,0,0.55) !important;
-                padding: 3px 8px !important;
-                font-size: 12px !important;
-                font-weight: 500 !important;
-                color: #fff !important;
-                text-shadow: 0 1px 4px rgba(0,0,0,1), 0 0 10px rgba(0,0,0,0.9) !important;
-                letter-spacing: 0.01em !important;
-                white-space: nowrap !important;
-                overflow: hidden !important;
-                text-overflow: ellipsis !important;
-                width: 80vw !important;
-                box-sizing: border-box !important;
-                position: fixed !important;
-                top: 0 !important; left: 0 !important;
-                z-index: 10002 !important;
-                pointer-events: auto !important;
-                transition: background 1.5s ease, color 1.5s ease, text-shadow 1.5s ease !important;
-            }
-            #videowrap-header.sc-bar-dim {
-                background: transparent !important;
-                color: rgba(255,255,255,0.32) !important;
-                text-shadow: none !important;
-            }
-            /* Vertical: header is a real title bar above the video, not an overlay */
-            body.sc-vertical #videowrap-header {
-                width: 100vw !important;
-                height: 36px !important; line-height: 36px !important;
-                padding: 0 8px !important;
-                background: rgba(12,10,20,0.92) !important;
-                border-bottom: 1px solid rgba(255,255,255,0.08) !important;
-                z-index: 10003 !important;
-                text-shadow: none !important;
-            }
-            /* Title bar dims text but keeps its solid background */
-            body.sc-vertical #videowrap-header.sc-bar-dim {
-                background: rgba(12,10,20,0.92) !important;
-                color: rgba(255,255,255,0.35) !important;
-                text-shadow: none !important;
-            }
-            /* Hide the "Currently Playing:" prefix label */
-            /* Hide CyTube's original usercount */
-            #usercount { display: none !important; }
-
-            /* Chat header bar — sits above #chatwrap */
-            #sc-chat-header {
-                position: fixed !important;
-                top: 0 !important; right: 5px !important;
-                width: calc(19vw - 5px) !important; height: 28px !important;
-                z-index: 10003 !important;
-                background: rgba(0,0,0,0.7) !important;
-                border: none !important;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: space-between !important;
-                padding: 0 8px !important;
-                box-sizing: border-box !important;
-            }
-            /* Vertical: chat header repositioned into the left side of the control band */
-            body.sc-vertical #sc-chat-header {
-                display: flex !important;
-                position: fixed !important;
-                left: 0 !important; right: auto !important; width: auto !important;
-                top: 50vh !important; height: 44px !important; bottom: auto !important;
-                background: transparent !important;
-                z-index: 10001 !important;
-                padding: 0 12px !important;
-                border: none !important; box-shadow: none !important;
-            }
-            /* Collapse button not needed in vertical — chatmode btn in band handles it */
-            body.sc-vertical #sc-chat-collapse-btn { display: none !important; }
-            #sc-usercount-btn, #sc-poll-btn {
-                background: transparent !important;
-                border: none !important;
-                font-size: 10px !important;
-                font-weight: 700 !important;
-                letter-spacing: 0.06em !important;
-                text-transform: uppercase !important;
-                color: rgba(255,255,255,0.5) !important;
-                cursor: pointer !important;
-                padding: 0 4px !important;
-                font-family: inherit !important;
-                transition: color 0.2s !important;
-                line-height: 28px !important;
-            }
-            body.sc-vertical #sc-usercount-btn,
-            body.sc-vertical #sc-poll-btn {
-                line-height: 44px !important;
-                height: 44px !important;
-                padding: 0 8px !important;
-                -webkit-appearance: none !important;
-                appearance: none !important;
-            }
-            #sc-usercount-btn:hover, #sc-poll-btn:hover { color: rgba(255,255,255,0.9) !important; }
-            #sc-usercount-btn.sc-users-active,
-            #sc-poll-btn.sc-poll-btn-active { color: white !important; }
-
-            /* Collapse/cycle button — far right of chat header */
-            #sc-chat-collapse-btn {
-                background: none !important; border: none !important;
-                color: rgba(255,255,255,0.4) !important;
-                font-size: 18px !important; font-weight: 300 !important;
-                cursor: pointer !important; padding: 0 4px !important;
-                line-height: 1 !important; margin-left: auto !important;
-                order: 999 !important; flex-shrink: 0 !important;
-                transition: color 0.2s !important;
-                -webkit-tap-highlight-color: transparent !important;
-            }
-            #sc-chat-collapse-btn:hover { color: rgba(255,255,255,0.9) !important; }
-            body.sc-tv #sc-chat-collapse-btn { font-size: 26px !important; padding: 0 6px !important; }
-
-            /* Users panel — drops down from usercount, same style as poll panel */
-            #sc-users-panel {
-                position: fixed !important;
-                top: 28px !important;
-                right: 5px !important;
-                width: calc(19vw - 5px) !important;
-                z-index: 19000 !important;
-                background: rgba(10,10,20,0.95) !important;
-                border: 1px solid #3a3a3a !important;
-                border-top: none !important;
-                border-radius: 0 0 0 8px !important;
-                padding: 10px 12px !important;
-                color: rgba(255,255,255,0.88) !important;
-                font-size: 12px !important;
-                line-height: 1.6 !important;
-                box-shadow: 0 8px 32px rgba(0,0,0,0.7) !important;
-                max-height: 60vh !important;
-                overflow-y: auto !important;
-                scrollbar-width: thin !important;
-                scrollbar-color: rgba(255,255,255,0.15) transparent !important;
-                display: none;
-            }
-            body.sc-vertical #sc-users-panel {
-                top: auto !important;
-                bottom: calc(50vh - 44px) !important;
-                right: 5px !important;
-                width: calc(100vw - 5px) !important;
-                max-height: 40vh !important;
-            }
-            .sc-users-panel-header {
-                font-size: 10px !important;
-                font-weight: 700 !important;
-                letter-spacing: 0.06em !important;
-                text-transform: uppercase !important;
-                color: rgba(255,255,255,0.4) !important;
-                margin-bottom: 8px !important;
-                padding-bottom: 6px !important;
-                border-bottom: 1px solid rgba(255,255,255,0.08) !important;
-            }
-            .sc-users-panel-name {
-                padding: 1px 0 !important;
-                white-space: nowrap !important;
-                overflow: hidden !important;
-                text-overflow: ellipsis !important;
-            }
-
-            #videowrap-header .pull-left > span:first-child,
-            #videowrap-header .label,
-            #videowrap-header b { display: none !important; }
-            #videowrap-header strong { font-weight: 500 !important; }
-
-            /* Movie link icons — background fades to transparent when dimmed,
-               /* Coming Attractions button — fades with gradient */
-            #sc-poster-toggle {
-                color: rgba(255,255,255,0.55) !important;
-                transition: opacity 1.5s ease, color 0.2s ease !important;
-                opacity: 1 !important;
-                pointer-events: auto !important;
-                cursor: pointer !important;
-            }
-            #sc-poster-toggle.sc-bar-dim {
-                opacity: 0 !important;
-                /* stays tap-targetable so the first tap can wake the bar, not act */
-            }
-            #sc-poster-toggle:hover { color: rgba(255,255,255,0.9) !important; }
-            #sc-poster-toggle.sc-poster-toggle-active {
-                color: rgba(255,255,255,0.9) !important;
-            }
-            /* Pull the control bar out of embed-responsive's constrained box
-               and pin it as a fixed element flush to the bottom of the screen.
-               Right edge stops just before the settings button. */
-            /* ===== VIDEO.JS CONTROL BAR — pill style matching our UI buttons ===== */
-            .video-js .vjs-control-bar {
-                position: fixed !important;
-                bottom: 4px !important;
-                left: 4px !important;
-                right: calc(20vw + 150px) !important;
-                width: auto !important;
-                margin: 0 !important;
-                z-index: 10001 !important;
-                /* Pill-style bar */
-                background: rgba(255,255,255,0.08) !important;
-                border-radius: 999px !important;
-                padding: 0 8px !important;
-                height: 32px !important;
-                display: flex !important;
-                align-items: center !important;
-                backdrop-filter: blur(4px) !important;
-            }
-            body.sc-vertical .video-js .vjs-control-bar {
-                /* Sit at the bottom of the video (just above the 50vh chat header),
-                   not pinned to the screen bottom where it would land over chat. */
-                bottom: calc(50vh + 4px) !important;
-                right: 4px !important;
-                left: 4px !important;
-            }
-
-            /* Individual control buttons — match pill button style */
-            .video-js .vjs-control {
-                color: rgba(255,255,255,0.55) !important;
-                transition: color 0.3s ease, background 0.3s ease !important;
-                border-radius: 999px !important;
-            }
-            .video-js .vjs-control:hover {
-                color: white !important;
-                background: rgba(255,255,255,0.12) !important;
-            }
-
-            /* Progress / seek bar */
-            .video-js .vjs-progress-control {
-                border-radius: 999px !important;
-                overflow: visible !important;
-            }
-            .video-js .vjs-progress-holder {
-                background: rgba(255,255,255,0.15) !important;
-                border-radius: 999px !important;
-                height: 4px !important;
-                transition: height 0.15s !important;
-            }
-            .video-js .vjs-progress-holder:hover { height: 6px !important; }
-            .video-js .vjs-play-progress {
-                background: rgba(255,255,255,0.75) !important;
-                border-radius: 999px !important;
-            }
-            .video-js .vjs-play-progress::before {
-                color: white !important;
-                font-size: 10px !important;
-                top: -3px !important;
-            }
-            .video-js .vjs-load-progress {
-                background: rgba(255,255,255,0.1) !important;
-                border-radius: 999px !important;
-            }
-
-            /* Volume slider */
-            .video-js .vjs-volume-bar {
-                background: rgba(255,255,255,0.15) !important;
-                border-radius: 999px !important;
-            }
-            .video-js .vjs-volume-level {
-                background: rgba(255,255,255,0.75) !important;
-                border-radius: 999px !important;
-            }
-            .video-js .vjs-volume-level::before {
-                color: white !important;
-                font-size: 10px !important;
-            }
-
-            /* Time display */
-            .video-js .vjs-time-control {
-                color: rgba(255,255,255,0.55) !important;
-                font-size: 11px !important;
-                line-height: 32px !important;
-                padding: 0 4px !important;
-                min-width: 0 !important;
-            }
-
-            /* Big play button — pill style */
-            .video-js .vjs-big-play-button {
-                top: 50% !important;
-                left: 50% !important;
-                transform: translate(-50%, -50%) !important;
-                margin: 0 !important;
-                background: rgba(255,255,255,0.08) !important;
-                border: 1px solid rgba(255,255,255,0.2) !important;
-                border-radius: 999px !important;
-                width: 60px !important;
-                height: 60px !important;
-                line-height: 60px !important;
-                font-size: 24px !important;
-                color: rgba(255,255,255,0.8) !important;
-                transition: background 0.3s ease, color 0.3s ease !important;
-                backdrop-filter: blur(4px) !important;
-            }
-            .video-js .vjs-big-play-button:hover {
-                background: rgba(255,255,255,0.18) !important;
-                color: white !important;
-            }
-            .video-js:hover .vjs-big-play-button { opacity: 1 !important; }
-
-            /* ===== MOTD — keep hidden, we extract images ourselves ===== */
-            #motdrow { display: none !important; }
-
-            /* ===== POSTER STRIP ===== */
-            #sc-poster-strip {
-                display: none !important; /* hidden by default */
-                position: fixed !important;
-                top: 20px !important;   /* drops down from the header bar */
-                left: 0 !important;
-                z-index: 19500 !important;
-                width: 80vw !important;
-                background: rgba(0,0,0,0.93) !important;
-                padding: 8px 12px !important;
-                overflow-x: auto !important;
-                overflow-y: hidden !important;
-                white-space: nowrap !important;
-                border-bottom: 1px solid rgba(255,255,255,0.12) !important;
-                scrollbar-width: thin !important;
-                scrollbar-color: rgba(255,255,255,0.2) transparent !important;
-            }
-            body.sc-vertical #sc-poster-strip {
-                width: 100vw !important;
-                top: 20px !important;
-                bottom: auto !important;
-            }
-            #sc-poster-strip.sc-poster-visible {
-                display: block !important;
-            }
-            .sc-poster-thumb {
-                height: 110px !important;
-                width: auto !important;
-                border-radius: 4px !important;
-                margin-right: 6px !important;
-                opacity: 0.82 !important;
-                transition: opacity 0.15s !important;
-                vertical-align: top !important;
-                cursor: pointer !important;
-                display: inline-block !important;
-                flex-shrink: 0 !important;
-            }
-            .sc-poster-thumb:hover { opacity: 1 !important; }
-
-            #sc-poster-zoom {
-                display: none;
-                position: fixed !important;
-                z-index: 99990 !important;
-                pointer-events: none !important;
-                border-radius: 4px !important;
-                box-shadow: 0 0 0 rgba(0,0,0,0) !important;
-                border: 1px solid rgba(255,255,255,0.0) !important;
-                /* transition animates position, size, shadow, border together */
-                transition:
-                    top 0.22s cubic-bezier(0.22, 1, 0.36, 1),
-                    left 0.22s cubic-bezier(0.22, 1, 0.36, 1),
-                    width 0.22s cubic-bezier(0.22, 1, 0.36, 1),
-                    height 0.22s cubic-bezier(0.22, 1, 0.36, 1),
-                    box-shadow 0.22s ease,
-                    border-color 0.22s ease,
-                    border-radius 0.22s ease !important;
-            }
-            #sc-poster-zoom.sc-zoom-expanded {
-                box-shadow: 0 12px 48px rgba(0,0,0,0.92) !important;
-                border-color: rgba(255,255,255,0.2) !important;
-                border-radius: 6px !important;
-            }
-
-
-            /* Toggle button — right side of the header bar, same line as the title */
-            #sc-poster-toggle {
-                position: fixed !important;
-                top: 0 !important;
-                right: 20vw !important;  /* stops at the chat panel edge */
-                left: auto !important;
-                z-index: 10003 !important;
-                background: transparent !important;
-                border: none !important;
-                border-radius: 0 !important;
-                padding: 2px 8px !important;
-                font-size: 10px !important;
-                cursor: pointer !important;
-                letter-spacing: 0.06em !important;
-                text-transform: uppercase !important;
-                white-space: nowrap !important;
-                line-height: 1 !important;
-                height: 20px !important;
-                display: flex !important;
-                align-items: center !important;
-            }
-            body.sc-vertical #sc-poster-toggle {
-                top: 0 !important;
-                right: 0 !important;
-                left: auto !important;
-                bottom: auto !important;
-            }
-
-            /* Phones draw edge-to-edge, so rounded display corners / cutouts clip the
-               top-corner chrome (movie title at the left, Coming Attractions at the right).
-               Nudge them in from the very edge. Scoped to phones (≤540px on the short side,
-               either orientation) so TV and tablets — which are larger — are untouched;
-               env() adds extra room on devices that actually report a display cutout. */
-            @media (max-width: 540px), (max-height: 540px) {
-                body.sc-horizontal #videowrap-header,
-                body.sc-vertical   #videowrap-header {
-                    padding-left: max(18px, env(safe-area-inset-left, 0px)) !important;
-                }
-                body.sc-vertical #sc-poster-toggle {
-                    right: max(16px, env(safe-area-inset-right, 0px)) !important;
-                    top: env(safe-area-inset-top, 0px) !important;
-                }
-            }
-
-            /* ===== MOVIE LINKS ===== */
-            #sc-movie-links {
-                display: inline-flex !important;
-                gap: 3px !important;
-                margin-left: 8px !important;
-                vertical-align: middle !important;
-            }
-            /* Dim: override inline background with transparent, fade text to ghost */
-            #sc-movie-links.sc-bar-dim .sc-movie-link {
-                background: transparent !important;
-                color: rgba(255,255,255,0.3) !important;
-                box-shadow: inset 0 0 0 1px rgba(255,255,255,0.15) !important;
-            }
-            .sc-movie-link {
-                display: inline-flex !important;
-                align-items: center !important; justify-content: center !important;
-                width: 17px !important; height: 17px !important;
-                border-radius: 3px !important;
-                font-size: 10px !important; font-weight: 900 !important;
-                text-decoration: none !important;
-                line-height: 1 !important; font-family: Georgia, serif !important;
-                flex-shrink: 0 !important; cursor: pointer !important;
-                transition: background 2s ease, color 2s ease, box-shadow 2s ease, filter 0.2s ease !important;
-            }
-            .sc-movie-link:hover { filter: brightness(1.3) !important; }
-            .sc-movie-loading { font-size: 11px !important; color: rgba(255,255,255,0.3) !important; margin-left: 6px !important; }
-            /* Stats bar — floats over bottom-left of video, auto-hides after 12s */
-            #sc-movie-stats {
-                position: fixed !important;
-                bottom: 40px !important;
-                left: 12px !important;
-                z-index: 19000 !important;
-                background: rgba(0,0,0,0.75) !important;
-                color: rgba(255,255,255,0.9) !important;
-                font-size: 13px !important;
-                padding: 6px 12px !important;
-                border-radius: 6px !important;
-                letter-spacing: 0.03em !important;
-                line-height: 1.4 !important;
-                pointer-events: none !important;
-                max-width: 75vw !important;
-                animation: sc-stats-fadein 0.4s ease !important;
-            }
-            @keyframes sc-stats-fadein {
-                from { opacity: 0; transform: translateY(6px); }
-                to   { opacity: 1; transform: translateY(0); }
-            }
-
-
-            /* ===== FLOATING BUTTONS (body-level, always visible) ===== */
-            #sc-desync-btn {
-                position: fixed !important;
-                z-index: 20002 !important;
-                background: rgba(255,255,255,0.08) !important;
-                color: rgba(255,255,255,0.55) !important;
-                border: none !important;
-                border-radius: 50% !important;
-                width: 28px !important; height: 28px !important;
-                padding: 0 !important;
-                font-size: 15px !important;
-                cursor: pointer !important;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: center !important;
-                transition: color 0.3s ease, background 0.3s ease !important;
-            }
-            #sc-desync-btn:hover {
-                color: white !important;
-                background: rgba(255,255,255,0.22) !important;
-            }
-            #sc-desync-btn.sc-desync-active {
-                color: #ffcc44 !important;
-                background: rgba(255,200,50,0.18) !important;
-            }
-            body.sc-horizontal #sc-desync-btn {
-                bottom: 6px !important;
-                right: calc(20vw + 38px) !important;
-            }
-            body.sc-vertical #sc-desync-btn {
-                bottom: 43vh !important;
-                right: 46px !important;
-            }
-
-            #fs-toggle-btn {
-                position: fixed !important;
-                z-index: 20002 !important;
-                background: rgba(255,255,255,0.08) !important;
-                color: rgba(255,255,255,0.55) !important;
-                border: none !important;
-                border-radius: 50% !important;
-                width: 28px !important;
-                height: 28px !important;
-                padding: 0 !important;
-                font-size: 15px !important;
-                cursor: pointer !important;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: center !important;
-                transition: color 0.3s ease, background 0.3s ease !important;
-            }
-            #fs-toggle-btn:hover {
-                color: white !important;
-                background: rgba(255,255,255,0.22) !important;
-            }
-            /* Emote button — absolute inside the input row, overlapping the textarea's
-               right edge. Takes zero flex space; textarea gets matching padding-right. */
-            #sc-mobile-input-row { position: relative !important; }
-            #sc-emote-proxy {
-                position: absolute !important;
-                right: 6px !important; top: 50% !important;
-                transform: translateY(-50%) !important;
-                z-index: 1 !important;
-                background: none !important; border: none !important;
-                color: rgba(255,255,255,0.4) !important;
-                cursor: pointer !important; padding: 4px !important;
-                display: flex !important; align-items: center !important; justify-content: center !important;
-                -webkit-tap-highlight-color: transparent !important;
-                transition: color 0.2s ease !important;
-            }
-            /* Portrait: shift left to clear the send button */
-            body.sc-vertical #sc-emote-proxy { right: calc(44px + 14px) !important; }
-            /* Overlay mode: chat is too compact for an emote icon */
-            body.sc-chat-overlay #sc-emote-proxy { display: none !important; }
-            #sc-emote-proxy:hover { color: rgba(255,255,255,0.85) !important; }
-            #sc-emote-proxy svg { width: 20px !important; height: auto !important; display: block !important; }
-            body.sc-tv #sc-emote-proxy svg { width: 26px !important; }
-            /* Stop text running behind the icon */
-            #sc-chat-textarea { padding-right: 34px !important; }
-            #fs-toggle-btn:focus { outline: none !important; }
-
-            /* ===== HORIZONTAL LAYOUT (widescreen) ===== */
-            body.sc-horizontal #videowrap {
-                position: fixed !important; top: 0 !important; left: 0 !important;
-                width: 79vw !important; height: 100vh !important;
-                z-index: 9999 !important; background: black !important;
-            }
-            body.sc-horizontal #videowrap .embed-responsive,
-            body.sc-horizontal #ytapiplayer {
-                width: 79vw !important; height: 100vh !important;
-            }
-            body.sc-horizontal #chatwrap {
-                position: fixed !important; top: 28px !important; right: 0 !important;
-                width: 19vw !important; height: calc(100vh - 28px) !important;
-                z-index: 9999 !important; background: rgba(0,0,0,0.7) !important;
-                overflow: hidden !important; padding: 0 !important; margin: 0 !important;
-                box-sizing: border-box !important;
-                border: none !important;
-                display: flex !important; flex-direction: column !important;
-            }
-            /* One consistent 8px inset for everything in the chat column, so the
-               messages, input and header all share the same left/right edge. */
-            body.sc-horizontal #chatwrap > * { margin-left: 0 !important; margin-right: 0 !important; box-sizing: border-box !important; width: 100% !important; }
-            body.sc-horizontal #messagebuffer,
-            body.sc-horizontal #sc-mobile-input-row { padding-left: 8px !important; padding-right: 8px !important; }
-            body.sc-horizontal #sc-chat-header { padding: 0 8px !important; margin: 0 !important; }
-            /* Hide send button in horizontal — Enter key sends */
-            body.sc-horizontal #sc-send-btn { display: none !important; }
-            body.sc-horizontal #sc-mobile-input-row { padding: 4px 0 !important; }
-            body.sc-horizontal #leftcontrols { display: none !important; }
-            body.sc-horizontal #fs-toggle-btn {
-                bottom: 6px !important; right: calc(20vw + 70px) !important;
-            }
-
-            /* ===== VERTICAL LAYOUT (portrait) — YouTube-style stack =====
-               Title strip (36px) → video (ends at 50vh) → control band (44px) → chat */
-            body.sc-vertical #videowrap {
-                position: fixed !important; top: 36px !important; left: 0 !important;
-                width: 100vw !important; height: calc(50vh - 36px) !important;
-                z-index: 9999 !important; background: black !important;
-                border: none !important; outline: none !important;
-                box-shadow: none !important;
-            }
-            body.sc-vertical #videowrap .embed-responsive,
-            body.sc-vertical #ytapiplayer {
-                width: 100vw !important; height: calc(50vh - 36px) !important;
-                border: none !important;
-                margin: 0 !important;
-                padding: 0 !important;
-            }
-            body.sc-vertical .video-js {
-                margin: 0 !important;
-                padding: 0 !important;
-                left: 0 !important;
-            }
-            body.sc-vertical .vjs-tech {
-                left: 0 !important;
-                margin: 0 !important;
-            }
-            body.sc-vertical #chatwrap {
-                position: fixed !important; bottom: 0 !important; left: 0 !important;
-                width: 100vw !important; height: calc(50vh - 44px) !important;
-                z-index: 9999 !important; background: rgba(16,14,24,0.97) !important;
-                overflow: hidden !important; padding: 0 5px !important;
-                display: flex !important; flex-direction: column !important;
-            }
-            body.sc-vertical #messagebuffer { font-size: 15px !important; }
-
-            /* Vertical: all buttons in one right-pinned row flush on top of the chat panel.
-               leftcontrols hides its own internal layout; we show a proxy row instead. */
-            body.sc-vertical #leftcontrols { display: none !important; }
-
-            /* fs button: right-pinned, sitting exactly on the chat top edge */
-            body.sc-vertical #fs-toggle-btn {
-                bottom: 43vh !important;
-                right: 84px !important; left: auto !important;
-            }
-
-            /* ===== SHARED CHAT ELEMENTS ===== */
-            /* No borders anywhere in the chat column except the message input box */
-            #chatwrap, #chatwrap *:not(#sc-chat-textarea),
-            #sc-chat-header, #sc-chat-header * {
-                border: none !important; box-shadow: none !important;
-            }
-            /* Vertical: header band shares the chat's background so there's no seam */
-            body.sc-vertical #sc-chat-header { background: rgba(0,0,0,0.85) !important; }
-            #messagebuffer {
-                flex: 1 !important; height: auto !important;
-                width: 100% !important; box-sizing: border-box !important;
-                padding-left: 0 !important; padding-right: 0 !important; margin: 0 !important;
-                background: transparent !important; color: white !important; border: none !important;
-                font-size: 14px !important; overflow-x: hidden !important; overflow-y: auto !important; padding-bottom: 5px !important;
-            }
-            /* Long usernames / links must wrap, never widen the panel */
-            #messagebuffer, #messagebuffer * {
-                overflow-wrap: anywhere !important; word-break: break-word !important;
-                max-width: 100% !important;
-            }
-            #sc-chat-textarea {
-                width: 100% !important; min-height: 44px !important; max-height: 120px !important;
-                background: rgba(255,255,255,0.1) !important; color: white !important;
-                border: 1px solid rgba(255,255,255,0.3) !important; border-radius: 4px !important;
-                padding: 6px 8px !important; font-size: 14px !important; font-family: inherit !important;
-                resize: none !important; overflow-y: auto !important;
-                box-sizing: border-box !important; line-height: 1.4 !important;
-                outline: none !important; transition: border-color 0.2s !important; flex-shrink: 0 !important;
-            }
-            #sc-chat-textarea:focus {
-                border-color: rgba(255,255,255,0.7) !important;
-                background: rgba(255,255,255,0.15) !important;
-            }
-            #sc-chat-textarea::placeholder { color: rgba(255,255,255,0.4) !important; }
-            #sc-checking {
-                font-size: 11px !important; color: rgba(255,255,200,0.6) !important;
-                padding: 2px 4px !important; flex-shrink: 0 !important;
-            }
-
-            /* ===== REVIEW MODAL ===== */
-            #sc-modal-overlay {
-                position: fixed !important; inset: 0 !important;
-                background: rgba(0,0,0,0.8) !important; z-index: 99999 !important;
-                display: flex !important; align-items: center !important;
-                justify-content: center !important; font-family: system-ui, sans-serif !important;
-            }
-            #sc-modal {
-                background: #13131f !important; border: 1px solid rgba(255,255,255,0.15) !important;
-                border-radius: 12px !important; padding: 20px !important;
-                max-width: 520px !important; width: 94vw !important; color: white !important;
-                box-shadow: 0 12px 40px rgba(0,0,0,0.7) !important; max-height: 85vh !important;
-                overflow-y: auto !important; display: flex !important; flex-direction: column !important; gap: 12px !important;
-            }
-            #sc-modal-title { font-size: 16px !important; font-weight: 700 !important; color: #f0c040 !important; margin: 0 !important; }
-            #sc-readability { display: flex !important; flex-direction: column !important; gap: 4px !important; }
-            .sc-readability-issue {
-                font-size: 12px !important; color: #ffd080 !important;
-                background: rgba(255,200,80,0.08) !important; border-radius: 4px !important; padding: 4px 8px !important;
-            }
-            #sc-preview-wrap {
-                background: rgba(255,255,255,0.05) !important; border: 1px solid rgba(255,255,255,0.1) !important;
-                border-radius: 6px !important; padding: 10px 12px !important;
-                line-height: 1.6 !important; font-size: 14px !important; color: #e0e0e0 !important; word-break: break-word !important;
-            }
-            .sc-error-span {
-                background: rgba(255,80,80,0.25) !important; border-bottom: 2px solid #ff5555 !important;
-                border-radius: 2px !important; cursor: pointer !important; padding: 0 1px !important; transition: background 0.15s !important;
-            }
-            .sc-error-span:hover { background: rgba(255,80,80,0.45) !important; }
-            #sc-error-detail {
-                background: rgba(255,255,255,0.04) !important; border-radius: 6px !important;
-                padding: 8px 10px !important; font-size: 13px !important; min-height: 36px !important; color: #ccc !important;
-            }
-            #sc-error-detail:empty { display: none !important; }
-            .sc-detail-msg { margin-bottom: 8px !important; color: #ffcccc !important; }
-            .sc-detail-actions { display: flex !important; flex-wrap: wrap !important; gap: 6px !important; }
-            .sc-sug-btn {
-                background: rgba(60,180,100,0.2) !important; color: #90ffa0 !important;
-                border: 1px solid rgba(60,200,100,0.4) !important; border-radius: 5px !important;
-                padding: 4px 10px !important; cursor: pointer !important; font-size: 12px !important;
-            }
-            .sc-sug-btn:hover { background: rgba(60,180,100,0.4) !important; }
-            .sc-reject-btn {
-                background: rgba(255,255,255,0.07) !important; color: #aaa !important;
-                border: 1px solid rgba(255,255,255,0.15) !important; border-radius: 5px !important;
-                padding: 4px 10px !important; cursor: pointer !important; font-size: 12px !important;
-            }
-            .sc-reject-btn:hover { background: rgba(255,255,255,0.14) !important; }
-            #sc-modal-actions { display: flex !important; gap: 10px !important; justify-content: flex-end !important; }
-            #sc-btn-cancel {
-                background: rgba(255,255,255,0.08) !important; color: #ccc !important;
-                border: 1px solid rgba(255,255,255,0.2) !important; border-radius: 6px !important;
-                padding: 7px 16px !important; cursor: pointer !important; font-size: 13px !important;
-            }
-            #sc-btn-cancel:hover { background: rgba(255,255,255,0.16) !important; }
-            #sc-btn-send {
-                background: rgba(60,180,100,0.25) !important; color: #90ffa0 !important;
-                border: 1px solid rgba(60,200,100,0.5) !important; border-radius: 6px !important;
-                padding: 7px 16px !important; cursor: pointer !important; font-size: 13px !important; font-weight: 600 !important;
-            }
-            #sc-btn-send:hover { background: rgba(60,180,100,0.4) !important; }
-            #sc-lt-credit { font-size: 10px !important; color: rgba(255,255,255,0.25) !important; text-align: right !important; }
-            #sc-lt-credit a { color: rgba(255,255,255,0.35) !important; }
-
-            /* ===== SETTINGS BUTTON ===== */
-            #sc-settings-btn {
-                position: fixed !important;
-                z-index: 20002 !important;
-                background: rgba(255,255,255,0.08) !important;
-                color: rgba(255,255,255,0.55) !important;
-                border: none !important;
-                border-radius: 50% !important;
-                width: 28px !important;
-                height: 28px !important;
-                padding: 0 !important;
-                font-size: 13px !important;
-                cursor: pointer !important;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: center !important;
-                transition: color 0.3s ease, background 0.3s ease !important;
-                line-height: 1 !important;
-            }
-            #sc-settings-btn:hover {
-                color: white !important;
-                background: rgba(255,255,255,0.22) !important;
-            }
-            /* A newer release is available — static green highlight (always while available) */
-            #sc-settings-btn.sc-has-update {
-                color: #7dffa0 !important;
-                box-shadow: 0 0 0 2px rgba(125,255,160,0.32), 0 0 6px rgba(125,255,160,0.28) !important;
-            }
-            /* …and a brief attention pulse, removed after ~30s so it isn't endless */
-            #sc-settings-btn.sc-has-update.sc-has-update-pulse {
-                animation: sc-gear-update-pulse 2s ease-in-out infinite !important;
-            }
-            @keyframes sc-gear-update-pulse {
-                0%, 100% { box-shadow: 0 0 0 2px rgba(125,255,160,0.35), 0 0 6px rgba(125,255,160,0.35) !important; }
-                50%      { box-shadow: 0 0 0 2px rgba(125,255,160,0.7), 0 0 16px rgba(125,255,160,0.8) !important; }
-            }
-
-            body.sc-horizontal #sc-settings-btn {
-                bottom: 6px !important; right: calc(20vw + 102px) !important;
-            }
-            body.sc-vertical #sc-settings-btn {
-                bottom: 43vh !important; right: 122px !important;
-            }
-
-            /* ===== CAST BUTTON (mobile only) — fly-out cluster, one slot past settings ===== */
-            #sc-cast-btn {
-                position: fixed !important;
-                z-index: 20002 !important;
-                background: rgba(255,255,255,0.08) !important;
-                color: rgba(255,255,255,0.55) !important;
-                border: none !important;
-                border-radius: 50% !important;
-                width: 28px !important;
-                height: 28px !important;
-                padding: 0 !important;
-                cursor: pointer !important;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: center !important;
-                transition: color 0.3s ease, background 0.3s ease, opacity 0.25s ease, transform 0.25s ease !important;
-                line-height: 1 !important;
-            }
-            #sc-cast-btn:hover { color: white !important; background: rgba(255,255,255,0.22) !important; }
-            #sc-cast-btn.sc-cast-active { color: #7dffa0 !important; background: rgba(125,255,160,0.18) !important; }
-            /* Horizontal: vertical stack at the left edge, directly under settings (56px pitch) */
-            body.sc-horizontal #sc-cast-btn {
-                left: 10px !important; right: auto !important; bottom: auto !important;
-                top: calc(50% + 112px) !important;
-                opacity: 0 !important; pointer-events: none !important;
-                transform: translateX(-14px) !important;
-            }
-            body.sc-horizontal.sc-leftzone #sc-cast-btn {
-                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
-            }
-            /* Vertical: control-band row, one slot left of settings */
-            body.sc-vertical #sc-cast-btn {
-                top: calc(50vh + 4px) !important; bottom: auto !important;
-                right: 140px !important; left: auto !important;
-                opacity: 0 !important; pointer-events: none !important;
-                transform: translateX(16px) !important;
-            }
-            body.sc-vertical.sc-rightzone #sc-cast-btn {
-                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
-            }
-            /* Hide with the rest of the cluster while the keyboard is up */
-            body.sc-kb-open #sc-cast-btn { opacity: 0 !important; pointer-events: none !important; }
-
-            /* ===== SETTINGS MODAL ===== */
-            #sc-settings-overlay {
-                position: fixed !important; inset: 0 !important;
-                background: rgba(0,0,0,0.85) !important;
-                z-index: 99998 !important;
-                display: flex !important;
-                align-items: center !important; justify-content: center !important;
-                font-family: system-ui, sans-serif !important;
-            }
-            #sc-settings-modal {
-                background: #0e0e1a !important;
-                border: 1px solid rgba(255,255,255,0.15) !important;
-                border-radius: 12px !important;
-                padding: 24px !important;
-                width: min(480px, 94vw) !important;
-                color: white !important;
-                box-shadow: 0 16px 48px rgba(0,0,0,0.8) !important;
-                display: flex !important; flex-direction: column !important; gap: 16px !important;
-                max-height: 90vh !important; overflow-y: auto !important;
-                -webkit-overflow-scrolling: touch !important;
-            }
-            /* Validate-key button sits inline with each key input */
-            .sc-settings-input-row { display: flex !important; gap: 8px !important; align-items: stretch !important; }
-            .sc-settings-input-row .sc-settings-input { flex: 1 !important; }
-            .sc-settings-test {
-                flex-shrink: 0 !important;
-                background: rgba(192,176,255,0.15) !important;
-                color: #c0b0ff !important;
-                border: 1px solid rgba(192,176,255,0.35) !important;
-                border-radius: 6px !important;
-                padding: 0 16px !important; font-size: 13px !important; font-weight: 600 !important;
-                cursor: pointer !important;
-            }
-            .sc-settings-test:disabled { opacity: 0.5 !important; cursor: default !important; }
-            .sc-settings-test-status { font-size: 12px !important; min-height: 14px !important; }
-            .sc-settings-test-status.sc-test-ok      { color: #7dffa0 !important; }
-            .sc-settings-test-status.sc-test-bad     { color: #ff8080 !important; }
-            .sc-settings-test-status.sc-test-pending { color: rgba(255,255,255,0.55) !important; }
-            /* Chat font-size slider + live sample */
-            .sc-settings-range { width: 100% !important; accent-color: #c0b0ff !important; cursor: pointer !important; }
-            .sc-font-sample {
-                margin-top: 10px !important; padding: 10px 12px !important;
-                background: rgba(255,255,255,0.05) !important;
-                border: 1px solid rgba(255,255,255,0.1) !important;
-                border-radius: 6px !important; color: rgba(255,255,255,0.88) !important;
-                line-height: 1.4 !important;
-            }
-            #sc-settings-title {
-                font-size: 17px !important; font-weight: 700 !important;
-                color: #c0b0ff !important;
-            }
-            .sc-settings-intro {
-                font-size: 13px !important; color: rgba(255,255,255,0.6) !important;
-                line-height: 1.5 !important;
-                background: rgba(255,255,255,0.04) !important;
-                border-radius: 6px !important; padding: 8px 10px !important;
-            }
-            .sc-settings-group {
-                display: flex !important; flex-direction: column !important; gap: 5px !important;
-            }
-            .sc-settings-label {
-                font-size: 13px !important; font-weight: 600 !important;
-                color: rgba(255,255,255,0.85) !important;
-                display: flex !important; flex-direction: column !important; gap: 2px !important;
-            }
-            .sc-settings-note {
-                font-weight: 400 !important; font-size: 11px !important;
-                color: rgba(255,255,255,0.4) !important;
-            }
-            .sc-settings-input {
-                background: rgba(255,255,255,0.07) !important;
-                border: 1px solid rgba(255,255,255,0.2) !important;
-                border-radius: 6px !important;
-                color: white !important;
-                padding: 8px 10px !important;
-                font-size: 13px !important;
-                font-family: monospace !important;
-                outline: none !important;
-                width: 100% !important; box-sizing: border-box !important;
-            }
-            .sc-settings-input:focus {
-                border-color: rgba(192,176,255,0.6) !important;
-                background: rgba(255,255,255,0.1) !important;
-            }
-            .sc-settings-link {
-                font-size: 11px !important; color: rgba(192,176,255,0.7) !important;
-                text-decoration: none !important; align-self: flex-start !important;
-            }
-            .sc-settings-link:hover { color: #c0b0ff !important; text-decoration: underline !important; }
-            .sc-settings-toggle-group, .sc-settings-divider {
-                border-top: 1px solid rgba(255,255,255,0.08) !important; padding-top: 12px !important;
-            }
-            .sc-settings-toggle-label {
-                display: flex !important; flex-direction: column !important; gap: 4px !important;
-                cursor: pointer !important; font-size: 13px !important;
-                font-weight: 600 !important; color: rgba(255,255,255,0.85) !important;
-            }
-            /* checkbox sits INLINE with its label; the note drops underneath */
-            .sc-toggle-row {
-                display: flex !important; align-items: center !important; gap: 9px !important;
-            }
-            .sc-toggle-row input[type="checkbox"] {
-                width: 17px !important; height: 17px !important; margin: 0 !important;
-                flex: 0 0 auto !important; cursor: pointer !important; accent-color: #c0b0ff !important;
-            }
-            .sc-toggle-text { line-height: 1.2 !important; }
-            #sc-tmdb-fields {
-                display: flex !important; flex-direction: column !important; gap: 6px !important;
-                margin: 8px 0 0 26px !important;
-            }
-            #sc-tmdb-fields.sc-hidden { display: none !important; }
-            .sc-settings-btn-wide {
-                background: rgba(192,176,255,0.2) !important; color: #c0b0ff !important;
-                border: 1px solid rgba(192,176,255,0.4) !important; border-radius: 6px !important;
-                padding: 9px 18px !important; font-size: 13px !important; font-weight: 600 !important;
-                cursor: pointer !important; width: 100% !important;
-            }
-            .sc-settings-btn-wide:hover { background: rgba(192,176,255,0.32) !important; }
-            /* App-update section + the settings-gear "update available" highlight */
-            #sc-update-notes {
-                white-space: pre-wrap !important; max-height: 130px !important; overflow-y: auto !important;
-                margin: 6px 0 8px !important; padding: 8px 10px !important;
-                background: rgba(255,255,255,0.05) !important; border-radius: 6px !important;
-                font-size: 12px !important; line-height: 1.45 !important; color: rgba(255,255,255,0.78) !important;
-            }
-            #sc-update-notes.sc-hidden, #sc-update-download.sc-hidden { display: none !important; }
-            #sc-update-status.sc-update-yes { color: #7dffa0 !important; font-weight: 600 !important; }
-            #sc-update-status.sc-update-no  { color: rgba(255,255,255,0.5) !important; }
-            #sc-update-download { margin-top: 8px !important; background: rgba(125,255,160,0.16) !important;
-                color: #7dffa0 !important; border-color: rgba(125,255,160,0.4) !important; }
-            #sc-update-download:hover { background: rgba(125,255,160,0.28) !important; }
-            #sc-settings-actions {
-                display: flex !important; gap: 10px !important; justify-content: flex-end !important;
-                margin-top: 4px !important;
-            }
-            #sc-settings-cancel {
-                background: rgba(255,255,255,0.08) !important; color: #aaa !important;
-                border: 1px solid rgba(255,255,255,0.15) !important;
-                border-radius: 6px !important; padding: 8px 18px !important;
-                cursor: pointer !important; font-size: 13px !important;
-            }
-            #sc-settings-cancel:hover { background: rgba(255,255,255,0.14) !important; }
-            #sc-settings-save {
-                background: rgba(192,176,255,0.2) !important; color: #c0b0ff !important;
-                border: 1px solid rgba(192,176,255,0.4) !important;
-                border-radius: 6px !important; padding: 8px 18px !important;
-                cursor: pointer !important; font-size: 13px !important; font-weight: 600 !important;
-            }
-            #sc-settings-save:hover { background: rgba(192,176,255,0.35) !important; }
-
-
-            /* Poll panel */
-            #sc-poll-panel {
-                position: fixed !important;
-                top: 28px !important;
-                right: 5px !important;
-                width: calc(19vw - 5px) !important;
-                z-index: 19000 !important;
-                background: rgba(10,10,20,0.95) !important;
-                border: 1px solid rgba(255,255,255,0.12) !important;
-                border-radius: 8px !important;
-                padding: 12px 14px !important;
-                max-width: 100% !important;
-                color: rgba(255,255,255,0.88) !important;
-                font-size: 13px !important;
-                line-height: 1.5 !important;
-                box-shadow: 0 8px 32px rgba(0,0,0,0.7) !important;
-                font-family: system-ui, sans-serif !important;
-            }
-            body.sc-vertical #sc-poll-panel {
-                right: 0 !important;
-                top: auto !important;
-                bottom: calc(42vh + 42px) !important;
-                max-width: 98vw !important;
-            }
-            .sc-poll-header {
-                font-weight: 600 !important;
-                font-size: 14px !important;
-                color: #f0c040 !important;
-                margin-bottom: 8px !important;
-                padding-bottom: 6px !important;
-                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-            }
-            .sc-poll-option {
-                margin-bottom: 6px !important;
-                color: rgba(255,255,255,0.82) !important;
-                font-size: 13px !important;
-            }
-            .sc-poll-option a {
-                color: #7eb8f7 !important;
-                word-break: break-all !important;
-            }
-            .sc-poll-meta {
-                margin-top: 8px !important;
-                font-size: 11px !important;
-                color: rgba(255,255,255,0.35) !important;
-                text-align: right !important;
-            }
-
-            #sc-settings-status {
-                font-size: 12px !important; color: #90ffa0 !important;
-                text-align: center !important; min-height: 16px !important;
-            }
-
-            /* DRM (YouTube Movies) fallback overlay — covers the dead YT iframe */
-            #sc-drm-overlay {
-                position: absolute !important; inset: 0 !important;
-                z-index: 60 !important;
-                display: flex !important; align-items: center !important; justify-content: center !important;
-                background: radial-gradient(ellipse at center, rgba(20,12,28,0.92), rgba(8,6,12,0.97)) !important;
-                font-family: 'Inter', system-ui, sans-serif !important;
-                padding: 24px !important; text-align: center !important;
-            }
-            #sc-drm-box { max-width: 560px !important; }
-            #sc-drm-icon { font-size: 40px !important; margin-bottom: 10px !important; }
-            #sc-drm-title {
-                font-size: 22px !important; font-weight: 700 !important; color: #fff !important;
-                margin-bottom: 10px !important; line-height: 1.25 !important;
-            }
-            #sc-drm-msg {
-                font-size: 14px !important; color: rgba(255,255,255,0.72) !important;
-                line-height: 1.5 !important; margin-bottom: 20px !important;
-            }
-            #sc-drm-msg b { color: #c0b0ff !important; }
-            .sc-drm-btn {
-                background: #c0b0ff !important; color: #1a1020 !important; border: none !important;
-                border-radius: 8px !important; padding: 12px 26px !important;
-                font-size: 15px !important; font-weight: 700 !important; cursor: pointer !important;
-                font-family: inherit !important;
-            }
-            .sc-drm-btn:focus { outline: 3px solid #fff !important; outline-offset: 2px !important; }
-        `;
+      style.textContent = base_default + overlays_default;
       document.head.appendChild(style);
     }
     if (document.readyState === "complete") {
@@ -3879,930 +4809,7 @@
     }
     (function() {
       const s = document.createElement("style");
-      s.textContent = `
-            html, body { width: 100vw !important; overflow-x: hidden !important; background: #000 !important; }
-
-            /* Clean, distance-legible chat type (Inter, falling back to Roboto/system) */
-            #messagebuffer, #messagebuffer *, #sc-chat-textarea {
-                font-family: 'Inter', 'Roboto', system-ui, -apple-system, sans-serif !important;
-                letter-spacing: 0.005em !important;
-            }
-            #messagebuffer { line-height: 1.35 !important; }
-            body.sc-tv #messagebuffer { font-weight: 500 !important; }
-            /* Poll notifications carry a hardcoded 14pt size — make them match chat */
-            #messagebuffer .poll-notify { font-size: inherit !important; }
-
-            /* App is always fullscreen — the toggle is redundant */
-            #fs-toggle-btn { display: none !important; }
-
-            /* Compact control icons on phones (TV scales these up to 52px below) */
-            #sc-desync-btn, #sc-settings-btn, #sc-cast-btn {
-                width: 36px !important; height: 36px !important; font-size: 15px !important;
-                -webkit-tap-highlight-color: transparent !important;
-            }
-            /* Prevent input zoom on mobile */
-            #sc-chat-textarea { font-size: 16px !important; }
-
-            /* ── VERTICAL (portrait phone): YouTube-style stack ─── */
-            /* Title strip (36px) → video (50vh total) → ctrl band (44px) → chat */
-            body.sc-vertical #videowrap,
-            body.sc-vertical #videowrap .embed-responsive,
-            body.sc-vertical #ytapiplayer    { height: calc(50vh - 36px) !important; }
-            body.sc-vertical #chatwrap       { height: calc(50vh - 44px) !important; }
-            body.sc-vertical #sc-users-panel { bottom: calc(50vh - 44px) !important; }
-            body.sc-vertical #sc-poll-panel  { bottom: calc(50vh - 44px) !important; }
-            /* Three buttons sit inside the control band — evenly spaced from the right */
-            body.sc-vertical #sc-chatmode-btn {
-                bottom: auto !important; top: calc(50vh + 4px) !important;
-                right: 8px !important; left: auto !important; transform: none !important;
-                opacity: 1 !important; pointer-events: auto !important;
-            }
-            body.sc-vertical #sc-desync-btn {
-                bottom: auto !important; top: calc(50vh + 4px) !important;
-                right: 52px !important; left: auto !important;
-                opacity: 1 !important; pointer-events: auto !important;
-            }
-            body.sc-vertical #sc-settings-btn {
-                bottom: auto !important; top: calc(50vh + 4px) !important;
-                right: 96px !important; left: auto !important;
-                opacity: 1 !important; pointer-events: auto !important;
-            }
-            body.sc-vertical .video-js .vjs-control-bar { bottom: calc(50vh + 4px) !important; left: 4px !important; right: 4px !important; }
-
-            /* Control band element — dark strip between video and chat */
-            #sc-vert-ctrl-band { display: none !important; }
-            body.sc-vertical #sc-vert-ctrl-band {
-                display: block !important;
-                position: fixed !important; left: 0 !important; right: 0 !important;
-                top: 50vh !important; height: 44px !important;
-                background: rgba(8,6,12,0.95) !important;
-                z-index: 10000 !important;
-                border-top: 1px solid rgba(255,255,255,0.10) !important;
-                border-bottom: 1px solid rgba(255,255,255,0.07) !important;
-            }
-            /* Right-zone slide drawer — buttons hidden off-screen right, revealed on edge swipe */
-            body.sc-vertical #sc-chatmode-btn,
-            body.sc-vertical #sc-desync-btn,
-            body.sc-vertical #sc-settings-btn {
-                opacity: 0 !important; pointer-events: none !important;
-                transform: translateX(16px) !important;
-                transition: opacity 0.25s ease, transform 0.25s ease !important;
-            }
-            body.sc-vertical.sc-rightzone #sc-chatmode-btn,
-            body.sc-vertical.sc-rightzone #sc-desync-btn,
-            body.sc-vertical.sc-rightzone #sc-settings-btn {
-                opacity: 1 !important; pointer-events: auto !important;
-                transform: translateX(0) !important;
-            }
-            /* Grip — thin pill on the right edge of the control band */
-            #sc-vert-ctrl-grip { display: none !important; }
-            body.sc-vertical #sc-vert-ctrl-grip {
-                display: block !important;
-                position: fixed !important; right: 0 !important; top: 50vh !important;
-                width: 4px !important; height: 44px !important;
-                background: rgba(255,255,255,0.22) !important;
-                z-index: 10002 !important; cursor: pointer !important;
-                border-radius: 2px 0 0 2px !important;
-                transition: width 0.15s ease, background 0.2s ease !important;
-            }
-            body.sc-vertical #sc-vert-ctrl-grip:active { background: rgba(255,255,255,0.5) !important; width: 6px !important; }
-            body.sc-vertical.sc-rightzone #sc-vert-ctrl-grip { opacity: 0 !important; pointer-events: none !important; }
-
-            /* Hide ctrl band, grip, and buttons while keyboard is up */
-            body.sc-kb-open.sc-vertical #sc-vert-ctrl-band,
-            body.sc-kb-open.sc-vertical #sc-vert-ctrl-grip {
-                opacity: 0 !important; pointer-events: none !important;
-            }
-
-            /* ── KEYBOARD OPEN (sc-kb-open) ──────────────────── */
-            /* edge-to-edge mode breaks adjustResize — vh never updates,
-               so we drive layout with explicit px values from visualViewport */
-            body.sc-kb-open.sc-vertical #videowrap,
-            body.sc-kb-open.sc-vertical #videowrap .embed-responsive,
-            body.sc-kb-open.sc-vertical #ytapiplayer {
-                height: var(--sc-vid-h) !important;
-            }
-            body.sc-kb-open.sc-vertical #chatwrap {
-                height: var(--sc-chat-h) !important;
-                bottom: var(--sc-kb-h) !important;
-            }
-            /* ── VERTICAL keyboard open ─────────────────────── */
-            /* Hide floating buttons while typing */
-            body.sc-kb-open.sc-vertical #sc-chatmode-btn,
-            body.sc-kb-open.sc-vertical #sc-desync-btn,
-            body.sc-kb-open.sc-vertical #sc-settings-btn,
-            body.sc-kb-open #sc-top-bar,
-            body.sc-kb-open #sc-chat-header {
-                opacity: 0 !important;
-                pointer-events: none !important;
-            }
-
-            /* ── HORIZONTAL keyboard open ───────────────────── */
-            body.sc-kb-open.sc-horizontal #videowrap,
-            body.sc-kb-open.sc-horizontal #videowrap .embed-responsive,
-            body.sc-kb-open.sc-horizontal #ytapiplayer {
-                height: var(--sc-vid-h) !important;
-            }
-            body.sc-kb-open.sc-horizontal #chatwrap {
-                height: var(--sc-chat-h) !important;
-                bottom: var(--sc-kb-h) !important;
-            }
-            /* Lift floating buttons above the keyboard */
-            body.sc-kb-open.sc-horizontal #sc-desync-btn,
-            body.sc-kb-open.sc-horizontal #fs-toggle-btn,
-            body.sc-kb-open.sc-horizontal #sc-settings-btn {
-                bottom: calc(var(--sc-kb-h) + 6px) !important;
-            }
-
-            /* ── HORIZONTAL (landscape phone / tablet / TV) ──── */
-            /* Control cluster — vertical stack pinned to the mid-left edge.
-               Hidden until the mouse moves to the left side (sc-leftzone),
-               then revealed and clickable; fades out again afterwards. */
-            body.sc-horizontal #sc-chatmode-btn,
-            body.sc-horizontal #sc-desync-btn,
-            body.sc-horizontal #sc-settings-btn {
-                left: 10px !important; right: auto !important; bottom: auto !important;
-                opacity: 0 !important; pointer-events: none !important;
-                transform: translateX(-14px) !important;
-                transition: opacity 0.25s ease, transform 0.25s ease !important;
-            }
-            /* Slide/fade in when the mouse reaches the left edge (or the grip) */
-            body.sc-horizontal.sc-leftzone #sc-chatmode-btn,
-            body.sc-horizontal.sc-leftzone #sc-desync-btn,
-            body.sc-horizontal.sc-leftzone #sc-settings-btn {
-                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
-            }
-
-            /* Subtle drawer "grip" — the only thing visible until you reach the edge */
-            #sc-cluster-grip { display: none !important; }
-            body.sc-horizontal #sc-cluster-grip {
-                display: block !important;
-                position: fixed !important; left: 0 !important; top: 50% !important;
-                transform: translateY(-50%) !important;
-                width: 5px !important; height: 56px !important;
-                border-radius: 0 4px 4px 0 !important;
-                background: rgba(255,255,255,0.16) !important;
-                z-index: 20049 !important; cursor: pointer !important;
-                transition: background 0.2s ease, width 0.15s ease, opacity 0.25s ease !important;
-            }
-            body.sc-horizontal #sc-cluster-grip:hover { background: rgba(255,255,255,0.5) !important; width: 7px !important; }
-            body.sc-tv.sc-horizontal #sc-cluster-grip { height: 72px !important; width: 6px !important; }
-            /* Hide the grip once the cluster is open */
-            body.sc-leftzone #sc-cluster-grip { opacity: 0 !important; pointer-events: none !important; }
-            /* Vertical positions (44px buttons, 56px pitch) */
-            body.sc-horizontal #sc-chatmode-btn { top: calc(50% - 56px) !important; }
-            body.sc-horizontal #sc-desync-btn   { top: 50% !important; }
-            body.sc-horizontal #sc-settings-btn { top: calc(50% + 56px) !important; }
-            /* TV — bigger buttons, wider pitch */
-            body.sc-tv.sc-horizontal #sc-chatmode-btn { top: calc(50% - 64px) !important; }
-            body.sc-tv.sc-horizontal #sc-desync-btn   { top: 50% !important; }
-            body.sc-tv.sc-horizontal #sc-settings-btn { top: calc(50% + 64px) !important; }
-            /* Seek bar (raw video only) spans the video, stopping at the chat edge */
-            body.sc-horizontal .video-js .vjs-control-bar { left: 4px !important; right: calc(19vw + 12px) !important; }
-
-            /* ── TV: larger text, focus ring on interactive items ─ */
-            body.sc-tv #messagebuffer { font-size: 18px !important; }
-            body.sc-tv #sc-chat-textarea { font-size: 18px !important; }
-            body.sc-tv #sc-desync-btn, body.sc-tv #fs-toggle-btn,
-            body.sc-tv #sc-settings-btn {
-                width: 52px !important; height: 52px !important; font-size: 22px !important;
-            }
-            body.sc-tv :focus { outline: 3px solid rgba(255,255,255,0.8) !important; }
-            /* D-pad focus highlight (remote navigation) */
-            body.sc-tv .sc-tv-focus {
-                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
-                box-shadow: 0 0 0 5px rgba(224,112,26,0.32) !important;
-                border-radius: 5px !important;
-            }
-            /* TV caption — label that appears beside the D-pad focused element */
-            body.sc-tv #sc-tv-caption {
-                position: fixed !important; z-index: 30001 !important;
-                background: rgba(0,0,0,0.82) !important; color: #fff !important;
-                font-size: 12px !important; font-weight: 700 !important;
-                padding: 5px 14px !important; border-radius: 6px !important;
-                pointer-events: none !important; white-space: nowrap !important;
-                opacity: 0 !important; transition: opacity 0.15s ease !important;
-                letter-spacing: 0.06em !important; text-transform: uppercase !important;
-            }
-            body.sc-tv #sc-tv-caption.sc-show { opacity: 1 !important; }
-
-            /* ── TV: slick chat input ─────────────────────────── */
-            body.sc-tv #sc-mobile-input-row { gap: 10px !important; padding: 6px 0 8px !important; }
-            body.sc-tv #sc-chat-textarea {
-                min-height: 50px !important;
-                background: rgba(255,255,255,0.07) !important;
-                border: 1.5px solid rgba(255,255,255,0.14) !important;
-                border-radius: 14px !important;
-                padding: 12px 16px !important;
-                caret-color: #e0701a !important;
-                transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease !important;
-            }
-            /* Typing focus: soft amber glow instead of the harsh white outline */
-            body.sc-tv #sc-chat-textarea:focus {
-                outline: none !important;
-                border-color: rgba(224,112,26,0.85) !important;
-                background: rgba(255,255,255,0.10) !important;
-                box-shadow: 0 0 0 1px rgba(224,112,26,0.30), 0 0 20px rgba(224,112,26,0.22) !important;
-            }
-            /* D-pad landing on the input uses the same glow, not the boxy ring */
-            body.sc-tv #sc-chat-textarea.sc-tv-focus {
-                outline: none !important;
-                border-color: rgba(224,112,26,0.85) !important;
-                box-shadow: 0 0 0 1px rgba(224,112,26,0.30), 0 0 20px rgba(224,112,26,0.22) !important;
-            }
-            body.sc-tv #sc-send-btn {
-                width: 50px !important; height: 50px !important; font-size: 20px !important;
-                background: rgba(255,255,255,0.09) !important;
-                border: 1.5px solid rgba(255,255,255,0.14) !important;
-                transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease !important;
-            }
-            body.sc-tv #sc-send-btn:focus,
-            body.sc-tv #sc-send-btn.sc-tv-focus {
-                outline: none !important;
-                border-color: rgba(224,112,26,0.85) !important;
-                background: rgba(224,112,26,0.18) !important;
-                box-shadow: 0 0 0 1px rgba(224,112,26,0.30), 0 0 20px rgba(224,112,26,0.22) !important;
-            }
-            body.sc-tv #sc-chat-textarea::placeholder { color: rgba(255,255,255,0.32) !important; }
-
-            /* ── COUCH MODE — input swells into a big readable compose box while typing ──
-               Active when the setting is on (body.sc-couch) and you're typing in the
-               horizontal sidebar layout. The box lifts out of the chat column over the video.
-
-               Open is a TWO-STEP move so it's smooth even on older TV hardware:
-               • body.sc-couch-prep  — pins the input as a FIXED box at its COLLAPSED size.
-                 JS flushes layout here so the browser has a clean start state.
-               • body.sc-couch-typing — then animates only width + height/padding to the big
-                 box. Because position is already fixed, nothing snaps; the box just grows.
-               We never transition "all" (it flashes through bad intermediate layout states),
-               and the costly frosted blur is switched on only AFTER the grow settles. */
-            body.sc-couch #sc-mobile-input-row {
-                transition: width 0.34s cubic-bezier(0.22, 1, 0.36, 1) !important;
-            }
-            body.sc-couch #sc-chat-textarea {
-                transition: min-height 0.34s cubic-bezier(0.22, 1, 0.36, 1),
-                            max-height 0.34s cubic-bezier(0.22, 1, 0.36, 1),
-                            font-size  0.34s cubic-bezier(0.22, 1, 0.36, 1),
-                            padding    0.34s cubic-bezier(0.22, 1, 0.36, 1),
-                            border-radius 0.34s ease,
-                            background-color 0.3s ease,
-                            backdrop-filter 0.25s ease,
-                            -webkit-backdrop-filter 0.25s ease !important;
-            }
-            body.sc-couch #messagebuffer {
-                transition: padding-bottom 0.34s cubic-bezier(0.22, 1, 0.36, 1) !important;
-            }
-            /* Lift the chat column's stacking context above the video (both sit at z-index
-               9999, with the video later in the DOM) so the fixed box can paint over it. */
-            body.sc-couch.sc-couch-prep.sc-horizontal #chatwrap {
-                z-index: 10010 !important; overflow: visible !important;
-            }
-            /* PREP: the input becomes a fixed box at (about) its normal collapsed footprint.
-               Explicit width avoids width:100% resolving to the whole viewport once fixed. */
-            body.sc-couch.sc-couch-prep.sc-horizontal #sc-mobile-input-row {
-                position: fixed !important;
-                right: 0 !important; bottom: 0 !important; left: auto !important; top: auto !important;
-                width: 19vw !important; z-index: 10011 !important;
-                margin: 0 !important; box-sizing: border-box !important;
-            }
-            body.sc-couch.sc-couch-prep.sc-horizontal #messagebuffer { padding-bottom: 56px !important; }
-            /* EXPANDED: grow width + add the panel gradient (position inherited from prep). */
-            body.sc-couch.sc-couch-typing.sc-horizontal #sc-mobile-input-row {
-                width: 46vw !important;
-                padding: 18px 20px 20px !important;
-                align-items: stretch !important;
-                background: linear-gradient(to top, rgba(0,0,0,0.72) 52%, rgba(0,0,0,0) 100%) !important;
-            }
-            body.sc-couch.sc-couch-typing.sc-horizontal #sc-chat-textarea {
-                min-height: 26vh !important; max-height: 26vh !important;
-                line-height: 1.45 !important;
-                padding: 16px 18px !important; border-radius: 16px !important;
-                background-color: rgba(14,14,18,0.62) !important;
-            }
-            /* Frosted blur (+ a touch more transparency) only once the box has finished
-               expanding — cheap during the grow, lush once it's settled. */
-            body.sc-couch.sc-couch-typing.sc-couch-settled.sc-horizontal #sc-chat-textarea {
-                background-color: rgba(14,14,18,0.55) !important;
-                backdrop-filter: blur(7px) !important;
-                -webkit-backdrop-filter: blur(7px) !important;
-            }
-            /* Bigger box on a TV viewed from the couch (font itself is set inline from JS). */
-            body.sc-couch.sc-couch-typing.sc-tv.sc-horizontal #sc-chat-textarea {
-                min-height: 30vh !important; max-height: 30vh !important;
-            }
-            /* Reserve space at the bottom of the chat so no messages sit BEHIND the
-               translucent box and bleed through it. They slide up as the box grows. */
-            body.sc-couch.sc-couch-typing.sc-horizontal #messagebuffer { padding-bottom: 34vh !important; }
-            body.sc-couch.sc-couch-typing.sc-tv.sc-horizontal #messagebuffer { padding-bottom: 38vh !important; }
-            /* Keep the compose box clean — drop the floating emote icon while it's open */
-            body.sc-couch-typing #sc-emote-proxy { opacity: 0 !important; pointer-events: none !important; }
-
-            /* TV: keep the settings modal inside the overscan-safe area and scrollable */
-            body.sc-tv #sc-settings-overlay { padding: 6vh 8vw !important; box-sizing: border-box !important; }
-            body.sc-tv #sc-settings-modal {
-                max-height: 84vh !important; width: min(620px, 84vw) !important;
-                padding: 28px !important;
-            }
-            body.sc-tv #sc-settings-title { font-size: 22px !important; }
-            body.sc-tv .sc-settings-input,
-            body.sc-tv .sc-settings-test { font-size: 16px !important; }
-            body.sc-tv #sc-settings-save,
-            body.sc-tv #sc-settings-cancel,
-            body.sc-tv #sc-login-btn { font-size: 16px !important; padding: 12px 22px !important; }
-
-            /* Send button */
-            #sc-send-btn {
-                flex-shrink: 0 !important; background: rgba(255,255,255,0.12) !important;
-                border: none !important; border-radius: 50% !important;
-                width: 44px !important; height: 44px !important;
-                color: rgba(255,255,255,0.85) !important; font-size: 18px !important;
-                cursor: pointer !important; display: flex !important;
-                align-items: center !important; justify-content: center !important;
-                -webkit-tap-highlight-color: transparent !important;
-            }
-            #sc-mobile-input-row {
-                display: flex !important; align-items: flex-end !important;
-                gap: 8px !important; width: 100% !important; padding: 4px 0 !important;
-            }
-            #sc-mobile-input-row #sc-chat-textarea { flex: 1 !important; }
-
-            /* ── WATCH-ONLY MODE — hide chat input + guest login ─ */
-            /* #sc-mobile-input-row wraps the textarea, send + emote buttons;
-               #chatline is CyTube's original input; #guestlogin is the guest box
-               that appears below the input when not signed in. Hidden in both the
-               sidebar and overlay chat layouts. messagebuffer reflows to fill. */
-            body.sc-watchalong #sc-mobile-input-row,
-            body.sc-watchalong #chatline,
-            body.sc-watchalong #guestlogin,
-            body.sc-watchalong #sc-emote-proxy { display: none !important; }
-
-            /* ── NOW-PLAYING HERO CARD ───────────────────────── */
-            #sc-np-card {
-                position: fixed !important; inset: 0 !important;
-                z-index: 21000 !important;
-                background: #000 !important;   /* black base when there's no backdrop image */
-                opacity: 0 !important; pointer-events: none !important;
-                transition: opacity 0.5s ease !important;
-                overflow: hidden !important;
-                font-family: system-ui, sans-serif !important;
-            }
-            #sc-np-card.sc-np-visible { opacity: 1 !important; pointer-events: auto !important; }
-            #sc-np-backdrop {
-                position: absolute !important; inset: 0 !important;
-                background-size: cover !important; background-position: center !important;
-                transform: scale(1.05) !important;
-                filter: saturate(1.1) !important;
-            }
-            #sc-np-scrim {
-                position: absolute !important; inset: 0 !important;
-                background:
-                    linear-gradient(90deg, rgba(8,3,6,0.97) 0%, rgba(8,3,6,0.82) 40%, rgba(8,3,6,0.45) 100%),
-                    linear-gradient(0deg, rgba(8,3,6,0.95) 0%, rgba(8,3,6,0) 45%) !important;
-            }
-            #sc-np-content {
-                position: absolute !important;
-                left: 6% !important; bottom: 12% !important; right: 6% !important;
-                display: flex !important; gap: 32px !important; align-items: flex-end !important;
-            }
-            #sc-np-poster {
-                width: 200px !important; border-radius: 10px !important;
-                box-shadow: 0 16px 48px rgba(0,0,0,0.8) !important;
-                flex-shrink: 0 !important;
-            }
-            #sc-np-info { color: #fff !important; max-width: 60% !important; }
-            #sc-np-eyebrow {
-                font-size: 13px !important; font-weight: 700 !important;
-                letter-spacing: 0.18em !important; text-transform: uppercase !important;
-                color: var(--np-accent, #ff5b73) !important; margin-bottom: 10px !important;
-            }
-            #sc-np-title {
-                font-size: 44px !important; font-weight: 800 !important; line-height: 1.05 !important;
-                text-shadow: 0 2px 16px rgba(0,0,0,0.8) !important; margin-bottom: 14px !important;
-            }
-            #sc-np-meta {
-                font-size: 17px !important; color: rgba(255,255,255,0.82) !important;
-                margin-bottom: 16px !important; font-weight: 500 !important;
-            }
-            #sc-np-overview {
-                font-size: 16px !important; line-height: 1.5 !important;
-                color: rgba(255,255,255,0.72) !important; margin-bottom: 16px !important;
-                /* Fixed window (≈4 lines, scales with font-size via em) that we then
-                   auto-scroll to reveal the rest — no scrollbar, just a clipped glide. */
-                max-height: 6em !important; overflow: hidden !important;
-            }
-            #sc-np-overview::-webkit-scrollbar { display: none !important; }
-            #sc-np-chips { display: flex !important; flex-wrap: wrap !important; gap: 8px !important; }
-            #sc-np-progress { margin-top: 18px !important; max-width: 520px !important; }
-            #sc-np-prog-bar {
-                height: 6px !important; border-radius: 3px !important;
-                background: rgba(255,255,255,0.18) !important; overflow: hidden !important;
-            }
-            #sc-np-prog-fill {
-                height: 100% !important; width: 0% !important;
-                background: var(--np-accent, #e0701a) !important; border-radius: 3px !important;
-                transition: width 0.45s linear !important;
-            }
-            #sc-np-prog-times {
-                display: flex !important; justify-content: space-between !important;
-                align-items: baseline !important; margin-top: 8px !important;
-                font-variant-numeric: tabular-nums !important;
-                font-size: 14px !important; color: rgba(255,255,255,0.85) !important;
-            }
-            #sc-np-prog-remain { color: rgba(255,255,255,0.6) !important; font-size: 13px !important; }
-            body.sc-tv #sc-np-prog-bar { height: 8px !important; }
-            body.sc-tv #sc-np-prog-times { font-size: 18px !important; }
-            body.sc-tv #sc-np-prog-remain { font-size: 16px !important; }
-            .sc-np-chip {
-                font-size: 13px !important; color: rgba(255,255,255,0.9) !important;
-                background: rgba(255,255,255,0.12) !important;
-                border: 1px solid rgba(255,255,255,0.18) !important;
-                border-radius: 999px !important; padding: 5px 12px !important;
-                backdrop-filter: blur(4px) !important;
-            }
-            /* Parent-guide severity colors */
-            .sc-np-chip.sc-sev-none     { background: rgba(120,120,130,0.30) !important; border-color: rgba(160,160,170,0.4) !important; }
-            .sc-np-chip.sc-sev-mild     { background: rgba(60,160,80,0.32)  !important; border-color: rgba(90,200,110,0.5) !important; color: #c9ffd4 !important; }
-            .sc-np-chip.sc-sev-moderate { background: rgba(200,150,40,0.34)  !important; border-color: rgba(230,180,60,0.55) !important; color: #ffe9b8 !important; }
-            .sc-np-chip.sc-sev-severe   { background: rgba(200,60,50,0.38)   !important; border-color: rgba(235,90,80,0.6) !important; color: #ffd2cc !important; }
-            :root { --np-accent: #ff5b73; }
-
-            /* TV: scale the card up for the couch */
-            body.sc-tv #sc-np-poster { width: 260px !important; }
-            body.sc-tv #sc-np-title { font-size: 60px !important; }
-            body.sc-tv #sc-np-meta { font-size: 22px !important; }
-            body.sc-tv #sc-np-overview { font-size: 20px !important; }
-            body.sc-tv .sc-np-chip { font-size: 16px !important; padding: 7px 16px !important; }
-
-            /* ── TRIVIA LINK (subtle, top-right next to Coming Attractions) + CARD ── */
-            #sc-trivia-btn {
-                position: fixed !important; top: 0 !important;
-                right: calc(20vw + 150px) !important; left: auto !important;
-                z-index: 10003 !important;
-                background: transparent !important; border: none !important;
-                color: rgba(255,255,255,0.55) !important;
-                font-size: 10px !important; letter-spacing: 0.06em !important;
-                text-transform: uppercase !important; white-space: nowrap !important;
-                line-height: 1 !important; height: 20px !important; padding: 2px 8px !important;
-                display: flex !important; align-items: center !important; cursor: pointer !important;
-                opacity: 1 !important; transition: opacity 1.5s ease, color 0.2s ease !important;
-                -webkit-tap-highlight-color: transparent !important;
-            }
-            #sc-trivia-btn:hover { color: rgba(255,255,255,0.9) !important; }
-            #sc-trivia-btn.sc-bar-dim { opacity: 0 !important; }
-            /* Trivia button hidden in vertical — title bar is too narrow */
-            body.sc-vertical #sc-trivia-btn { display: none !important; }
-            body.sc-tv #sc-trivia-btn { font-size: 12px !important; }
-
-            #sc-trivia-card {
-                position: fixed !important; inset: 0 !important; z-index: 21800 !important;
-                background: rgba(0,0,0,0.62) !important; backdrop-filter: blur(3px) !important;
-                display: none !important; align-items: center !important; justify-content: center !important;
-                font-family: 'Inter','Roboto',system-ui,sans-serif !important;
-            }
-            #sc-trivia-card.sc-show { display: flex !important; }
-            #sc-trivia-panel {
-                width: min(820px, 86vw) !important; max-height: 82vh !important;
-                background: rgba(14,10,18,0.97) !important;
-                border: 1px solid rgba(255,255,255,0.14) !important;
-                border-radius: 14px !important; overflow: hidden !important;
-                display: flex !important; flex-direction: column !important;
-                box-shadow: 0 20px 60px rgba(0,0,0,0.7) !important;
-            }
-            #sc-trivia-head {
-                display: flex !important; align-items: center !important; justify-content: space-between !important;
-                padding: 16px 20px !important; border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-                flex-shrink: 0 !important;
-            }
-            #sc-trivia-title { font-size: 18px !important; font-weight: 800 !important; color: var(--np-accent,#ff5b73) !important; }
-            #sc-trivia-close {
-                background: rgba(255,255,255,0.1) !important; border: none !important; color: #fff !important;
-                width: 32px !important; height: 32px !important; border-radius: 50% !important;
-                cursor: pointer !important; font-size: 14px !important; flex-shrink: 0 !important;
-            }
-            #sc-trivia-close:hover { background: rgba(255,255,255,0.2) !important; }
-            #sc-trivia-list {
-                overflow-y: auto !important; padding: 4px 20px 20px !important;
-                -webkit-overflow-scrolling: touch !important;
-                scrollbar-width: thin !important;
-                scrollbar-color: rgba(255,255,255,0.28) transparent !important;
-            }
-            #sc-trivia-list::-webkit-scrollbar { width: 10px !important; }
-            #sc-trivia-list::-webkit-scrollbar-track { background: rgba(255,255,255,0.05) !important; border-radius: 10px !important; margin: 6px 0 !important; }
-            #sc-trivia-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.28) !important; border-radius: 10px !important; border: 2px solid transparent !important; background-clip: padding-box !important; }
-            #sc-trivia-list::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.45) !important; background-clip: padding-box !important; }
-            body.sc-tv #sc-trivia-list::-webkit-scrollbar { width: 14px !important; }
-            .sc-trivia-item {
-                color: rgba(255,255,255,0.86) !important; font-size: 14px !important; line-height: 1.5 !important;
-                padding: 12px 0 !important; border-bottom: 1px solid rgba(255,255,255,0.07) !important;
-            }
-            body.sc-tv #sc-trivia-panel { width: min(1100px, 84vw) !important; max-height: 84vh !important; }
-            body.sc-tv #sc-trivia-title { font-size: 26px !important; }
-            body.sc-tv #sc-trivia-close { width: 44px !important; height: 44px !important; font-size: 20px !important; }
-            body.sc-tv .sc-trivia-item { font-size: 20px !important; padding: 16px 0 !important; }
-
-            /* Vertical phones (if enabled there): stack poster above text */
-            body.sc-vertical #sc-np-content { flex-direction: column !important; align-items: flex-start !important; gap: 18px !important; bottom: 8% !important; }
-            body.sc-vertical #sc-np-poster { width: 130px !important; }
-            body.sc-vertical #sc-np-title { font-size: 30px !important; }
-            body.sc-vertical #sc-np-info { max-width: 90% !important; }
-
-            /* ── AMBIENT GLOW ────────────────────────────────── */
-            #sc-ambient {
-                position: fixed !important; inset: 0 !important;
-                z-index: 10000 !important; pointer-events: none !important;
-                box-shadow: inset 0 0 160px 36px var(--sc-ambient-color, rgba(0,0,0,0)) !important;
-                transition: box-shadow 1.6s ease !important;
-            }
-            body.sc-ambient-off #sc-ambient { display: none !important; }
-            /* Ambient glow is a TV-only cinematic touch — no edge glow on phones */
-            body:not(.sc-tv) #sc-ambient { display: none !important; }
-
-            /* ── PICTURE-IN-PICTURE: show ONLY the video, full-bleed ──────────────
-               html-prefixed so these win over the body.sc-vertical / .sc-horizontal
-               layout rules (which otherwise tie on specificity and come later). */
-            html body.sc-pip #videowrap,
-            html body.sc-pip #videowrap .embed-responsive,
-            html body.sc-pip #ytapiplayer,
-            html body.sc-pip #ytapiplayer iframe,
-            html body.sc-pip .video-js,
-            html body.sc-pip .vjs-tech {
-                position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
-                width: 100vw !important; height: 100vh !important; z-index: 2147483647 !important;
-                margin: 0 !important; background: #000 !important;
-            }
-            html body.sc-pip #chatwrap, html body.sc-pip #sc-chat-header, html body.sc-pip #sc-ambient,
-            html body.sc-pip #sc-top-bar, html body.sc-pip #videowrap-header, html body.sc-pip #sc-movie-links,
-            html body.sc-pip #sc-movie-stats, html body.sc-pip #sc-poster-toggle, html body.sc-pip #sc-poster-strip,
-            html body.sc-pip #sc-trivia-btn, html body.sc-pip #sc-chatmode-btn, html body.sc-pip #sc-cluster-grip,
-            html body.sc-pip #sc-desync-btn, html body.sc-pip #sc-settings-btn,
-            html body.sc-pip #sc-users-panel, html body.sc-pip #sc-poll-panel,
-            html body.sc-pip #sc-np-card, html body.sc-pip #sc-trivia-card,
-            html body.sc-pip #sc-mobile-input-row, html body.sc-pip .video-js .vjs-control-bar {
-                display: none !important;
-            }
-
-            /* ── CAST MODE: phone becomes a chat remote with a top control bar ─────
-               While casting, the movie plays on the TV, so on the device we hide the
-               player and give the screen to chat. A dedicated top bar (#sc-cast-bar,
-               built in JS) holds the title plus the relocated controls (coming
-               attractions, trivia, users, poll, settings) and a Stop Casting button.
-               The player must keep PLAYING for the sync conductor's clock, so we make it
-               invisible via opacity/z-index rather than display:none (which can pause it). */
-            html body.sc-cast #videowrap,
-            html body.sc-cast #videowrap .embed-responsive,
-            html body.sc-cast #ytapiplayer,
-            html body.sc-cast #ytapiplayer iframe,
-            html body.sc-cast .video-js,
-            html body.sc-cast .vjs-tech {
-                opacity: 0 !important; z-index: -1 !important; pointer-events: none !important;
-            }
-            /* The cast top bar — only present/visible in cast mode */
-            #sc-cast-bar { display: none !important; }
-            html body.sc-cast #sc-cast-bar {
-                display: flex !important; align-items: center !important;
-                position: fixed !important; top: 0 !important; left: 0 !important;
-                width: 100vw !important; height: 40px !important;
-                padding: 0 12px !important; gap: 14px !important; box-sizing: border-box !important;
-                background: rgba(12,10,20,0.97) !important;
-                border-bottom: 1px solid rgba(255,255,255,0.08) !important;
-                z-index: 10006 !important;
-            }
-            /* Title takes the remaining width and ellipsises; still opens the now-playing card */
-            html body.sc-cast #sc-cast-title-slot {
-                flex: 1 1 auto !important; min-width: 0 !important;
-                overflow: hidden !important; white-space: nowrap !important; text-overflow: ellipsis !important;
-                color: #fff !important; font-size: 13px !important; font-weight: 500 !important;
-            }
-            /* The relocated title header sits inline inside the slot (strip its fixed-overlay
-               styling). It always carries the current title, raw text or #sc-title-text span. */
-            html body.sc-cast #sc-cast-title-slot #videowrap-header {
-                position: static !important; width: auto !important; max-width: 100% !important;
-                height: auto !important; line-height: normal !important;
-                padding: 0 !important; margin: 0 !important;
-                background: transparent !important; border: none !important; box-shadow: none !important;
-                z-index: auto !important; color: #fff !important;
-                font-size: 13px !important; font-weight: 500 !important; opacity: 1 !important;
-                white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important;
-            }
-            /* Don't let the idle dimmer fade the title while it's in the cast bar */
-            html body.sc-cast #sc-cast-title-slot #videowrap-header.sc-bar-dim {
-                opacity: 1 !important; color: #fff !important; background: transparent !important;
-            }
-            html body.sc-cast #sc-cast-title-slot #sc-title-text {
-                color: #fff !important; opacity: 1 !important; pointer-events: auto !important;
-            }
-            html body.sc-cast #sc-cast-controls {
-                display: flex !important; align-items: center !important;
-                gap: 14px !important; flex: 0 0 auto !important;
-            }
-            /* Neutralise each relocated control's own fixed positioning / hover-hide so
-               they simply flow inside the bar. */
-            html body.sc-cast #sc-cast-bar #sc-poster-toggle,
-            html body.sc-cast #sc-cast-bar #sc-trivia-btn,
-            html body.sc-cast #sc-cast-bar #sc-usercount-btn,
-            html body.sc-cast #sc-cast-bar #sc-poll-btn,
-            html body.sc-cast #sc-cast-bar #sc-settings-btn,
-            html body.sc-cast #sc-cast-bar #sc-cast-stop-btn {
-                position: static !important; top: auto !important; left: auto !important;
-                right: auto !important; bottom: auto !important;
-                opacity: 1 !important; transform: none !important; pointer-events: auto !important;
-                margin: 0 !important; box-shadow: none !important;
-                display: inline-flex !important; align-items: center !important;
-            }
-            html body.sc-cast #sc-cast-stop-btn {
-                background: #b3261e !important; color: #fff !important; border: none !important;
-                border-radius: 6px !important; padding: 5px 12px !important;
-                font-size: 12px !important; font-weight: 600 !important; cursor: pointer !important;
-                white-space: nowrap !important;
-            }
-            html body.sc-cast #sc-cast-stop-btn:hover { background: #c8352c !important; }
-            /* Chat fills everything under the bar down to the bottom */
-            html body.sc-cast #chatwrap {
-                position: fixed !important; top: 40px !important; bottom: 0 !important;
-                left: 0 !important; right: 0 !important;
-                width: 100vw !important; height: auto !important;
-                z-index: 9999 !important; background: rgba(16,14,24,0.97) !important;
-                display: flex !important; flex-direction: column !important;
-                padding: 0 8px !important;
-            }
-            /* Respect the on-screen keyboard (vars driven by the existing IME logic) and
-               don't inherit the video/chat split heights — chat owns the screen here. */
-            html body.sc-cast.sc-kb-open #chatwrap {
-                top: 40px !important; height: auto !important;
-                bottom: var(--sc-kb-h, 0px) !important;
-            }
-            /* Keep the send button usable on a touch tablet even in landscape */
-            html body.sc-cast #sc-send-btn { display: inline-flex !important; }
-            /* The send button is visible in cast mode, so push the emote icon left of it
-               (back into the chat area) the same way portrait does — otherwise they overlap. */
-            html body.sc-cast #sc-emote-proxy { right: calc(44px + 14px) !important; }
-            /* Coming Attractions reel: full width, dropping just below the 40px cast bar
-               (normally it's 80vw and tucked under a 20px header). */
-            html body.sc-cast #sc-poster-strip {
-                width: 100vw !important; top: 40px !important; bottom: auto !important;
-            }
-            /* Hide video-only chrome that isn't relocated into the bar (the pop-up panels
-               triggered from the bar — users/poll/trivia/now-playing — stay available). */
-            html body.sc-cast #sc-chatmode-btn,
-            html body.sc-cast #sc-desync-btn,
-            html body.sc-cast #fs-toggle-btn,
-            html body.sc-cast #sc-cast-btn,
-            html body.sc-cast #sc-top-bar,
-            html body.sc-cast #sc-movie-links,
-            html body.sc-cast #sc-movie-stats,
-            html body.sc-cast #sc-vert-ctrl-band,
-            html body.sc-cast #sc-vert-ctrl-grip {
-                display: none !important;
-            }
-
-            /* ── AUTO-HIDING CHROME (TV) ─────────────────────── */
-            body.sc-tv .video-js .vjs-control-bar { transition: opacity 0.6s ease !important; }
-            /* The control cluster is governed by the left-edge reveal, not this.
-               Here we just fade the seek bar + hide the cursor when idle. */
-            body.sc-tv.sc-chrome-hidden .video-js .vjs-control-bar {
-                opacity: 0 !important; pointer-events: none !important;
-            }
-            body.sc-tv.sc-chrome-hidden { cursor: none !important; }
-
-            /* ── CHAT LAYOUT MODES ───────────────────────────── */
-            /* Hidden: full-bleed cinema — drop chat AND the title / coming-attractions chrome */
-            body.sc-chat-hidden #chatwrap, body.sc-chat-hidden #sc-chat-header,
-            body.sc-chat-hidden #sc-users-panel, body.sc-chat-hidden #sc-poll-panel,
-            body.sc-chat-hidden #sc-top-bar, body.sc-chat-hidden #videowrap-header,
-            body.sc-chat-hidden #sc-poster-toggle, body.sc-chat-hidden #sc-poster-strip,
-            body.sc-chat-hidden #sc-movie-links { display: none !important; }
-            body.sc-chat-hidden.sc-horizontal #videowrap,
-            body.sc-chat-hidden.sc-horizontal #videowrap .embed-responsive,
-            body.sc-chat-hidden.sc-horizontal #ytapiplayer { width: 100vw !important; }
-            body.sc-chat-hidden.sc-horizontal .video-js .vjs-control-bar { right: 16px !important; }
-            body.sc-chat-hidden.sc-vertical #videowrap,
-            body.sc-chat-hidden.sc-vertical #videowrap .embed-responsive,
-            body.sc-chat-hidden.sc-vertical #ytapiplayer { height: 100vh !important; }
-            /* chat-hidden vertical: suppress the ctrl band (no black bar mid-screen); slide buttons from bottom-right */
-            body.sc-chat-hidden.sc-vertical #sc-vert-ctrl-band { display: none !important; }
-            body.sc-chat-hidden.sc-vertical #sc-vert-ctrl-grip {
-                top: auto !important; bottom: 0 !important;
-            }
-            /* The control row sits just ABOVE the bottom scrubber (≈32px tall at bottom:4px)
-               so the two don't overlap; the cast button joins the row (it otherwise floats
-               mid-screen at the 50vh control-band position). */
-            body.sc-chat-hidden.sc-vertical #sc-chatmode-btn,
-            body.sc-chat-hidden.sc-vertical #sc-desync-btn,
-            body.sc-chat-hidden.sc-vertical #sc-settings-btn,
-            body.sc-chat-hidden.sc-vertical #sc-cast-btn {
-                top: auto !important; bottom: 48px !important;
-            }
-            /* Video-only fills the screen, so the scrubber belongs at the screen bottom —
-               not at the 50vh "above the chat header" spot used when chat is present. */
-            body.sc-chat-hidden.sc-vertical .video-js .vjs-control-bar {
-                bottom: 4px !important;
-            }
-
-            /* ── CHAT-ONLY: a keyboard-free, video-free chat screen — turns the device
-               (handy on a TV) into a pure chat client. The player is hidden here AND
-               paused/muted in JS, so the whole screen is chat. Works in both orientations. */
-            body.sc-chat-chatonly #videowrap,
-            body.sc-chat-chatonly #videowrap .embed-responsive,
-            body.sc-chat-chatonly #ytapiplayer,
-            body.sc-chat-chatonly #ytapiplayer iframe,
-            body.sc-chat-chatonly .video-js,
-            body.sc-chat-chatonly .vjs-tech,
-            body.sc-chat-chatonly .video-js .vjs-control-bar,
-            body.sc-chat-chatonly #sc-top-bar,
-            body.sc-chat-chatonly #videowrap-header,
-            body.sc-chat-chatonly #sc-movie-links,
-            body.sc-chat-chatonly #sc-movie-stats,
-            body.sc-chat-chatonly #sc-poster-toggle,
-            body.sc-chat-chatonly #sc-poster-strip,
-            body.sc-chat-chatonly #sc-trivia-btn,
-            body.sc-chat-chatonly #sc-desync-btn,
-            body.sc-chat-chatonly #fs-toggle-btn,
-            body.sc-chat-chatonly #sc-cast-btn,
-            body.sc-chat-chatonly #sc-vert-ctrl-band {
-                display: none !important;
-            }
-            body.sc-chat-chatonly #sc-cluster-grip { display: none !important; }
-            /* The top header doubles as a control band (like the vertical band at 50vh, but
-               pinned to the top): a right-edge grip slides the chat-mode + settings buttons
-               out. Reuses the right-zone drawer (right-edge swipe in portrait, or tap the grip). */
-            body.sc-chat-chatonly #sc-vert-ctrl-grip {
-                display: block !important;
-                position: fixed !important; right: 0 !important; top: 0 !important; bottom: auto !important;
-                height: 32px !important; width: 4px !important;
-                border-radius: 2px 0 0 2px !important;
-                background: rgba(255,255,255,0.3) !important;
-                z-index: 10012 !important; cursor: pointer !important;
-            }
-            body.sc-chat-chatonly.sc-rightzone #sc-vert-ctrl-grip { opacity: 0 !important; pointer-events: none !important; }
-            body.sc-chat-chatonly #sc-chatmode-btn,
-            body.sc-chat-chatonly #sc-settings-btn {
-                display: flex !important;
-                position: fixed !important;
-                top: -2px !important; bottom: auto !important; left: auto !important;
-                opacity: 0 !important; pointer-events: none !important;
-                transform: translateX(16px) !important;
-                transition: opacity 0.25s ease, transform 0.25s ease !important;
-                z-index: 10012 !important;
-            }
-            body.sc-chat-chatonly #sc-chatmode-btn { right: 8px !important; }
-            body.sc-chat-chatonly #sc-settings-btn { right: 50px !important; }
-            body.sc-chat-chatonly.sc-rightzone #sc-chatmode-btn,
-            body.sc-chat-chatonly.sc-rightzone #sc-settings-btn {
-                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
-            }
-            /* Chat header is a clean full-width top bar; the fly-out grip on its right edge
-               (above) is the way out, so the inline "›" collapse button is hidden here. */
-            body.sc-chat-chatonly #sc-chat-header {
-                display: flex !important; position: fixed !important;
-                top: 0 !important; left: 0 !important; right: auto !important;
-                width: 100vw !important; height: 32px !important;
-                background: rgba(12,10,20,0.97) !important;
-                z-index: 10010 !important;
-                padding: 0 10px !important; box-sizing: border-box !important;
-            }
-            body.sc-chat-chatonly #sc-chat-collapse-btn { display: none !important; }
-            /* Chat fills the screen under the header bar */
-            body.sc-chat-chatonly #chatwrap {
-                position: fixed !important;
-                top: 32px !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
-                width: 100vw !important; height: auto !important;
-                z-index: 9999 !important;
-                background: rgba(16,14,24,0.97) !important;
-                display: flex !important; flex-direction: column !important;
-                box-sizing: border-box !important; padding: 0 8px !important;
-            }
-            /* Respect the on-screen keyboard if it opens (vars driven by the IME logic) */
-            body.sc-chat-chatonly.sc-kb-open #chatwrap {
-                top: 32px !important; height: auto !important; bottom: var(--sc-kb-h, 0px) !important;
-            }
-            /* Message list takes all the room above the input row */
-            body.sc-chat-chatonly #messagebuffer { flex: 1 1 auto !important; }
-            /* Keep the send button usable (no physical keyboard assumed), and shift the
-               emote icon left of it so the two don't stack (send is hidden in plain
-               horizontal, so the emote normally sits at the right edge). */
-            body.sc-chat-chatonly #sc-send-btn { display: inline-flex !important; }
-            body.sc-chat-chatonly #sc-emote-proxy { right: calc(44px + 14px) !important; }
-
-            /* Overlay: video full width, chat floats translucent over the right */
-            /* ── OVERLAY: minimal chat in the top-right corner over full video ── */
-            body.sc-chat-overlay.sc-horizontal #videowrap,
-            body.sc-chat-overlay.sc-horizontal #videowrap .embed-responsive,
-            body.sc-chat-overlay.sc-horizontal #ytapiplayer { width: 100vw !important; }
-            /* No sidebar in overlay — the scrubber spans the full video width (the default
-               horizontal rule reserves 19vw for the chat column that isn't there here). */
-            body.sc-chat-overlay.sc-horizontal .video-js .vjs-control-bar { right: 16px !important; }
-
-            /* Hide every bit of chrome — title bar, coming attractions, user/poll header */
-            body.sc-chat-overlay.sc-horizontal #sc-top-bar,
-            body.sc-chat-overlay.sc-horizontal #videowrap-header,
-            body.sc-chat-overlay.sc-horizontal #sc-movie-links,
-            body.sc-chat-overlay.sc-horizontal #sc-movie-stats,
-            body.sc-chat-overlay.sc-horizontal #sc-poster-toggle,
-            body.sc-chat-overlay.sc-horizontal #sc-poster-strip,
-            body.sc-chat-overlay.sc-horizontal #sc-chat-header { display: none !important; }
-
-            /* Chat = small top-right corner panel, dark transparent, no borders */
-            body.sc-chat-overlay.sc-horizontal #chatwrap {
-                top: 0 !important; right: 0 !important; left: auto !important;
-                width: 30vw !important; height: 46vh !important;
-                background: rgba(8,6,12,0.42) !important;
-                border: none !important; border-radius: 0 0 0 10px !important;
-                padding: 10px !important; box-sizing: border-box !important;
-                z-index: 10002 !important;
-            }
-            body.sc-chat-overlay.sc-horizontal #messagebuffer {
-                text-shadow: 0 1px 4px rgba(0,0,0,0.9) !important;
-            }
-            /* Kill any stray borders/outlines/shadows around the chat in overlay */
-            body.sc-chat-overlay.sc-horizontal #chatwrap,
-            body.sc-chat-overlay.sc-horizontal #chatwrap *,
-            body.sc-chat-overlay.sc-horizontal #messagebuffer,
-            body.sc-chat-overlay.sc-horizontal #sc-mobile-input-row,
-            body.sc-chat-overlay.sc-horizontal #chatwrap .input-group,
-            body.sc-chat-overlay.sc-horizontal #chatwrap .form-control {
-                border: none !important; box-shadow: none !important; outline: none !important;
-            }
-            /* Shrink posted images / emotes to a quarter size in the corner chat */
-            body.sc-chat-overlay.sc-horizontal #messagebuffer img {
-                zoom: 0.25 !important;
-                max-width: 100% !important; height: auto !important;
-            }
-            /* One-line, borderless, no-placeholder input on the same transparent bg */
-            body.sc-chat-overlay.sc-horizontal #sc-mobile-input-row { padding: 2px 0 0 !important; }
-            body.sc-chat-overlay.sc-horizontal #sc-chat-textarea {
-                min-height: 0 !important; height: 26px !important; max-height: 26px !important;
-                background: rgba(0,0,0,0.5) !important; border: none !important; box-shadow: none !important;
-                border-radius: 6px !important;
-                padding: 3px 8px !important; font-size: 13px !important; line-height: 1.4 !important;
-                overflow-y: auto !important; resize: none !important;
-            }
-            body.sc-chat-overlay.sc-horizontal #sc-chat-textarea:focus {
-                background: rgba(0,0,0,0.68) !important; border: none !important;
-            }
-            body.sc-chat-overlay.sc-horizontal #sc-chat-textarea::placeholder { color: transparent !important; }
-            body.sc-chat-overlay.sc-horizontal #sc-newmsg-pill {
-                right: 2vw !important; top: calc(46vh - 38px) !important; bottom: auto !important;
-            }
-
-            /* Sidebar: header matches the chat panel exactly (same box, same padding) */
-            body.sc-horizontal #sc-chat-header {
-                right: 0 !important; width: 19vw !important;
-                box-sizing: border-box !important; padding: 0 8px !important;
-            }
-
-            /* Control cluster — chat-mode icon on top, then emote / free-watch / settings
-               in a row beneath it, pinned to the mid-left edge over the video.
-               Clear of YouTube's own controls and the chat, so everything clicks. */
-            #sc-chatmode-btn {
-                position: fixed !important;
-                left: 10px !important; top: calc(50% - 60px) !important;
-                z-index: 20050 !important;
-                width: 36px !important; height: 36px !important; border-radius: 50% !important;
-                background: rgba(0,0,0,0.6) !important;
-                border: 1px solid rgba(255,255,255,0.25) !important;
-                color: rgba(255,255,255,0.9) !important; cursor: pointer !important;
-                font-size: 15px !important; line-height: 1 !important;
-                display: flex !important; align-items: center !important; justify-content: center !important;
-                transition: opacity 0.6s ease, background 0.2s ease !important;
-                -webkit-tap-highlight-color: transparent !important;
-            }
-            #sc-chatmode-btn:hover { background: rgba(0,0,0,0.85) !important; }
-            body.sc-tv #sc-chatmode-btn { width: 52px !important; height: 52px !important; font-size: 22px !important; top: calc(50% - 70px) !important; }
-
-            /* ── NEW-MESSAGES PILL ───────────────────────────── */
-            #sc-newmsg-pill {
-                position: fixed !important; z-index: 19500 !important;
-                background: var(--np-accent, #ff5b73) !important; color: #160409 !important;
-                font-size: 13px !important; font-weight: 800 !important;
-                padding: 7px 16px !important; border-radius: 999px !important;
-                cursor: pointer !important; box-shadow: 0 6px 20px rgba(0,0,0,0.55) !important;
-                opacity: 0 !important; pointer-events: none !important;
-                transition: opacity 0.25s ease !important;
-            }
-            #sc-newmsg-pill.sc-show { opacity: 1 !important; pointer-events: auto !important; }
-            body.sc-horizontal #sc-newmsg-pill { right: calc(19vw + 16px) !important; bottom: 56px !important; }
-            body.sc-vertical   #sc-newmsg-pill { left: 50% !important; transform: translateX(-50%) !important; bottom: calc(50vh - 44px + 12px) !important; }
-            body.sc-tv #sc-newmsg-pill { font-size: 17px !important; padding: 10px 22px !important; }
-            /* Hide CyTube's native "New Messages Below" bar — our pill replaces it. */
-            #newmessages-indicator, #newmessages-indicator-bghack { display: none !important; }
-
-            /* ── MENTION TOAST ───────────────────────────────── */
-            #sc-mention-toast {
-                position: fixed !important; top: 26px !important; left: 50% !important;
-                transform: translateX(-50%) translateY(-20px) !important;
-                z-index: 21500 !important;
-                background: rgba(20,8,14,0.97) !important; color: #fff !important;
-                border: 1px solid var(--np-accent, #ff5b73) !important;
-                border-radius: 12px !important; padding: 12px 18px !important;
-                max-width: 72vw !important; box-shadow: 0 10px 36px rgba(0,0,0,0.65) !important;
-                opacity: 0 !important; pointer-events: none !important; cursor: pointer !important;
-                transition: opacity 0.35s ease, transform 0.35s ease !important;
-                font-size: 14px !important; line-height: 1.4 !important;
-            }
-            #sc-mention-toast.sc-show { opacity: 1 !important; transform: translateX(-50%) translateY(0) !important; pointer-events: auto !important; }
-            #sc-mention-toast .sc-mt-name { color: var(--np-accent, #ff5b73) !important; font-weight: 800 !important; margin-right: 6px !important; }
-            body.sc-tv #sc-mention-toast { font-size: 21px !important; padding: 16px 26px !important; top: 40px !important; }
-        `;
+      s.textContent = tv_default;
       document.head.appendChild(s);
     })();
     if (_isTv) document.body.classList.add("sc-tv");
