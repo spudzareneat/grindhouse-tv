@@ -379,6 +379,270 @@
     return result;
   }
 
+  // src/mediatime.js
+  var mediaState = {
+    currentMediaSeconds: 0,
+    currentMediaType: "",
+    currentPlaybackTime: 0
+  };
+  function parseTimeToSeconds(t) {
+    const parts = String(t).trim().split(":").map(Number);
+    if (!parts.length || parts.some(isNaN)) return 0;
+    return parts.reduce((acc, v) => acc * 60 + v, 0);
+  }
+  function getCurrentMediaSeconds() {
+    if (mediaState.currentMediaSeconds > 0) return mediaState.currentMediaSeconds;
+    const el = document.querySelector("#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time");
+    return el ? parseTimeToSeconds(el.textContent) : 0;
+  }
+  function getCurrentPlaybackSeconds() {
+    const v = document.querySelector("#videowrap video");
+    if (v && isFinite(v.currentTime) && v.currentTime > 0) return v.currentTime;
+    return mediaState.currentPlaybackTime;
+  }
+  function formatHMS(s) {
+    s = Math.max(0, Math.floor(s || 0));
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+    const pad = (n) => String(n).padStart(2, "0");
+    return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+  }
+
+  // src/cards/trivia.js
+  function _escHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function showTriviaCard() {
+    const tconst = npState.data && npState.data.imdbId;
+    if (!tconst) return;
+    let card = document.getElementById("sc-trivia-card");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "sc-trivia-card";
+      card.innerHTML = `
+            <div id="sc-trivia-panel">
+                <div id="sc-trivia-head">
+                    <span id="sc-trivia-title">Trivia</span>
+                    <button id="sc-trivia-close" type="button">✕</button>
+                </div>
+                <div id="sc-trivia-list"></div>
+            </div>`;
+      document.body.appendChild(card);
+      card.addEventListener("click", (e) => {
+        if (e.target === card) hideTriviaCard();
+      });
+      card.querySelector("#sc-trivia-close").addEventListener("click", hideTriviaCard);
+    }
+    card.querySelector("#sc-trivia-title").textContent = "Trivia" + (npState.data.cleanTitle ? " — " + npState.data.cleanTitle : "");
+    const list = card.querySelector("#sc-trivia-list");
+    list.innerHTML = '<div class="sc-trivia-item">Loading…</div>';
+    card.classList.add("sc-show");
+    fetchImdbTrivia(tconst).then((items) => {
+      if (!document.getElementById("sc-trivia-card")) return;
+      if (!items || !items.length) {
+        list.innerHTML = '<div class="sc-trivia-item">No trivia found.</div>';
+        return;
+      }
+      list.innerHTML = items.map((t) => `<div class="sc-trivia-item">${_escHtml(t)}</div>`).join("");
+      list.scrollTop = 0;
+    });
+  }
+  function hideTriviaCard() {
+    const card = document.getElementById("sc-trivia-card");
+    if (card) card.classList.remove("sc-show");
+  }
+  function toggleTriviaCard() {
+    const card = document.getElementById("sc-trivia-card");
+    if (card && card.classList.contains("sc-show")) hideTriviaCard();
+    else showTriviaCard();
+  }
+
+  // src/cards/nowplaying.js
+  var NP_PG_SHORT = {
+    "Sex & Nudity": "Sex/Nudity",
+    "Violence & Gore": "Violence",
+    "Profanity": "Profanity",
+    "Alcohol, Drugs & Smoking": "Drugs",
+    "Frightening & Intense Scenes": "Frightening"
+  };
+  var npState = {
+    data: null,
+    // latest movie data for the card
+    introDone: false
+    // startup intro card has run (see initIntroSequence)
+  };
+  var _npHideTimer = null;
+  var _npProgTimer = null;
+  var _npWatcherInit = false;
+  function _renderNpProgress() {
+    const card = document.getElementById("sc-np-card");
+    if (!card) {
+      clearInterval(_npProgTimer);
+      return;
+    }
+    const wrap = card.querySelector("#sc-np-progress");
+    const fill = card.querySelector("#sc-np-prog-fill");
+    const elapsedEl = card.querySelector("#sc-np-prog-elapsed");
+    const totalEl = card.querySelector("#sc-np-prog-total");
+    const remainEl = card.querySelector("#sc-np-prog-remain");
+    if (!wrap || !fill) return;
+    const dur = getCurrentMediaSeconds();
+    if (dur > 0) {
+      const elapsed = Math.min(getCurrentPlaybackSeconds(), dur);
+      const pct = Math.max(0, Math.min(100, elapsed / dur * 100));
+      fill.style.setProperty("width", pct + "%", "important");
+      elapsedEl.textContent = formatHMS(elapsed);
+      totalEl.textContent = formatHMS(dur);
+      remainEl.textContent = "−" + formatHMS(dur - elapsed) + " left";
+      wrap.style.display = "";
+    } else {
+      wrap.style.display = "none";
+    }
+  }
+  function _npCardEnabled() {
+    return isTv;
+  }
+  var _npScrollTimer = null;
+  var _npScrollRaf = null;
+  var _NP_SCROLL_DELAY = 3500;
+  function _autoScrollOverview() {
+    clearTimeout(_npScrollTimer);
+    cancelAnimationFrame(_npScrollRaf);
+    const card = document.getElementById("sc-np-card");
+    const ov = card && card.querySelector("#sc-np-overview");
+    if (!ov) return 0;
+    ov.scrollTop = 0;
+    const dist = ov.scrollHeight - ov.clientHeight;
+    if (dist <= 4) return 0;
+    const dur = Math.min(12e3, Math.max(2500, dist / 24 * 1e3));
+    _npScrollTimer = setTimeout(() => {
+      const start = ov.scrollTop;
+      const span = ov.scrollHeight - ov.clientHeight - start;
+      if (span <= 0) return;
+      const t0 = performance.now();
+      const step = (now) => {
+        const c = document.getElementById("sc-np-card");
+        if (!c || !c.classList.contains("sc-np-visible")) return;
+        const p = Math.min(1, (now - t0) / dur);
+        const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+        ov.scrollTop = start + span * e;
+        if (p < 1) _npScrollRaf = requestAnimationFrame(step);
+      };
+      _npScrollRaf = requestAnimationFrame(step);
+    }, _NP_SCROLL_DELAY);
+    return _NP_SCROLL_DELAY + dur;
+  }
+  function showNowPlayingCard(data, opts = {}) {
+    if (!data || !data.cleanTitle && !data.backdrop) return;
+    let card = document.getElementById("sc-np-card");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "sc-np-card";
+      card.innerHTML = `
+            <div id="sc-np-backdrop"></div>
+            <div id="sc-np-scrim"></div>
+            <div id="sc-np-content">
+                <img id="sc-np-poster" alt="" />
+                <div id="sc-np-info">
+                    <div id="sc-np-eyebrow">Now Playing</div>
+                    <div id="sc-np-title"></div>
+                    <div id="sc-np-meta"></div>
+                    <div id="sc-np-overview"></div>
+                    <div id="sc-np-chips"></div>
+                    <div id="sc-np-progress">
+                        <div id="sc-np-prog-bar"><div id="sc-np-prog-fill"></div></div>
+                        <div id="sc-np-prog-times">
+                            <span id="sc-np-prog-elapsed">0:00</span>
+                            <span id="sc-np-prog-remain"></span>
+                            <span id="sc-np-prog-total">0:00</span>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+      document.body.appendChild(card);
+      card.addEventListener("click", hideNowPlayingCard);
+    }
+    const title = data.cleanTitle || movieState.lastMovieTitle || "";
+    const year = data.cleanYear ? ` (${data.cleanYear})` : "";
+    const bd = card.querySelector("#sc-np-backdrop");
+    const poster = card.querySelector("#sc-np-poster");
+    const meta = card.querySelector("#sc-np-meta");
+    const chips = card.querySelector("#sc-np-chips");
+    bd.style.backgroundImage = data.backdrop ? `url(${data.backdrop})` : "none";
+    if (data.poster) {
+      poster.src = data.poster;
+      poster.style.display = "";
+    } else poster.style.display = "none";
+    card.querySelector("#sc-np-title").textContent = title + year;
+    card.querySelector("#sc-np-overview").textContent = data.overview || "";
+    const metaParts = [];
+    if (data.rating) metaParts.push(`⭐ ${data.rating}`);
+    if (data.runtime) metaParts.push(`${Math.floor(data.runtime / 60)}h ${data.runtime % 60}m`);
+    if (data.genres && data.genres.length) metaParts.push(data.genres.slice(0, 3).join(" · "));
+    meta.textContent = metaParts.join("     ");
+    const chipHtml = [];
+    (data.parentalGuide || []).forEach((pg) => {
+      const sev = String(pg.severity || "").toLowerCase();
+      const label = NP_PG_SHORT[pg.category] || pg.category;
+      chipHtml.push(`<span class="sc-np-chip sc-sev-${sev}">${label}: ${pg.severity}</span>`);
+    });
+    if (data.killCount !== null && data.killCount !== void 0) {
+      chipHtml.push(`<span class="sc-np-chip">💀 ${data.killCount} kills</span>`);
+    }
+    chips.innerHTML = chipHtml.join("");
+    card.classList.add("sc-np-visible");
+    _renderNpProgress();
+    clearInterval(_npProgTimer);
+    _npProgTimer = setInterval(_renderNpProgress, 500);
+    const revealMs = _autoScrollOverview();
+    clearTimeout(_npHideTimer);
+    if (opts.autoHide) {
+      const v = document.querySelector("#videowrap video");
+      const playing = v && !v.paused;
+      if (playing || !v) _npHideTimer = setTimeout(hideNowPlayingCard, Math.max(7e3, revealMs + 2500));
+    }
+  }
+  function hideNowPlayingCard() {
+    const card = document.getElementById("sc-np-card");
+    if (card) card.classList.remove("sc-np-visible");
+    clearTimeout(_npHideTimer);
+    clearInterval(_npProgTimer);
+    clearTimeout(_npScrollTimer);
+    cancelAnimationFrame(_npScrollRaf);
+  }
+  function initNowPlayingWatcher() {
+    if (_npWatcherInit) return;
+    _npWatcherInit = true;
+    const toggle = () => {
+      const card = document.getElementById("sc-np-card");
+      if (card && card.classList.contains("sc-np-visible")) hideNowPlayingCard();
+      else if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
+    };
+    document.addEventListener("keydown", (e) => {
+      const t = e.target;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
+      if (e.key === "i" || e.key === "I") toggle();
+      else if (e.key === "t" || e.key === "T") toggleTriviaCard();
+    });
+    const bindTitle = () => {
+      const h = document.getElementById("videowrap-header");
+      if (!h) return;
+      if (npState.data && npState.data.imdbId && !document.getElementById("sc-trivia-btn")) {
+        const btn = document.createElement("button");
+        btn.id = "sc-trivia-btn";
+        btn.type = "button";
+        btn.textContent = "Trivia";
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          showTriviaCard();
+        });
+        if (document.body.classList.contains("sc-video-dimmed")) btn.classList.add("sc-bar-dim");
+        h.appendChild(btn);
+      }
+    };
+    bindTitle();
+    new MutationObserver(bindTitle).observe(document.body, { childList: true, subtree: true });
+  }
+
   // src/styles/base.css
   var base_default = `
             /* ===== SHARED HIDDEN ELEMENTS ===== */
@@ -3134,31 +3398,7 @@
       title = title.replace(/\s+/g, " ").replace(/^[\s'":.,-]+|[\s'":.,-]+$/g, "").trim();
       return { title, year };
     }
-    let currentMediaSeconds = 0;
-    let currentMediaType = "";
-    let currentPlaybackTime = 0;
     let _tvSetFocus = null;
-    function parseTimeToSeconds(t) {
-      const parts = String(t).trim().split(":").map(Number);
-      if (!parts.length || parts.some(isNaN)) return 0;
-      return parts.reduce((acc, v) => acc * 60 + v, 0);
-    }
-    function getCurrentMediaSeconds() {
-      if (currentMediaSeconds > 0) return currentMediaSeconds;
-      const el = document.querySelector("#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time");
-      return el ? parseTimeToSeconds(el.textContent) : 0;
-    }
-    function getCurrentPlaybackSeconds() {
-      const v = document.querySelector("#videowrap video");
-      if (v && isFinite(v.currentTime) && v.currentTime > 0) return v.currentTime;
-      return currentPlaybackTime;
-    }
-    function formatHMS(s) {
-      s = Math.max(0, Math.floor(s || 0));
-      const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
-      const pad = (n) => String(n).padStart(2, "0");
-      return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
-    }
     function wakeVideoControls() {
       try {
         const p = window.PLAYER && window.PLAYER.player;
@@ -3296,7 +3536,7 @@
         const el = document.getElementById(id);
         if (el) el.remove();
       });
-      _npData = null;
+      npState.data = null;
       const isYt = isYouTubeMedia();
       let ytSeconds = 0;
       if (isYt) {
@@ -3328,8 +3568,8 @@
             }
           }
         }
-        _npData = movieData;
-        if (_npCardEnabled() && _introDone) showNowPlayingCard(movieData, { autoHide: true });
+        npState.data = movieData;
+        if (_npCardEnabled() && npState.introDone) showNowPlayingCard(movieData, { autoHide: true });
         if (cleanTitle && titleEl) {
           const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : "");
           let span = titleEl.querySelector(":scope > #sc-title-text") || document.getElementById("sc-title-text");
@@ -3341,7 +3581,7 @@
             span.dataset.noTvCaption = "1";
             span.addEventListener("click", (e) => {
               e.stopPropagation();
-              if (_npData) showNowPlayingCard(_npData, { autoHide: false });
+              if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
             });
             const textNode = [...titleEl.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
             if (textNode) textNode.parentNode.replaceChild(span, textNode);
@@ -3522,24 +3762,24 @@
             clearTimeout(_resyncTimer);
             setTimeout(maybeRebuildIfStale, 4e3);
           }
-          currentMediaSeconds = data && typeof data.seconds === "number" ? data.seconds : 0;
-          currentMediaType = data && data.type ? data.type : "";
+          mediaState.currentMediaSeconds = data && typeof data.seconds === "number" ? data.seconds : 0;
+          mediaState.currentMediaType = data && data.type ? data.type : "";
           const key = (data && (data.id || "")) + "|" + (data && (data.title || ""));
           if (key === _lastMediaKey) return;
           _lastMediaKey = key;
           movieState.lastMovieTitle = "";
-          _npData = null;
+          npState.data = null;
           const _staleTrivia = document.getElementById("sc-trivia-btn");
           if (_staleTrivia) _staleTrivia.remove();
           clearTimeout(_drmCheckTimer);
           hideDrmOverlay();
-          if (currentMediaType === "yt") _drmCheckTimer = setTimeout(() => checkYtDrm(0), 1500);
+          if (mediaState.currentMediaType === "yt") _drmCheckTimer = setTimeout(() => checkYtDrm(0), 1500);
           setTimeout(triggerTitleInject, 350);
         } catch (e) {
         }
       });
       socket.on("mediaUpdate", (data) => {
-        if (data && typeof data.currentTime === "number") currentPlaybackTime = data.currentTime;
+        if (data && typeof data.currentTime === "number") mediaState.currentPlaybackTime = data.currentTime;
         if (data && typeof data.paused === "boolean") _roomPaused = data.paused;
       });
       let _wasDisconnected = false;
@@ -3664,233 +3904,6 @@
       if ((tries || 0) < 10) {
         _drmCheckTimer = setTimeout(() => checkYtDrm((tries || 0) + 1), 1e3);
       }
-    }
-    const NP_PG_SHORT = {
-      "Sex & Nudity": "Sex/Nudity",
-      "Violence & Gore": "Violence",
-      "Profanity": "Profanity",
-      "Alcohol, Drugs & Smoking": "Drugs",
-      "Frightening & Intense Scenes": "Frightening"
-    };
-    let _npData = null;
-    let _introDone = false;
-    let _npHideTimer = null;
-    let _npProgTimer = null;
-    let _npWatcherInit = false;
-    function _renderNpProgress() {
-      const card = document.getElementById("sc-np-card");
-      if (!card) {
-        clearInterval(_npProgTimer);
-        return;
-      }
-      const wrap = card.querySelector("#sc-np-progress");
-      const fill = card.querySelector("#sc-np-prog-fill");
-      const elapsedEl = card.querySelector("#sc-np-prog-elapsed");
-      const totalEl = card.querySelector("#sc-np-prog-total");
-      const remainEl = card.querySelector("#sc-np-prog-remain");
-      if (!wrap || !fill) return;
-      const dur = getCurrentMediaSeconds();
-      if (dur > 0) {
-        const elapsed = Math.min(getCurrentPlaybackSeconds(), dur);
-        const pct = Math.max(0, Math.min(100, elapsed / dur * 100));
-        fill.style.setProperty("width", pct + "%", "important");
-        elapsedEl.textContent = formatHMS(elapsed);
-        totalEl.textContent = formatHMS(dur);
-        remainEl.textContent = "−" + formatHMS(dur - elapsed) + " left";
-        wrap.style.display = "";
-      } else {
-        wrap.style.display = "none";
-      }
-    }
-    function _npCardEnabled() {
-      return isTv;
-    }
-    let _npScrollTimer = null, _npScrollRaf = null;
-    const _NP_SCROLL_DELAY = 3500;
-    function _autoScrollOverview() {
-      clearTimeout(_npScrollTimer);
-      cancelAnimationFrame(_npScrollRaf);
-      const card = document.getElementById("sc-np-card");
-      const ov = card && card.querySelector("#sc-np-overview");
-      if (!ov) return 0;
-      ov.scrollTop = 0;
-      const dist = ov.scrollHeight - ov.clientHeight;
-      if (dist <= 4) return 0;
-      const dur = Math.min(12e3, Math.max(2500, dist / 24 * 1e3));
-      _npScrollTimer = setTimeout(() => {
-        const start = ov.scrollTop;
-        const span = ov.scrollHeight - ov.clientHeight - start;
-        if (span <= 0) return;
-        const t0 = performance.now();
-        const step = (now) => {
-          const c = document.getElementById("sc-np-card");
-          if (!c || !c.classList.contains("sc-np-visible")) return;
-          const p = Math.min(1, (now - t0) / dur);
-          const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-          ov.scrollTop = start + span * e;
-          if (p < 1) _npScrollRaf = requestAnimationFrame(step);
-        };
-        _npScrollRaf = requestAnimationFrame(step);
-      }, _NP_SCROLL_DELAY);
-      return _NP_SCROLL_DELAY + dur;
-    }
-    function showNowPlayingCard(data, opts = {}) {
-      if (!data || !data.cleanTitle && !data.backdrop) return;
-      let card = document.getElementById("sc-np-card");
-      if (!card) {
-        card = document.createElement("div");
-        card.id = "sc-np-card";
-        card.innerHTML = `
-                <div id="sc-np-backdrop"></div>
-                <div id="sc-np-scrim"></div>
-                <div id="sc-np-content">
-                    <img id="sc-np-poster" alt="" />
-                    <div id="sc-np-info">
-                        <div id="sc-np-eyebrow">Now Playing</div>
-                        <div id="sc-np-title"></div>
-                        <div id="sc-np-meta"></div>
-                        <div id="sc-np-overview"></div>
-                        <div id="sc-np-chips"></div>
-                        <div id="sc-np-progress">
-                            <div id="sc-np-prog-bar"><div id="sc-np-prog-fill"></div></div>
-                            <div id="sc-np-prog-times">
-                                <span id="sc-np-prog-elapsed">0:00</span>
-                                <span id="sc-np-prog-remain"></span>
-                                <span id="sc-np-prog-total">0:00</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>`;
-        document.body.appendChild(card);
-        card.addEventListener("click", hideNowPlayingCard);
-      }
-      const title = data.cleanTitle || movieState.lastMovieTitle || "";
-      const year = data.cleanYear ? ` (${data.cleanYear})` : "";
-      const bd = card.querySelector("#sc-np-backdrop");
-      const poster = card.querySelector("#sc-np-poster");
-      const meta = card.querySelector("#sc-np-meta");
-      const chips = card.querySelector("#sc-np-chips");
-      bd.style.backgroundImage = data.backdrop ? `url(${data.backdrop})` : "none";
-      if (data.poster) {
-        poster.src = data.poster;
-        poster.style.display = "";
-      } else poster.style.display = "none";
-      card.querySelector("#sc-np-title").textContent = title + year;
-      card.querySelector("#sc-np-overview").textContent = data.overview || "";
-      const metaParts = [];
-      if (data.rating) metaParts.push(`⭐ ${data.rating}`);
-      if (data.runtime) metaParts.push(`${Math.floor(data.runtime / 60)}h ${data.runtime % 60}m`);
-      if (data.genres && data.genres.length) metaParts.push(data.genres.slice(0, 3).join(" · "));
-      meta.textContent = metaParts.join("     ");
-      const chipHtml = [];
-      (data.parentalGuide || []).forEach((pg) => {
-        const sev = String(pg.severity || "").toLowerCase();
-        const label = NP_PG_SHORT[pg.category] || pg.category;
-        chipHtml.push(`<span class="sc-np-chip sc-sev-${sev}">${label}: ${pg.severity}</span>`);
-      });
-      if (data.killCount !== null && data.killCount !== void 0) {
-        chipHtml.push(`<span class="sc-np-chip">💀 ${data.killCount} kills</span>`);
-      }
-      chips.innerHTML = chipHtml.join("");
-      card.classList.add("sc-np-visible");
-      _renderNpProgress();
-      clearInterval(_npProgTimer);
-      _npProgTimer = setInterval(_renderNpProgress, 500);
-      const revealMs = _autoScrollOverview();
-      clearTimeout(_npHideTimer);
-      if (opts.autoHide) {
-        const v = document.querySelector("#videowrap video");
-        const playing = v && !v.paused;
-        if (playing || !v) _npHideTimer = setTimeout(hideNowPlayingCard, Math.max(7e3, revealMs + 2500));
-      }
-    }
-    function hideNowPlayingCard() {
-      const card = document.getElementById("sc-np-card");
-      if (card) card.classList.remove("sc-np-visible");
-      clearTimeout(_npHideTimer);
-      clearInterval(_npProgTimer);
-      clearTimeout(_npScrollTimer);
-      cancelAnimationFrame(_npScrollRaf);
-    }
-    function _escHtml(s) {
-      return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
-    function showTriviaCard() {
-      const tconst = _npData && _npData.imdbId;
-      if (!tconst) return;
-      let card = document.getElementById("sc-trivia-card");
-      if (!card) {
-        card = document.createElement("div");
-        card.id = "sc-trivia-card";
-        card.innerHTML = `
-                <div id="sc-trivia-panel">
-                    <div id="sc-trivia-head">
-                        <span id="sc-trivia-title">Trivia</span>
-                        <button id="sc-trivia-close" type="button">✕</button>
-                    </div>
-                    <div id="sc-trivia-list"></div>
-                </div>`;
-        document.body.appendChild(card);
-        card.addEventListener("click", (e) => {
-          if (e.target === card) hideTriviaCard();
-        });
-        card.querySelector("#sc-trivia-close").addEventListener("click", hideTriviaCard);
-      }
-      card.querySelector("#sc-trivia-title").textContent = "Trivia" + (_npData.cleanTitle ? " — " + _npData.cleanTitle : "");
-      const list = card.querySelector("#sc-trivia-list");
-      list.innerHTML = '<div class="sc-trivia-item">Loading…</div>';
-      card.classList.add("sc-show");
-      fetchImdbTrivia(tconst).then((items) => {
-        if (!document.getElementById("sc-trivia-card")) return;
-        if (!items || !items.length) {
-          list.innerHTML = '<div class="sc-trivia-item">No trivia found.</div>';
-          return;
-        }
-        list.innerHTML = items.map((t) => `<div class="sc-trivia-item">${_escHtml(t)}</div>`).join("");
-        list.scrollTop = 0;
-      });
-    }
-    function hideTriviaCard() {
-      const card = document.getElementById("sc-trivia-card");
-      if (card) card.classList.remove("sc-show");
-    }
-    function toggleTriviaCard() {
-      const card = document.getElementById("sc-trivia-card");
-      if (card && card.classList.contains("sc-show")) hideTriviaCard();
-      else showTriviaCard();
-    }
-    function initNowPlayingWatcher() {
-      if (_npWatcherInit) return;
-      _npWatcherInit = true;
-      const toggle = () => {
-        const card = document.getElementById("sc-np-card");
-        if (card && card.classList.contains("sc-np-visible")) hideNowPlayingCard();
-        else if (_npData) showNowPlayingCard(_npData, { autoHide: false });
-      };
-      document.addEventListener("keydown", (e) => {
-        const t = e.target;
-        if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
-        if (e.key === "i" || e.key === "I") toggle();
-        else if (e.key === "t" || e.key === "T") toggleTriviaCard();
-      });
-      const bindTitle = () => {
-        const h = document.getElementById("videowrap-header");
-        if (!h) return;
-        if (_npData && _npData.imdbId && !document.getElementById("sc-trivia-btn")) {
-          const btn = document.createElement("button");
-          btn.id = "sc-trivia-btn";
-          btn.type = "button";
-          btn.textContent = "Trivia";
-          btn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            showTriviaCard();
-          });
-          if (document.body.classList.contains("sc-video-dimmed")) btn.classList.add("sc-bar-dim");
-          h.appendChild(btn);
-        }
-      };
-      bindTitle();
-      new MutationObserver(bindTitle).observe(document.body, { childList: true, subtree: true });
     }
     function applyUserColors() {
       document.querySelectorAll('#messagebuffer [class*="chat-msg-"]').forEach((el) => {
@@ -5615,9 +5628,9 @@
         if (done) return;
         done = true;
         clearInterval(iv);
-        _introDone = true;
+        npState.introDone = true;
         _scStatus("Ready");
-        const data = _npData || (movieState.lastMovieTitle && movieState.lastMovieTitle.length > 1 ? { cleanTitle: movieState.lastMovieTitle, backdrop: null } : null);
+        const data = npState.data || (movieState.lastMovieTitle && movieState.lastMovieTitle.length > 1 ? { cleanTitle: movieState.lastMovieTitle, backdrop: null } : null);
         if (isTv && data) {
           showNowPlayingCard(data, { autoHide: false });
           setTimeout(() => {
@@ -5638,12 +5651,12 @@
         }
         if (!playingSince) playingSince = Date.now();
         if (!isTv) return reveal();
-        if (_npData && _npData.backdrop && !preloadStarted) {
+        if (npState.data && npState.data.backdrop && !preloadStarted) {
           preloadStarted = true;
           _scStatus("Loading movie info…");
           const img = new Image();
           img.onload = img.onerror = reveal;
-          img.src = _npData.backdrop;
+          img.src = npState.data.backdrop;
         }
         if (Date.now() - playingSince >= 3500) reveal();
       }, 300);
