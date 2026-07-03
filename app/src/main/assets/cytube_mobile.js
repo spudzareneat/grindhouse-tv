@@ -45,6 +45,41 @@
     return `hsl(${hue.toFixed(1)}, 72%, 70%)`;
   }
 
+  // src/native.js
+  var _scHttpCbs = {};
+  window.__scHttpResolve = function(id, res) {
+    const cb = _scHttpCbs[id];
+    if (cb) {
+      delete _scHttpCbs[id];
+      cb(res);
+    }
+  };
+  function nativeHttpGet(url, headers = {}) {
+    return new Promise((resolve, reject) => {
+      if (!(window.CytubeNative && typeof CytubeNative.httpGet === "function")) {
+        reject(new Error("native http unavailable"));
+        return;
+      }
+      const id = "h" + Math.random().toString(36).slice(2);
+      _scHttpCbs[id] = (res) => {
+        if (res && res.error) reject(new Error(res.error));
+        else resolve(res);
+      };
+      try {
+        CytubeNative.httpGet(id, url, JSON.stringify(headers));
+      } catch (e) {
+        delete _scHttpCbs[id];
+        reject(e);
+      }
+      setTimeout(() => {
+        if (_scHttpCbs[id]) {
+          delete _scHttpCbs[id];
+          reject(new Error("timeout"));
+        }
+      }, 1e4);
+    });
+  }
+
   // src/styles/base.css
   var base_default = `
             /* ===== SHARED HIDDEN ELEMENTS ===== */
@@ -2915,39 +2950,6 @@
         console.warn("[CyTube SC] Kill count DB failed to load:", e);
       }
       return killCountDb;
-    }
-    const _scHttpCbs = {};
-    window.__scHttpResolve = function(id, res) {
-      const cb = _scHttpCbs[id];
-      if (cb) {
-        delete _scHttpCbs[id];
-        cb(res);
-      }
-    };
-    function nativeHttpGet(url, headers = {}) {
-      return new Promise((resolve, reject) => {
-        if (!(window.CytubeNative && typeof CytubeNative.httpGet === "function")) {
-          reject(new Error("native http unavailable"));
-          return;
-        }
-        const id = "h" + Math.random().toString(36).slice(2);
-        _scHttpCbs[id] = (res) => {
-          if (res && res.error) reject(new Error(res.error));
-          else resolve(res);
-        };
-        try {
-          CytubeNative.httpGet(id, url, JSON.stringify(headers));
-        } catch (e) {
-          delete _scHttpCbs[id];
-          reject(e);
-        }
-        setTimeout(() => {
-          if (_scHttpCbs[id]) {
-            delete _scHttpCbs[id];
-            reject(new Error("timeout"));
-          }
-        }, 1e4);
-      });
     }
     const LS_UPDATE_CACHE = "sc_update_cache";
     const GH_RELEASES_API = "https://api.github.com/repos/spudzareneat/grindhouse-tv/releases/latest";
