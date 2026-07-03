@@ -8,6 +8,7 @@ import {
     getKey, setKey, hasKey, spellCheckEnabled, movieLinksEnabled, couchModeEnabled, watchAlongEnabled, castFallbackMuted,
 } from './store.js';
 import { fetchImdbParentalGuide, fetchImdbTrivia } from './metadata/imdb.js';
+import { isTv } from './tvdetect.js';
 import { LINK_DEFS, movieState, getKillCountDb, validateTmdbKey, lookupMovie } from './metadata/tmdb.js';
 import baseCss from './styles/base.css';
 import overlaysCss from './styles/overlays.css';
@@ -1507,7 +1508,7 @@ import tvCss from './styles/tv.css';
 
     // Currently TV-only so the tuned mobile layout is untouched.
     // Flip to `true` to enable the card on phones too.
-    function _npCardEnabled() { return _isTv; }
+    function _npCardEnabled() { return isTv; }
 
     // Long synopses overflow the fixed overview window. Start at the top (so the
     // opening lines read first), then after a beat glide smoothly to the bottom so
@@ -2073,7 +2074,7 @@ import tvCss from './styles/tv.css';
 
     // Cast button — a mobile-only sender control that sits in the fly-out cluster under
     // the settings gear and opens the system Cast device chooser. Never shown on TV (a TV
-    // is the cast target, not a sender). Queries the bridge directly rather than the _isTv
+    // is the cast target, not a sender). Queries the bridge directly rather than the isTv
     // const, which may not be initialised yet when _scBoot() runs.
     function addCastButton() {
         let onTv = false;
@@ -2609,7 +2610,7 @@ import tvCss from './styles/tv.css';
     }
 
     // Self-contained D-pad navigation for the /login page. None of the channel UI
-    // (or its CSS, or the module-level _isTv) runs here, so this re-detects TV and
+    // (or its CSS, or the module-level isTv) runs here, so this re-detects TV and
     // injects just the focus-ring style it needs. The native layer forwards remote
     // keys to window.__scTvKey(dir) exactly as it does for the channel.
     function initLoginTvNav() {
@@ -2778,17 +2779,8 @@ import tvCss from './styles/tv.css';
         document.head.appendChild(pc1); document.head.appendChild(pc2); document.head.appendChild(css);
     })();
 
-    // Detect TV. Prefer the authoritative native leanback flag (via the bridge);
-    // fall back to a screen/touch heuristic only if the bridge isn't present
-    // (e.g. running as a plain userscript in a browser).
-    const _isTv = (function () {
-        try {
-            if (window.CytubeNative && typeof CytubeNative.isTv === 'function') return !!CytubeNative.isTv();
-        } catch (e) {}
-        return window.screen.width >= 1280 && !('ontouchstart' in window) && navigator.maxTouchPoints === 0;
-    })();
     try {
-        console.log('[Grindhouse] TV mode:', _isTv,
+        console.log('[Grindhouse] TV mode:', isTv,
             '| native bridge:', !!(window.CytubeNative && CytubeNative.isTv),
             '| screen:', screen.width + 'x' + screen.height,
             '| touchPoints:', navigator.maxTouchPoints,
@@ -2803,7 +2795,7 @@ import tvCss from './styles/tv.css';
     })();
 
     // Mark TV so CSS can scale up
-    if (_isTv) document.body.classList.add('sc-tv');
+    if (isTv) document.body.classList.add('sc-tv');
 
     // Suppress the on-screen keyboard (inputmode="none") per the setting.
     // Re-applies as chat/emote inputs are (re)created.
@@ -2840,7 +2832,7 @@ import tvCss from './styles/tv.css';
     // edge-to-edge breaks adjustResize so vh never updates — we drive the layout
     // with explicit pixel values from visualViewport instead.
     (function() {
-        if (!window.visualViewport || _isTv) return;
+        if (!window.visualViewport || isTv) return;
 
         let kbTimer = null;
         const INPUT_H = 56; // chat input bar height
@@ -2904,7 +2896,7 @@ import tvCss from './styles/tv.css';
 
     // ── Ambient glow: sample the video's colour and bleed it to the screen edges
     function initAmbientGlow() {
-        if (_isTv) return;
+        if (isTv) return;
         const el = document.createElement('div');
         el.id = 'sc-ambient';
         document.body.appendChild(el);
@@ -2941,7 +2933,7 @@ import tvCss from './styles/tv.css';
 
     // ── Auto-hiding chrome on TV: fade controls after a few idle seconds
     function initChromeAutohide() {
-        if (!_isTv) return;
+        if (!isTv) return;
         let timer = null;
         const hide = () => document.body.classList.add('sc-chrome-hidden');
         const show = () => {
@@ -2962,7 +2954,7 @@ import tvCss from './styles/tv.css';
     // Chat-Only is a phone/tablet mode (a keyboard-free chat client) — not offered on TV,
     // where the device is the playback target. Excluding it here drops it from the cycle and
     // makes initChatModes fall back if 'chatonly' was ever persisted on a TV.
-    const _CHAT_MODES = _isTv ? ['sidebar', 'overlay', 'hidden'] : ['sidebar', 'overlay', 'hidden', 'chatonly'];
+    const _CHAT_MODES = isTv ? ['sidebar', 'overlay', 'hidden'] : ['sidebar', 'overlay', 'hidden', 'chatonly'];
     const _CHAT_MODE_ICONS = { sidebar: '▐', overlay: '▣', hidden: '⊠', chatonly: '☰' };
     const _CHAT_MODE_LABELS = { sidebar: 'Sidebar', overlay: 'Overlay', hidden: 'Hidden', chatonly: 'Chat Only' };
 
@@ -3227,7 +3219,7 @@ import tvCss from './styles/tv.css';
        highlight between interactive elements and activate / close on OK / Back.
     ========================================================== */
     (function initTvNav() {
-        if (!_isTv) return;
+        if (!isTv) return;
         let focusEl = null;
 
         const isVisible = (el) => {
@@ -3619,7 +3611,7 @@ import tvCss from './styles/tv.css';
             const data = _npData || (movieState.lastMovieTitle && movieState.lastMovieTitle.length > 1
                 ? { cleanTitle: movieState.lastMovieTitle, backdrop: null } : null);
 
-            if (_isTv && data) {
+            if (isTv && data) {
                 showNowPlayingCard(data, { autoHide: false }); // renders behind the opaque splash
                 setTimeout(() => {
                     _scSignalReady();                          // fade splash → reveals the finished card
@@ -3639,7 +3631,7 @@ import tvCss from './styles/tv.css';
             if (!playing) { playingSince = 0; return; }
             if (!playingSince) playingSince = Date.now();
 
-            if (!_isTv) return reveal();                       // phones: reveal as soon as it's playing
+            if (!isTv) return reveal();                       // phones: reveal as soon as it's playing
 
             // TV: preload the backdrop so the card is fully painted before we reveal it
             if (_npData && _npData.backdrop && !preloadStarted) {

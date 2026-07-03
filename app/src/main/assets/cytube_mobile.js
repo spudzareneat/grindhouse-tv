@@ -222,6 +222,15 @@
     }
   }
 
+  // src/tvdetect.js
+  var isTv = function() {
+    try {
+      if (window.CytubeNative && typeof CytubeNative.isTv === "function") return !!CytubeNative.isTv();
+    } catch (e) {
+    }
+    return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
+  }();
+
   // src/metadata/tmdb.js
   var LINK_DEFS = [
     { key: "imdb", label: "IMDb", color: "#f5c518", fg: "#000", char: "i" },
@@ -3694,7 +3703,7 @@
       }
     }
     function _npCardEnabled() {
-      return _isTv;
+      return isTv;
     }
     let _npScrollTimer = null, _npScrollRaf = null;
     const _NP_SCROLL_DELAY = 3500;
@@ -4613,13 +4622,13 @@
       return;
     }
     function initLoginTvNav() {
-      let isTv = false;
+      let isTv2 = false;
       try {
-        if (window.CytubeNative && CytubeNative.isTv) isTv = !!CytubeNative.isTv();
+        if (window.CytubeNative && CytubeNative.isTv) isTv2 = !!CytubeNative.isTv();
       } catch (e) {
       }
-      if (!isTv) isTv = window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
-      if (!isTv) return;
+      if (!isTv2) isTv2 = window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
+      if (!isTv2) return;
       const style = document.createElement("style");
       style.textContent = ".sc-tv-focus{outline:3px solid #e0701a !important;outline-offset:2px !important;box-shadow:0 0 0 5px rgba(224,112,26,0.32) !important;border-radius:5px !important;}";
       (document.head || document.documentElement).appendChild(style);
@@ -4798,17 +4807,10 @@
       document.head.appendChild(pc2);
       document.head.appendChild(css);
     })();
-    const _isTv = function() {
-      try {
-        if (window.CytubeNative && typeof CytubeNative.isTv === "function") return !!CytubeNative.isTv();
-      } catch (e) {
-      }
-      return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
-    }();
     try {
       console.log(
         "[Grindhouse] TV mode:",
-        _isTv,
+        isTv,
         "| native bridge:",
         !!(window.CytubeNative && CytubeNative.isTv),
         "| screen:",
@@ -4825,7 +4827,7 @@
       s.textContent = tv_default;
       document.head.appendChild(s);
     })();
-    if (_isTv) document.body.classList.add("sc-tv");
+    if (isTv) document.body.classList.add("sc-tv");
     (function() {
       applySoftKeyboard();
       const obs = new MutationObserver(applySoftKeyboard);
@@ -4852,7 +4854,7 @@
       });
     }
     (function() {
-      if (!window.visualViewport || _isTv) return;
+      if (!window.visualViewport || isTv) return;
       let kbTimer = null;
       const INPUT_H = 56;
       const onOpen = (vv) => {
@@ -4902,7 +4904,7 @@
     });
     _scSendObs.observe(document.body, { childList: true, subtree: true });
     function initAmbientGlow() {
-      if (_isTv) return;
+      if (isTv) return;
       const el = document.createElement("div");
       el.id = "sc-ambient";
       document.body.appendChild(el);
@@ -4943,7 +4945,7 @@
       setInterval(sample, 2500);
     }
     function initChromeAutohide() {
-      if (!_isTv) return;
+      if (!isTv) return;
       let timer = null;
       const hide = () => document.body.classList.add("sc-chrome-hidden");
       const show = () => {
@@ -4956,7 +4958,7 @@
       _chromeWake = show;
       timer = setTimeout(hide, 4e3);
     }
-    const _CHAT_MODES = _isTv ? ["sidebar", "overlay", "hidden"] : ["sidebar", "overlay", "hidden", "chatonly"];
+    const _CHAT_MODES = isTv ? ["sidebar", "overlay", "hidden"] : ["sidebar", "overlay", "hidden", "chatonly"];
     const _CHAT_MODE_ICONS = { sidebar: "▐", overlay: "▣", hidden: "⊠", chatonly: "☰" };
     const _CHAT_MODE_LABELS = { sidebar: "Sidebar", overlay: "Overlay", hidden: "Hidden", chatonly: "Chat Only" };
     let _chatOnlyTimer = null, _inChatOnly = false;
@@ -5231,7 +5233,7 @@
     if (document.readyState === "complete") initCinematicChat();
     else window.addEventListener("load", initCinematicChat);
     (function initTvNav() {
-      if (!_isTv) return;
+      if (!isTv) return;
       let focusEl = null;
       const isVisible = (el) => {
         if (!el || !el.getBoundingClientRect) return false;
@@ -5616,7 +5618,7 @@
         _introDone = true;
         _scStatus("Ready");
         const data = _npData || (movieState.lastMovieTitle && movieState.lastMovieTitle.length > 1 ? { cleanTitle: movieState.lastMovieTitle, backdrop: null } : null);
-        if (_isTv && data) {
+        if (isTv && data) {
           showNowPlayingCard(data, { autoHide: false });
           setTimeout(() => {
             _scSignalReady();
@@ -5635,7 +5637,7 @@
           return;
         }
         if (!playingSince) playingSince = Date.now();
-        if (!_isTv) return reveal();
+        if (!isTv) return reveal();
         if (_npData && _npData.backdrop && !preloadStarted) {
           preloadStarted = true;
           _scStatus("Loading movie info…");
