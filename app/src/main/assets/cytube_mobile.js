@@ -5655,7 +5655,10 @@
         // Treat it like an overlay so the remote can step through its items and Back closes it.
         const openVjsMenu = () => {
             const m = document.querySelector('#videowrap .vjs-menu.vjs-lock-showing');
-            return (m && isVisible(m)) ? m : null;
+            // The .vjs-menu container computes to zero height (its item list overflows
+            // upward out of it), so isVisible(container) is always false — an open menu
+            // is one with at least one visible item instead.
+            return (m && [...m.querySelectorAll('.vjs-menu-item')].some(isVisible)) ? m : null;
         };
 
         // Interactive controls in the player's control bar (captions, quality, volume,
@@ -5667,9 +5670,17 @@
                 const bar = document.querySelector('#videowrap .vjs-control-bar');
                 if (!bar || !isVisible(bar)) return [];
                 const allowSeek = isDesynced();
-                return [...bar.querySelectorAll('button.vjs-control, .vjs-progress-control')].filter(c => {
+                // `button.vjs-control` only matches plain buttons (mute, fullscreen). Menu
+                // buttons (CC / quality / audio) are a wrapper <div class="vjs-control
+                // vjs-menu-button"> around an inner <button> that video.js explicitly
+                // strips `vjs-control` from — the inner button (which holds the click
+                // handler) keeps `vjs-menu-button`, so target it via that class.
+                return [...bar.querySelectorAll('button.vjs-control, button.vjs-menu-button, .vjs-progress-control')].filter(c => {
                     if (!isVisible(c)) return false;
                     if (c.classList.contains('vjs-progress-control') && !allowSeek) return false;
+                    // Skip dead stops: video.js renders some controls visible but inert
+                    // (e.g. PiP on a TV is vjs-disabled) — focusing them goes nowhere.
+                    if (c.disabled || c.classList.contains('vjs-disabled')) return false;
                     return true;
                 });
             } catch (e) { return []; }
@@ -5781,6 +5792,24 @@
                 return;
             }
 
+            // Control bar: Left/Right steps strictly along the bar's own controls in
+            // x-order. Spatial scoring is unreliable here — chrome buttons can sit a
+            // hair inside the pressed direction's half-plane and steal the move, which
+            // is how Right from mute ended up on the settings gear instead of CC.
+            // Falls through at either end so the remote can still leave the bar. Skipped
+            // while a captions/quality menu is open so the first press enters the menu
+            // (candidates() scopes to its items) instead of sliding along the bar.
+            if (focusEl && (dir === 'left' || dir === 'right') && !openVjsMenu()) {
+                const barEls = controlBarTargets();
+                if (barEls.includes(focusEl)) {
+                    const sorted = barEls.slice().sort((a, b) =>
+                        a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+                    const i = sorted.indexOf(focusEl);
+                    const ni = dir === 'right' ? i + 1 : i - 1;
+                    if (ni >= 0 && ni < sorted.length) { setFocus(sorted[ni]); return; }
+                }
+            }
+
             // Range slider: left/right adjusts the value instead of moving focus
             if (focusEl && focusEl.type === 'range' && (dir === 'left' || dir === 'right')) {
                 const step = parseFloat(focusEl.step) || 1;
@@ -5824,7 +5853,12 @@
 
             const cur = focusEl.getBoundingClientRect();
             const cx = cur.left + cur.width / 2, cy = cur.top + cur.height / 2;
-            let best = null, bestScore = Infinity;
+            // Two tiers: a candidate within 45° of the pressed direction (primary >= perp)
+            // always beats one off to the side, however close the latter scores. Without
+            // this, Right from the mute button picks the settings gear (4px rightward but
+            // a whole cluster-height up) over the CC button dead ahead across the bar.
+            // Off-cone candidates remain as fallback so loose diagonal hops still work.
+            let best = null, bestScore = Infinity, cone = null, coneScore = Infinity;
             for (const el of list) {
                 if (el === focusEl) continue;
                 const r = el.getBoundingClientRect();
@@ -5835,8 +5869,10 @@
                 else if (dir === 'up')    { if (dy > -4) continue; primary = -dy; perp = Math.abs(dx); }
                 else                      { if (dy < 4)  continue; primary = dy;  perp = Math.abs(dx); }
                 const score = primary + perp * 2;
+                if (primary >= perp && score < coneScore) { coneScore = score; cone = el; }
                 if (score < bestScore) { bestScore = score; best = el; }
             }
+            if (cone) best = cone;
             if (best) { setFocus(best); return; }
             // No neighbour that way — scroll a scrollable region if we're in one
             if (dir === 'up' || dir === 'down') {
@@ -5857,9 +5893,11 @@
                 return;
             }
             // Picking a captions/quality item closes the menu — hand the ring back to its
-            // control-bar button so we aren't stranded on the now-hidden item.
-            const ownerBtn = focusEl.classList && focusEl.classList.contains('vjs-menu-item') &&
+            // control-bar button so we aren't stranded on the now-hidden item. closest()
+            // finds the wrapper <div>; the focus candidate is its inner <button>.
+            const ownerWrap = focusEl.classList && focusEl.classList.contains('vjs-menu-item') &&
                 focusEl.closest('.vjs-menu-button');
+            const ownerBtn = ownerWrap && ownerWrap.querySelector('button.vjs-menu-button');
             focusEl.click();
             if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) { clearFocus(); setFocus(ownerBtn); }
         }
@@ -5868,7 +5906,10 @@
             // Innermost first: an open captions/quality menu closes back to its button.
             const menu = openVjsMenu();
             if (menu) {
-                const btn = menu.closest('.vjs-menu-button');
+                // closest() lands on the wrapper <div>; the click handler (and our focus
+                // candidate) is the inner <button>, so resolve down to it.
+                const wrap = menu.closest('.vjs-menu-button');
+                const btn = wrap && wrap.querySelector('button.vjs-menu-button');
                 // Click the button to toggle the menu shut — keeps video.js's own
                 // pressed/lock state in sync (a raw class strip would desync it and the
                 // button would need two presses to reopen). Fall back to a class strip.
