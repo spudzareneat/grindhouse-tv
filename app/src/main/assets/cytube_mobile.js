@@ -4804,7 +4804,7 @@
             body.sc-tv #sc-mention-toast { font-size: 21px !important; padding: 16px 26px !important; top: 40px !important; }
 `;
 
-  // src/legacy.js
+  // src/settings.js
   (function() {
     "use strict";
     function applyWatchAlong() {

@@ -5,7 +5,7 @@ import { hideTriviaCard } from './cards/trivia.js';
 import { hideNowPlayingCard } from './cards/nowplaying.js';
 
 // Let other UI (settings modal) place the remote's focus ring on an element.
-// legacy.js reads tvNavState.setFocus instead of a bare reassignable binding.
+// settings.js reads tvNavState.setFocus instead of a bare reassignable binding.
 export const tvNavState = { setFocus: null };
 
 // Self-contained D-pad navigation for the /login page. None of the channel UI

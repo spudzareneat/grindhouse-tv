@@ -1,1 +1,1 @@
-import './legacy.js';
+import './settings.js';
