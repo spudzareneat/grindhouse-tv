@@ -179,6 +179,197 @@
   var watchAlongEnabled = () => getKey(LS_WATCHALONG) === "on";
   var castFallbackMuted = () => getKey(LS_CAST_MUTE) === "on";
 
+  // src/metadata/imdb.js
+  var IMDB_GQL = "https://caching.graphql.imdb.com/";
+  var IMDB_HEADERS = {
+    "Accept": "application/graphql+json, application/json",
+    "Content-Type": "application/json",
+    "x-imdb-client-name": "imdb-web-next-localized",
+    "x-imdb-user-language": "en-US",
+    "x-imdb-user-country": "US"
+  };
+  async function imdbQuery(operationName, query, variables) {
+    const url = IMDB_GQL + "?operationName=" + encodeURIComponent(operationName) + "&query=" + encodeURIComponent(query) + "&variables=" + encodeURIComponent(JSON.stringify(variables));
+    const res = await nativeHttpGet(url, IMDB_HEADERS);
+    if (!res || res.status !== 200) throw new Error("IMDb GQL HTTP " + (res && res.status));
+    return JSON.parse(res.body);
+  }
+  async function fetchImdbParentalGuide(tconst) {
+    if (!tconst) return null;
+    const q = "query GHGuide($id: ID!){ title(id:$id){ parentsGuide{ categories{ category{ text } severity{ text } } } } }";
+    try {
+      const data = await imdbQuery("GHGuide", q, { id: tconst });
+      const cats = data && data.data && data.data.title && data.data.title.parentsGuide ? data.data.title.parentsGuide.categories : null;
+      if (!cats) return null;
+      return cats.map((c) => ({ category: c.category && c.category.text, severity: c.severity && c.severity.text })).filter((c) => c.category && c.severity);
+    } catch (e) {
+      return null;
+    }
+  }
+  var _triviaCache = {};
+  async function fetchImdbTrivia(tconst) {
+    if (!tconst) return null;
+    if (_triviaCache[tconst]) return _triviaCache[tconst];
+    const q = "query GHTrivia($id: ID!){ title(id:$id){ trivia(first: 30){ edges{ node{ text{ plainText } } } } } }";
+    try {
+      const data = await imdbQuery("GHTrivia", q, { id: tconst });
+      const edges = data && data.data && data.data.title && data.data.title.trivia ? data.data.title.trivia.edges : [];
+      const items = (edges || []).map((e) => e && e.node && e.node.text && e.node.text.plainText).filter(Boolean);
+      _triviaCache[tconst] = items;
+      return items;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // src/metadata/tmdb.js
+  var LINK_DEFS = [
+    { key: "imdb", label: "IMDb", color: "#f5c518", fg: "#000", char: "i" },
+    { key: "letterboxd", label: "Letterboxd", color: "#2c4a2e", fg: "#00e054", char: "L" },
+    { key: "wiki", label: "Wikipedia", color: "#444", fg: "#eee", char: "W" }
+  ];
+  var movieState = {
+    lastMovieTitle: "",
+    movieLinkCache: {}
+    // cache by raw title to avoid repeat lookups
+  };
+  var killCountDb = null;
+  async function getKillCountDb() {
+    if (killCountDb !== null) return killCountDb;
+    killCountDb = {};
+    try {
+      const text = await new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: "GET",
+          url: "https://raw.githubusercontent.com/lklynet/Kill-Count/main/killcounts.jsonl",
+          onload: (r) => r.status === 200 ? resolve(r.responseText) : reject(new Error(`HTTP ${r.status}`)),
+          onerror: reject
+        });
+      });
+      let loaded = 0;
+      for (const line of text.split("\n")) {
+        const s = line.trim();
+        if (!s) continue;
+        try {
+          const entry = JSON.parse(s);
+          if (entry.tmdb_id != null) {
+            killCountDb[String(entry.tmdb_id)] = entry.count;
+            loaded++;
+          }
+        } catch (e) {
+        }
+      }
+    } catch (e) {
+      console.warn("[CyTube SC] Kill count DB failed to load:", e);
+    }
+    return killCountDb;
+  }
+  async function validateTmdbKey(key) {
+    if (!key) return "invalid";
+    const url = `https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(key)}`;
+    try {
+      const res = await fetch(url);
+      if (res.status === 200) return "valid";
+      if (res.status === 401) return "invalid";
+      return "error";
+    } catch (e) {
+      try {
+        const r = await nativeHttpGet(url);
+        if (r.status === 200) return "valid";
+        if (r.status === 401) return "invalid";
+        return "error";
+      } catch (e2) {
+        return "error";
+      }
+    }
+  }
+  async function lookupMovie(title, year) {
+    var _a, _b;
+    const cacheKey = title + (year || "");
+    if (movieState.movieLinkCache[cacheKey] !== void 0) return movieState.movieLinkCache[cacheKey];
+    let tmdbResult = null;
+    let wikiUrl = null;
+    const tmdbPromise = hasKey(LS_TMDB) ? (async () => {
+      var _a2, _b2;
+      try {
+        const params = new URLSearchParams({ api_key: getKey(LS_TMDB), query: title, language: "en-US" });
+        if (year) params.set("year", year);
+        const res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!((_a2 = data.results) == null ? void 0 : _a2.length)) return;
+        let best = data.results[0];
+        if (year) {
+          const withYear = data.results.find((r) => {
+            var _a3;
+            return (_a3 = r.release_date) == null ? void 0 : _a3.startsWith(year);
+          });
+          if (withYear) best = withYear;
+        }
+        const detailRes = await fetch(
+          `https://api.themoviedb.org/3/movie/${best.id}?api_key=${getKey(LS_TMDB)}&append_to_response=external_ids`
+        );
+        if (!detailRes.ok) return;
+        const detail = await detailRes.json();
+        tmdbResult = {
+          tmdbId: best.id,
+          imdbId: detail.imdb_id || ((_b2 = detail.external_ids) == null ? void 0 : _b2.imdb_id) || null,
+          title: detail.title,
+          year: detail.release_date ? detail.release_date.slice(0, 4) : year,
+          poster: detail.poster_path ? `https://image.tmdb.org/t/p/w500${detail.poster_path}` : null,
+          backdrop: detail.backdrop_path ? `https://image.tmdb.org/t/p/w1280${detail.backdrop_path}` : null,
+          rating: detail.vote_average ? Math.round(detail.vote_average * 10) / 10 : null,
+          runtime: detail.runtime || null,
+          overview: detail.overview || "",
+          genres: (detail.genres || []).map((g) => g.name)
+        };
+      } catch (e) {
+      }
+    })() : Promise.resolve();
+    const wikiPromise = (async () => {
+      var _a2, _b2;
+      try {
+        const searchTitle = title + (year ? " " + year : "") + " film";
+        const res = await fetch(
+          `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(searchTitle)}&srlimit=1&format=json&origin=*`
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const hit = (_b2 = (_a2 = data == null ? void 0 : data.query) == null ? void 0 : _a2.search) == null ? void 0 : _b2[0];
+        if (hit) wikiUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(hit.title.replace(/ /g, "_"))}`;
+      } catch (e) {
+      }
+    })();
+    await Promise.all([tmdbPromise, wikiPromise]);
+    let killCount = null;
+    if (tmdbResult == null ? void 0 : tmdbResult.tmdbId) {
+      const db = await getKillCountDb();
+      const count = db[String(tmdbResult.tmdbId)];
+      if (count !== void 0 && count !== null) killCount = count;
+    }
+    const parentalGuide = await fetchImdbParentalGuide(tmdbResult == null ? void 0 : tmdbResult.imdbId);
+    const result = {
+      links: {
+        imdb: (tmdbResult == null ? void 0 : tmdbResult.imdbId) ? `https://www.imdb.com/title/${tmdbResult.imdbId}/` : null,
+        letterboxd: (tmdbResult == null ? void 0 : tmdbResult.tmdbId) ? `https://letterboxd.com/tmdb/${tmdbResult.tmdbId}` : null,
+        wiki: wikiUrl
+      },
+      killCount,
+      parentalGuide,
+      imdbId: (tmdbResult == null ? void 0 : tmdbResult.imdbId) || null,
+      cleanTitle: (tmdbResult == null ? void 0 : tmdbResult.title) || null,
+      cleanYear: (tmdbResult == null ? void 0 : tmdbResult.year) || null,
+      poster: (tmdbResult == null ? void 0 : tmdbResult.poster) || null,
+      backdrop: (tmdbResult == null ? void 0 : tmdbResult.backdrop) || null,
+      rating: (_a = tmdbResult == null ? void 0 : tmdbResult.rating) != null ? _a : null,
+      runtime: (_b = tmdbResult == null ? void 0 : tmdbResult.runtime) != null ? _b : null,
+      overview: (tmdbResult == null ? void 0 : tmdbResult.overview) || "",
+      genres: (tmdbResult == null ? void 0 : tmdbResult.genres) || []
+    };
+    movieState.movieLinkCache[cacheKey] = result;
+    return result;
+  }
+
   // src/styles/base.css
   var base_default = `
             /* ===== SHARED HIDDEN ELEMENTS ===== */
@@ -2996,44 +3187,6 @@
         el.classList.remove("vjs-user-active");
       }
     }
-    const LINK_DEFS = [
-      { key: "imdb", label: "IMDb", color: "#f5c518", fg: "#000", char: "i" },
-      { key: "letterboxd", label: "Letterboxd", color: "#2c4a2e", fg: "#00e054", char: "L" },
-      { key: "wiki", label: "Wikipedia", color: "#444", fg: "#eee", char: "W" }
-    ];
-    let lastMovieTitle = "";
-    let movieLinkCache = {};
-    let killCountDb = null;
-    async function getKillCountDb() {
-      if (killCountDb !== null) return killCountDb;
-      killCountDb = {};
-      try {
-        const text = await new Promise((resolve, reject) => {
-          GM_xmlhttpRequest({
-            method: "GET",
-            url: "https://raw.githubusercontent.com/lklynet/Kill-Count/main/killcounts.jsonl",
-            onload: (r) => r.status === 200 ? resolve(r.responseText) : reject(new Error(`HTTP ${r.status}`)),
-            onerror: reject
-          });
-        });
-        let loaded = 0;
-        for (const line of text.split("\n")) {
-          const s = line.trim();
-          if (!s) continue;
-          try {
-            const entry = JSON.parse(s);
-            if (entry.tmdb_id != null) {
-              killCountDb[String(entry.tmdb_id)] = entry.count;
-              loaded++;
-            }
-          } catch (e) {
-          }
-        }
-      } catch (e) {
-        console.warn("[CyTube SC] Kill count DB failed to load:", e);
-      }
-      return killCountDb;
-    }
     function initGoogleDrive() {
       const ITAG_QMAP = { 37: 1080, 46: 1080, 22: 720, 45: 720, 59: 480, 44: 480, 35: 480, 18: 360, 43: 360, 34: 360 };
       const ITAG_CMAP = {
@@ -3115,152 +3268,6 @@
       }
       console.log("[CyTube SC] Google Drive metadata helper ready");
     }
-    async function validateTmdbKey(key) {
-      if (!key) return "invalid";
-      const url = `https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(key)}`;
-      try {
-        const res = await fetch(url);
-        if (res.status === 200) return "valid";
-        if (res.status === 401) return "invalid";
-        return "error";
-      } catch (e) {
-        try {
-          const r = await nativeHttpGet(url);
-          if (r.status === 200) return "valid";
-          if (r.status === 401) return "invalid";
-          return "error";
-        } catch (e2) {
-          return "error";
-        }
-      }
-    }
-    const IMDB_GQL = "https://caching.graphql.imdb.com/";
-    const IMDB_HEADERS = {
-      "Accept": "application/graphql+json, application/json",
-      "Content-Type": "application/json",
-      "x-imdb-client-name": "imdb-web-next-localized",
-      "x-imdb-user-language": "en-US",
-      "x-imdb-user-country": "US"
-    };
-    async function imdbQuery(operationName, query, variables) {
-      const url = IMDB_GQL + "?operationName=" + encodeURIComponent(operationName) + "&query=" + encodeURIComponent(query) + "&variables=" + encodeURIComponent(JSON.stringify(variables));
-      const res = await nativeHttpGet(url, IMDB_HEADERS);
-      if (!res || res.status !== 200) throw new Error("IMDb GQL HTTP " + (res && res.status));
-      return JSON.parse(res.body);
-    }
-    async function fetchImdbParentalGuide(tconst) {
-      if (!tconst) return null;
-      const q = "query GHGuide($id: ID!){ title(id:$id){ parentsGuide{ categories{ category{ text } severity{ text } } } } }";
-      try {
-        const data = await imdbQuery("GHGuide", q, { id: tconst });
-        const cats = data && data.data && data.data.title && data.data.title.parentsGuide ? data.data.title.parentsGuide.categories : null;
-        if (!cats) return null;
-        return cats.map((c) => ({ category: c.category && c.category.text, severity: c.severity && c.severity.text })).filter((c) => c.category && c.severity);
-      } catch (e) {
-        return null;
-      }
-    }
-    const _triviaCache = {};
-    async function fetchImdbTrivia(tconst) {
-      if (!tconst) return null;
-      if (_triviaCache[tconst]) return _triviaCache[tconst];
-      const q = "query GHTrivia($id: ID!){ title(id:$id){ trivia(first: 30){ edges{ node{ text{ plainText } } } } } }";
-      try {
-        const data = await imdbQuery("GHTrivia", q, { id: tconst });
-        const edges = data && data.data && data.data.title && data.data.title.trivia ? data.data.title.trivia.edges : [];
-        const items = (edges || []).map((e) => e && e.node && e.node.text && e.node.text.plainText).filter(Boolean);
-        _triviaCache[tconst] = items;
-        return items;
-      } catch (e) {
-        return null;
-      }
-    }
-    async function lookupMovie(title, year) {
-      var _a, _b;
-      const cacheKey = title + (year || "");
-      if (movieLinkCache[cacheKey] !== void 0) return movieLinkCache[cacheKey];
-      let tmdbResult = null;
-      let wikiUrl = null;
-      const tmdbPromise = hasKey(LS_TMDB) ? (async () => {
-        var _a2, _b2;
-        try {
-          const params = new URLSearchParams({ api_key: getKey(LS_TMDB), query: title, language: "en-US" });
-          if (year) params.set("year", year);
-          const res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
-          if (!res.ok) return;
-          const data = await res.json();
-          if (!((_a2 = data.results) == null ? void 0 : _a2.length)) return;
-          let best = data.results[0];
-          if (year) {
-            const withYear = data.results.find((r) => {
-              var _a3;
-              return (_a3 = r.release_date) == null ? void 0 : _a3.startsWith(year);
-            });
-            if (withYear) best = withYear;
-          }
-          const detailRes = await fetch(
-            `https://api.themoviedb.org/3/movie/${best.id}?api_key=${getKey(LS_TMDB)}&append_to_response=external_ids`
-          );
-          if (!detailRes.ok) return;
-          const detail = await detailRes.json();
-          tmdbResult = {
-            tmdbId: best.id,
-            imdbId: detail.imdb_id || ((_b2 = detail.external_ids) == null ? void 0 : _b2.imdb_id) || null,
-            title: detail.title,
-            year: detail.release_date ? detail.release_date.slice(0, 4) : year,
-            poster: detail.poster_path ? `https://image.tmdb.org/t/p/w500${detail.poster_path}` : null,
-            backdrop: detail.backdrop_path ? `https://image.tmdb.org/t/p/w1280${detail.backdrop_path}` : null,
-            rating: detail.vote_average ? Math.round(detail.vote_average * 10) / 10 : null,
-            runtime: detail.runtime || null,
-            overview: detail.overview || "",
-            genres: (detail.genres || []).map((g) => g.name)
-          };
-        } catch (e) {
-        }
-      })() : Promise.resolve();
-      const wikiPromise = (async () => {
-        var _a2, _b2;
-        try {
-          const searchTitle = title + (year ? " " + year : "") + " film";
-          const res = await fetch(
-            `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(searchTitle)}&srlimit=1&format=json&origin=*`
-          );
-          if (!res.ok) return;
-          const data = await res.json();
-          const hit = (_b2 = (_a2 = data == null ? void 0 : data.query) == null ? void 0 : _a2.search) == null ? void 0 : _b2[0];
-          if (hit) wikiUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(hit.title.replace(/ /g, "_"))}`;
-        } catch (e) {
-        }
-      })();
-      await Promise.all([tmdbPromise, wikiPromise]);
-      let killCount = null;
-      if (tmdbResult == null ? void 0 : tmdbResult.tmdbId) {
-        const db = await getKillCountDb();
-        const count = db[String(tmdbResult.tmdbId)];
-        if (count !== void 0 && count !== null) killCount = count;
-      }
-      const parentalGuide = await fetchImdbParentalGuide(tmdbResult == null ? void 0 : tmdbResult.imdbId);
-      const result = {
-        links: {
-          imdb: (tmdbResult == null ? void 0 : tmdbResult.imdbId) ? `https://www.imdb.com/title/${tmdbResult.imdbId}/` : null,
-          letterboxd: (tmdbResult == null ? void 0 : tmdbResult.tmdbId) ? `https://letterboxd.com/tmdb/${tmdbResult.tmdbId}` : null,
-          wiki: wikiUrl
-        },
-        killCount,
-        parentalGuide,
-        imdbId: (tmdbResult == null ? void 0 : tmdbResult.imdbId) || null,
-        cleanTitle: (tmdbResult == null ? void 0 : tmdbResult.title) || null,
-        cleanYear: (tmdbResult == null ? void 0 : tmdbResult.year) || null,
-        poster: (tmdbResult == null ? void 0 : tmdbResult.poster) || null,
-        backdrop: (tmdbResult == null ? void 0 : tmdbResult.backdrop) || null,
-        rating: (_a = tmdbResult == null ? void 0 : tmdbResult.rating) != null ? _a : null,
-        runtime: (_b = tmdbResult == null ? void 0 : tmdbResult.runtime) != null ? _b : null,
-        overview: (tmdbResult == null ? void 0 : tmdbResult.overview) || "",
-        genres: (tmdbResult == null ? void 0 : tmdbResult.genres) || []
-      };
-      movieLinkCache[cacheKey] = result;
-      return result;
-    }
     function isYouTubeMedia() {
       try {
         const p = window.PLAYER || window.player;
@@ -3274,8 +3281,8 @@
     }
     function injectMovieLinks(titleEl) {
       const rawTitle = titleEl.textContent.trim().replace(/^currently\s+playing[:\s]*/i, "").replace(/^now\s+playing[:\s]*/i, "").trim();
-      if (!rawTitle || rawTitle === lastMovieTitle || rawTitle.length < 2) return;
-      lastMovieTitle = rawTitle;
+      if (!rawTitle || rawTitle === movieState.lastMovieTitle || rawTitle.length < 2) return;
+      movieState.lastMovieTitle = rawTitle;
       ["sc-movie-links", "sc-movie-stats", "sc-trivia-btn"].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.remove();
@@ -3511,7 +3518,7 @@
           const key = (data && (data.id || "")) + "|" + (data && (data.title || ""));
           if (key === _lastMediaKey) return;
           _lastMediaKey = key;
-          lastMovieTitle = "";
+          movieState.lastMovieTitle = "";
           _npData = null;
           const _staleTrivia = document.getElementById("sc-trivia-btn");
           if (_staleTrivia) _staleTrivia.remove();
@@ -3748,7 +3755,7 @@
         document.body.appendChild(card);
         card.addEventListener("click", hideNowPlayingCard);
       }
-      const title = data.cleanTitle || lastMovieTitle || "";
+      const title = data.cleanTitle || movieState.lastMovieTitle || "";
       const year = data.cleanYear ? ` (${data.cleanYear})` : "";
       const bd = card.querySelector("#sc-np-backdrop");
       const poster = card.querySelector("#sc-np-poster");
@@ -4058,8 +4065,8 @@
         setKey(LS_TMDB, enabled && input ? input.value.trim() : "");
         const sc = document.getElementById("sc-input-spellcheck");
         if (sc) setKey(LS_SPELLCHECK, sc.checked ? "on" : "off");
-        movieLinkCache = {};
-        lastMovieTitle = "";
+        movieState.movieLinkCache = {};
+        movieState.lastMovieTitle = "";
         triggerTitleInject();
       };
       document.getElementById("sc-settings-save").addEventListener("click", () => {
@@ -4140,7 +4147,7 @@
           const row = document.getElementById("sc-movie-links");
           if (row) row.remove();
         } else {
-          lastMovieTitle = "";
+          movieState.lastMovieTitle = "";
         }
       });
       (function wireUpdateSection() {
@@ -5608,7 +5615,7 @@
         clearInterval(iv);
         _introDone = true;
         _scStatus("Ready");
-        const data = _npData || (lastMovieTitle && lastMovieTitle.length > 1 ? { cleanTitle: lastMovieTitle, backdrop: null } : null);
+        const data = _npData || (movieState.lastMovieTitle && movieState.lastMovieTitle.length > 1 ? { cleanTitle: movieState.lastMovieTitle, backdrop: null } : null);
         if (_isTv && data) {
           showNowPlayingCard(data, { autoHide: false });
           setTimeout(() => {

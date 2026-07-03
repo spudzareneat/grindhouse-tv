@@ -7,6 +7,8 @@ import {
     LS_TMDB, LS_ONBOARDED, LS_SPELLCHECK, LS_CHAT_FONT, LS_MOVIE_LINKS, LS_COUCH, LS_WATCHALONG, LS_CAST_MUTE,
     getKey, setKey, hasKey, spellCheckEnabled, movieLinksEnabled, couchModeEnabled, watchAlongEnabled, castFallbackMuted,
 } from './store.js';
+import { fetchImdbParentalGuide, fetchImdbTrivia } from './metadata/imdb.js';
+import { LINK_DEFS, movieState, getKillCountDb, validateTmdbKey, lookupMovie } from './metadata/tmdb.js';
 import baseCss from './styles/base.css';
 import overlaysCss from './styles/overlays.css';
 import tvCss from './styles/tv.css';
@@ -892,51 +894,6 @@ import tvCss from './styles/tv.css';
        MOVIE LINKS — TMDB lookup → confirmed IMDb + Letterboxd + Wikipedia
     ========================================================== */
 
-    const LINK_DEFS = [
-        { key: 'imdb',       label: 'IMDb',       color: '#f5c518', fg: '#000', char: 'i' },
-        { key: 'letterboxd', label: 'Letterboxd', color: '#2c4a2e', fg: '#00e054', char: 'L' },
-        { key: 'wiki',       label: 'Wikipedia',  color: '#444',    fg: '#eee', char: 'W' },
-    ];
-
-    let lastMovieTitle = '';
-    let movieLinkCache = {}; // cache by raw title to avoid repeat lookups
-
-    // ── Kill-Count JSONL (fetched once, keyed by tmdbId) ───────────────────────
-    let killCountDb = null; // null = not loaded yet, {} = loaded (may be empty)
-
-    async function getKillCountDb() {
-        if (killCountDb !== null) return killCountDb;
-        killCountDb = {};
-        try {
-            // Use GM_xmlhttpRequest to bypass any CORS issues with raw.githubusercontent.com
-            const text = await new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
-                    method: 'GET',
-                    url: 'https://raw.githubusercontent.com/lklynet/Kill-Count/main/killcounts.jsonl',
-                    onload: r => r.status === 200 ? resolve(r.responseText) : reject(new Error(`HTTP ${r.status}`)),
-                    onerror: reject,
-                });
-            });
-            let loaded = 0;
-            for (const line of text.split('\n')) {
-                const s = line.trim();
-                if (!s) continue;
-                try {
-                    const entry = JSON.parse(s);
-                    // Field name confirmed from repo: tmdb_id and count
-                    if (entry.tmdb_id != null) {
-                        killCountDb[String(entry.tmdb_id)] = entry.count;
-                        loaded++;
-                    }
-                } catch (e) {}
-            }
-        } catch (e) {
-            console.warn('[CyTube SC] Kill count DB failed to load:', e);
-        }
-        return killCountDb;
-    }
-
-
     /* ==========================================================
        NATIVE HTTP (CORS-free) — used for API-key validation and
        any API that doesn't send CORS headers. Falls back gracefully
@@ -1050,175 +1007,12 @@ import tvCss from './styles/tv.css';
         console.log('[CyTube SC] Google Drive metadata helper ready');
     }
 
-    // Returns 'valid' | 'invalid' | 'error'
-    async function validateTmdbKey(key) {
-        if (!key) return 'invalid';
-        const url = `https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(key)}`;
-        try {
-            // TMDB is CORS-friendly, so a plain fetch works; native is the fallback
-            const res = await fetch(url);
-            if (res.status === 200) return 'valid';
-            if (res.status === 401) return 'invalid';
-            return 'error';
-        } catch (e) {
-            try {
-                const r = await nativeHttpGet(url);
-                if (r.status === 200) return 'valid';
-                if (r.status === 401) return 'invalid';
-                return 'error';
-            } catch (e2) { return 'error'; }
-        }
-    }
-
     /* ==========================================================
        IMDb GraphQL (public endpoint, via native HTTP to dodge CORS)
        The website's own endpoint accepts arbitrary queries, so we send our
        OWN query (no persisted-hash maintenance). Works over GET; reuses the
        native bridge. Data is "non-commercial use only" per IMDb — fine here.
     ========================================================== */
-    const IMDB_GQL = 'https://caching.graphql.imdb.com/';
-    const IMDB_HEADERS = {
-        'Accept': 'application/graphql+json, application/json',
-        'Content-Type': 'application/json',
-        'x-imdb-client-name': 'imdb-web-next-localized',
-        'x-imdb-user-language': 'en-US',
-        'x-imdb-user-country': 'US',
-    };
-
-    async function imdbQuery(operationName, query, variables) {
-        const url = IMDB_GQL +
-            '?operationName=' + encodeURIComponent(operationName) +
-            '&query='         + encodeURIComponent(query) +
-            '&variables='     + encodeURIComponent(JSON.stringify(variables));
-        const res = await nativeHttpGet(url, IMDB_HEADERS);
-        if (!res || res.status !== 200) throw new Error('IMDb GQL HTTP ' + (res && res.status));
-        return JSON.parse(res.body);
-    }
-
-    // Returns [{category, severity}] (severity: None/Mild/Moderate/Severe) or null.
-    async function fetchImdbParentalGuide(tconst) {
-        if (!tconst) return null;
-        const q = 'query GHGuide($id: ID!){ title(id:$id){ parentsGuide{ categories{ category{ text } severity{ text } } } } }';
-        try {
-            const data = await imdbQuery('GHGuide', q, { id: tconst });
-            const cats = data && data.data && data.data.title && data.data.title.parentsGuide
-                ? data.data.title.parentsGuide.categories : null;
-            if (!cats) return null;
-            return cats
-                .map(c => ({ category: c.category && c.category.text, severity: c.severity && c.severity.text }))
-                .filter(c => c.category && c.severity);
-        } catch (e) { return null; }
-    }
-
-    // Trivia — lazy-fetched + cached per tconst (the lists can be hundreds long)
-    const _triviaCache = {};
-    async function fetchImdbTrivia(tconst) {
-        if (!tconst) return null;
-        if (_triviaCache[tconst]) return _triviaCache[tconst];
-        const q = 'query GHTrivia($id: ID!){ title(id:$id){ trivia(first: 30){ edges{ node{ text{ plainText } } } } } }';
-        try {
-            const data = await imdbQuery('GHTrivia', q, { id: tconst });
-            const edges = data && data.data && data.data.title && data.data.title.trivia
-                ? data.data.title.trivia.edges : [];
-            const items = (edges || []).map(e => e && e.node && e.node.text && e.node.text.plainText).filter(Boolean);
-            _triviaCache[tconst] = items;
-            return items;
-        } catch (e) { return null; }
-    }
-
-    async function lookupMovie(title, year) {
-        const cacheKey = title + (year || '');
-        if (movieLinkCache[cacheKey] !== undefined) return movieLinkCache[cacheKey];
-
-        // ── TMDB + Wikipedia in parallel ─────────────────────────────────────────
-        let tmdbResult = null;
-        let wikiUrl    = null;
-
-        const tmdbPromise = hasKey(LS_TMDB) ? (async () => {
-            try {
-                const params = new URLSearchParams({ api_key: getKey(LS_TMDB), query: title, language: 'en-US' });
-                if (year) params.set('year', year);
-                const res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
-                if (!res.ok) return;
-                const data = await res.json();
-                if (!data.results?.length) return;
-                let best = data.results[0];
-                if (year) {
-                    const withYear = data.results.find(r => r.release_date?.startsWith(year));
-                    if (withYear) best = withYear;
-                }
-                const detailRes = await fetch(
-                    `https://api.themoviedb.org/3/movie/${best.id}?api_key=${getKey(LS_TMDB)}&append_to_response=external_ids`
-                );
-                if (!detailRes.ok) return;
-                const detail = await detailRes.json();
-                tmdbResult = {
-                    tmdbId: best.id,
-                    imdbId: detail.imdb_id || detail.external_ids?.imdb_id || null,
-                    title:  detail.title,
-                    year:   detail.release_date ? detail.release_date.slice(0, 4) : year,
-                    poster:   detail.poster_path   ? `https://image.tmdb.org/t/p/w500${detail.poster_path}`    : null,
-                    backdrop: detail.backdrop_path ? `https://image.tmdb.org/t/p/w1280${detail.backdrop_path}` : null,
-                    rating:   detail.vote_average  ? Math.round(detail.vote_average * 10) / 10 : null,
-                    runtime:  detail.runtime || null,
-                    overview: detail.overview || '',
-                    genres:   (detail.genres || []).map(g => g.name),
-                };
-            } catch (e) {}
-        })() : Promise.resolve();
-
-        // Wikipedia can start immediately with the raw title; we'll use tmdbResult.title if available
-        // but since it runs in parallel we use the raw title — good enough for wiki search
-        const wikiPromise = (async () => {
-            try {
-                const searchTitle = title + (year ? ' ' + year : '') + ' film';
-                const res = await fetch(
-                    `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${
-                        encodeURIComponent(searchTitle)
-                    }&srlimit=1&format=json&origin=*`
-                );
-                if (!res.ok) return;
-                const data = await res.json();
-                const hit = data?.query?.search?.[0];
-                if (hit) wikiUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(hit.title.replace(/ /g, '_'))}`;
-            } catch (e) {}
-        })();
-
-        await Promise.all([tmdbPromise, wikiPromise]);
-
-        // ── Kill count (from cached JSONL) ───────────────────────────────────────
-        let killCount = null;
-        if (tmdbResult?.tmdbId) {
-            const db = await getKillCountDb();
-            const count = db[String(tmdbResult.tmdbId)];
-            if (count !== undefined && count !== null) killCount = count;
-        }
-
-        // ── IMDb Parent Guide (severity by category) ─────────────────────────────
-        const parentalGuide = await fetchImdbParentalGuide(tmdbResult?.imdbId);
-
-        const result = {
-            links: {
-                imdb:       tmdbResult?.imdbId  ? `https://www.imdb.com/title/${tmdbResult.imdbId}/` : null,
-                letterboxd: tmdbResult?.tmdbId  ? `https://letterboxd.com/tmdb/${tmdbResult.tmdbId}` : null,
-                wiki:       wikiUrl,
-            },
-            killCount,
-            parentalGuide,
-            imdbId:     tmdbResult?.imdbId  || null,
-            cleanTitle: tmdbResult?.title  || null,
-            cleanYear:  tmdbResult?.year   || null,
-            poster:     tmdbResult?.poster   || null,
-            backdrop:   tmdbResult?.backdrop || null,
-            rating:     tmdbResult?.rating   ?? null,
-            runtime:    tmdbResult?.runtime  ?? null,
-            overview:   tmdbResult?.overview || '',
-            genres:     tmdbResult?.genres   || [],
-        };
-
-        movieLinkCache[cacheKey] = result;
-        return result;
-    }
 
     function isYouTubeMedia() {
         // CyTube exposes current media on the global PLAYER or window.player object.
@@ -1239,8 +1033,8 @@ import tvCss from './styles/tv.css';
             .replace(/^currently\s+playing[:\s]*/i, '')
             .replace(/^now\s+playing[:\s]*/i, '').trim();
 
-        if (!rawTitle || rawTitle === lastMovieTitle || rawTitle.length < 2) return;
-        lastMovieTitle = rawTitle;
+        if (!rawTitle || rawTitle === movieState.lastMovieTitle || rawTitle.length < 2) return;
+        movieState.lastMovieTitle = rawTitle;
 
         // Clean up any previous links/stats/trivia button
         ['sc-movie-links', 'sc-movie-stats', 'sc-trivia-btn'].forEach(id => {
@@ -1497,7 +1291,7 @@ import tvCss from './styles/tv.css';
                 const key = (data && (data.id || '')) + '|' + (data && (data.title || ''));
                 if (key === _lastMediaKey) return;
                 _lastMediaKey = key;
-                lastMovieTitle = '';                 // force a fresh lookup
+                movieState.lastMovieTitle = '';                 // force a fresh lookup
                 // Forget the previous film's metadata up front so the title observer
                 // can't rebuild a stale Trivia button over the next video (e.g. a short
                 // bumper with no trivia). It's recreated only once the new lookup lands
@@ -1782,7 +1576,7 @@ import tvCss from './styles/tv.css';
             card.addEventListener('click', hideNowPlayingCard);
         }
 
-        const title  = data.cleanTitle || lastMovieTitle || '';
+        const title  = data.cleanTitle || movieState.lastMovieTitle || '';
         const year   = data.cleanYear ? ` (${data.cleanYear})` : '';
         const bd      = card.querySelector('#sc-np-backdrop');
         const poster  = card.querySelector('#sc-np-poster');
@@ -2130,8 +1924,8 @@ import tvCss from './styles/tv.css';
             setKey(LS_TMDB, (enabled && input) ? input.value.trim() : '');
             const sc = document.getElementById('sc-input-spellcheck');
             if (sc) setKey(LS_SPELLCHECK, sc.checked ? 'on' : 'off');
-            movieLinkCache = {};   // flush so the re-lookup hits the network
-            lastMovieTitle = '';   // allow injectMovieLinks to re-run for the current title
+            movieState.movieLinkCache = {};   // flush so the re-lookup hits the network
+            movieState.lastMovieTitle = '';   // allow injectMovieLinks to re-run for the current title
             triggerTitleInject();  // immediately re-fetch with the new key
         };
 
@@ -2218,7 +2012,7 @@ import tvCss from './styles/tv.css';
                 const row = document.getElementById('sc-movie-links');
                 if (row) row.remove();
             } else {
-                lastMovieTitle = ''; // force a re-inject so links appear now
+                movieState.lastMovieTitle = ''; // force a re-inject so links appear now
             }
         });
 
@@ -3822,8 +3616,8 @@ import tvCss from './styles/tv.css';
             _introDone = true;
             _scStatus('Ready');
 
-            const data = _npData || (lastMovieTitle && lastMovieTitle.length > 1
-                ? { cleanTitle: lastMovieTitle, backdrop: null } : null);
+            const data = _npData || (movieState.lastMovieTitle && movieState.lastMovieTitle.length > 1
+                ? { cleanTitle: movieState.lastMovieTitle, backdrop: null } : null);
 
             if (_isTv && data) {
                 showNowPlayingCard(data, { autoHide: false }); // renders behind the opaque splash
