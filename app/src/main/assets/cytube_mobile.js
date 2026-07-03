@@ -903,6 +903,266 @@
     }, 1500);
   }
 
+  // src/player/drive.js
+  function initGoogleDrive() {
+    const ITAG_QMAP = { 37: 1080, 46: 1080, 22: 720, 45: 720, 59: 480, 44: 480, 35: 480, 18: 360, 43: 360, 34: 360 };
+    const ITAG_CMAP = {
+      43: "video/webm",
+      44: "video/webm",
+      45: "video/webm",
+      46: "video/webm",
+      18: "video/mp4",
+      22: "video/mp4",
+      37: "video/mp4",
+      59: "video/mp4",
+      35: "video/flv",
+      34: "video/flv"
+    };
+    let _gdProxyBase = "";
+    try {
+      if (window.CytubeNative && typeof CytubeNative.gdProxyBase === "function") {
+        _gdProxyBase = CytubeNative.gdProxyBase();
+      }
+    } catch (e) {
+    }
+    function viaProxy(link) {
+      return _gdProxyBase ? _gdProxyBase + encodeURIComponent(link) : link;
+    }
+    function mapLinks(links) {
+      const videos = { 1080: [], 720: [], 480: [], 360: [] };
+      Object.keys(links).forEach(function(itag) {
+        itag = parseInt(itag, 10);
+        if (!ITAG_QMAP.hasOwnProperty(itag)) return;
+        videos[ITAG_QMAP[itag]].push({ itag, contentType: ITAG_CMAP[itag], link: viaProxy(links[itag]) });
+      });
+      return videos;
+    }
+    function getVideoInfo(id, cb) {
+      const url = "https://docs.google.com/get_video_info?authuser=&docid=" + id + "&sle=true&hl=en";
+      nativeHttpGet(url, { "Accept": "*/*", "User-Agent": navigator.userAgent }).then(function(res) {
+        try {
+          if (!res || res.status !== 200) {
+            return cb("Google Drive request failed: HTTP " + (res ? res.status : "?"));
+          }
+          const text = res.body || "";
+          if (/accounts\.google\.com\/ServiceLogin/.test(text)) {
+            return cb("Google Docs request failed: This video requires you be logged into a Google account. Open your Gmail in another tab and then refresh video.");
+          }
+          const data = {};
+          text.split("&").forEach(function(kv) {
+            const pair = kv.split("=");
+            data[decodeURIComponent(pair[0])] = decodeURIComponent(pair[1] || "");
+          });
+          if (data.status === "fail") {
+            return cb("Google Drive request failed: " + unescape(data.reason || "").replace(/\+/g, " "));
+          }
+          if (!data.fmt_stream_map) {
+            return cb("Google has removed the video streams associated with this item.  It can no longer be played.");
+          }
+          data.links = {};
+          data.fmt_stream_map.split(",").forEach(function(item) {
+            const pair = item.split("|");
+            data.links[pair[0]] = pair[1];
+          });
+          data.videoMap = mapLinks(data.links);
+          cb(null, data);
+        } catch (e) {
+          cb("Google Drive parse error: " + (e && e.message ? e.message : e));
+        }
+      }).catch(function(e) {
+        cb("Google Drive request failed: " + (e && e.message ? e.message : "network error"));
+      });
+    }
+    window.__gdRealMeta = getVideoInfo;
+    window.getGoogleDriveMetadata = getVideoInfo;
+    window.hasDriveUserscript = true;
+    window.driveUserscriptVersion = "1.7";
+    if (Array.isArray(window.__gdQueue) && window.__gdQueue.length) {
+      const queued = window.__gdQueue.splice(0);
+      queued.forEach(function(p) {
+        getVideoInfo(p[0], p[1]);
+      });
+    }
+    console.log("[CyTube SC] Google Drive metadata helper ready");
+  }
+
+  // src/player/drm.js
+  var drmState = { checkTimer: null };
+  function openExternalUrl(url) {
+    try {
+      if (window.CytubeNative && typeof CytubeNative.openExternal === "function") {
+        CytubeNative.openExternal(url);
+      } else {
+        window.open(url, "_blank");
+      }
+    } catch (e) {
+    }
+  }
+  function hideDrmOverlay() {
+    const o = document.getElementById("sc-drm-overlay");
+    if (o) o.remove();
+  }
+  function showDrmOverlay(videoId, title) {
+    hideDrmOverlay();
+    const wrap = document.getElementById("videowrap") || document.body;
+    if (getComputedStyle(wrap).position === "static") wrap.style.position = "relative";
+    const url = "https://cytu.be/r/420Grindhouse";
+    const safeTitle = (title || "This title").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]);
+    const o = document.createElement("div");
+    o.id = "sc-drm-overlay";
+    o.innerHTML = '<div id="sc-drm-box"><div id="sc-drm-icon">🔒</div><div id="sc-drm-title">' + safeTitle + ' can’t play in the app</div><div id="sc-drm-msg">It’s a DRM-protected <b>YouTube Movies</b> title and the in-app player can’t decrypt it. Open <b>Grindhouse</b> in your browser — it plays there, with the room and chat still in sync.</div><div id="sc-drm-actions"><button id="sc-drm-open" class="sc-drm-btn">Open Grindhouse in Browser</button></div></div>';
+    wrap.appendChild(o);
+    const btn = document.getElementById("sc-drm-open");
+    if (btn) btn.addEventListener("click", () => openExternalUrl(url));
+  }
+  function checkYtDrm(tries) {
+    const p = window.PLAYER;
+    if (!p || p.mediaType !== "yt") {
+      hideDrmOverlay();
+      return;
+    }
+    let vd = null;
+    try {
+      vd = p.yt && p.yt.getVideoData ? p.yt.getVideoData() : null;
+    } catch (e) {
+    }
+    if (vd && vd.errorCode) {
+      showDrmOverlay(vd.video_id, vd.title);
+      return;
+    }
+    if ((tries || 0) < 10) {
+      drmState.checkTimer = setTimeout(() => checkYtDrm((tries || 0) + 1), 1e3);
+    }
+  }
+
+  // src/player/resync.js
+  function initMediaWatcher() {
+    if (typeof socket === "undefined" || !socket || typeof socket.on !== "function") {
+      setTimeout(initMediaWatcher, 600);
+      return;
+    }
+    let _lastMediaKey = "";
+    let _lastChangeMediaData = null;
+    let _roomPaused = false;
+    let _resyncArmed = false;
+    let _resyncTimer = null;
+    const renderedDuration = () => {
+      try {
+        const p = window.PLAYER;
+        if (p && p.yt && typeof p.yt.getDuration === "function") {
+          const d = p.yt.getDuration();
+          if (d > 0) return d;
+        }
+      } catch (e) {
+      }
+      try {
+        const v = document.querySelector("#ytapiplayer video, video");
+        if (v && v.duration > 0 && isFinite(v.duration)) return v.duration;
+      } catch (e) {
+      }
+      return null;
+    };
+    const playheadProbe = () => {
+      try {
+        const p = window.PLAYER;
+        if (p && p.yt && typeof p.yt.getCurrentTime === "function") {
+          const t = p.yt.getCurrentTime();
+          if (typeof t === "number") return t;
+        }
+      } catch (e) {
+      }
+      try {
+        const v = document.querySelector("#ytapiplayer video, video");
+        if (v && typeof v.currentTime === "number") return v.currentTime;
+      } catch (e) {
+      }
+      return null;
+    };
+    const rebuildPlayer = (d) => {
+      try {
+        if (typeof loadMediaPlayer === "function" && d) loadMediaPlayer(d);
+      } catch (e) {
+      }
+    };
+    const maybeRebuildIfStale = () => {
+      try {
+        const d = _lastChangeMediaData;
+        if (!d || _roomPaused) return;
+        const expected = typeof d.seconds === "number" && d.seconds > 0 ? d.seconds : null;
+        const rendered = renderedDuration();
+        if (expected != null && rendered != null && Math.abs(rendered - expected) > 4) {
+          rebuildPlayer(d);
+          return;
+        }
+        const t1 = playheadProbe();
+        if (t1 == null) return;
+        setTimeout(() => {
+          if (_roomPaused) return;
+          const t2 = playheadProbe();
+          if (t2 != null && Math.abs(t2 - t1) < 0.25) rebuildPlayer(d);
+        }, 2e3);
+      } catch (e) {
+      }
+    };
+    const armStaleCheck = () => {
+      if (typeof loadMediaPlayer !== "function") {
+        location.reload();
+        return;
+      }
+      _resyncArmed = true;
+      clearTimeout(_resyncTimer);
+      _resyncTimer = setTimeout(() => {
+        if (_resyncArmed) {
+          _resyncArmed = false;
+          maybeRebuildIfStale();
+        }
+      }, 1e4);
+    };
+    window.__scStaleResync = armStaleCheck;
+    socket.on("changeMedia", (data) => {
+      try {
+        _lastChangeMediaData = data;
+        if (data && typeof data.paused === "boolean") _roomPaused = data.paused;
+        if (_resyncArmed) {
+          _resyncArmed = false;
+          clearTimeout(_resyncTimer);
+          setTimeout(maybeRebuildIfStale, 4e3);
+        }
+        mediaState.currentMediaSeconds = data && typeof data.seconds === "number" ? data.seconds : 0;
+        mediaState.currentMediaType = data && data.type ? data.type : "";
+        const key = (data && (data.id || "")) + "|" + (data && (data.title || ""));
+        if (key === _lastMediaKey) return;
+        _lastMediaKey = key;
+        movieState.lastMovieTitle = "";
+        npState.data = null;
+        const _staleTrivia = document.getElementById("sc-trivia-btn");
+        if (_staleTrivia) _staleTrivia.remove();
+        clearTimeout(drmState.checkTimer);
+        hideDrmOverlay();
+        if (mediaState.currentMediaType === "yt") drmState.checkTimer = setTimeout(() => checkYtDrm(0), 1500);
+        setTimeout(triggerTitleInject, 350);
+      } catch (e) {
+      }
+    });
+    socket.on("mediaUpdate", (data) => {
+      if (data && typeof data.currentTime === "number") mediaState.currentPlaybackTime = data.currentTime;
+      if (data && typeof data.paused === "boolean") _roomPaused = data.paused;
+    });
+    let _wasDisconnected = false;
+    socket.on("disconnect", () => {
+      _wasDisconnected = true;
+    });
+    socket.on("connect", () => {
+      if (_wasDisconnected) {
+        _wasDisconnected = false;
+        armStaleCheck();
+      }
+    });
+    setTimeout(() => {
+      if (window.PLAYER && window.PLAYER.mediaType === "yt") checkYtDrm(0);
+    }, 2500);
+  }
+
   // src/styles/base.css
   var base_default = `
             /* ===== SHARED HIDDEN ELEMENTS ===== */
@@ -3591,213 +3851,6 @@
         el.classList.remove("vjs-user-active");
       }
     }
-    function initGoogleDrive() {
-      const ITAG_QMAP = { 37: 1080, 46: 1080, 22: 720, 45: 720, 59: 480, 44: 480, 35: 480, 18: 360, 43: 360, 34: 360 };
-      const ITAG_CMAP = {
-        43: "video/webm",
-        44: "video/webm",
-        45: "video/webm",
-        46: "video/webm",
-        18: "video/mp4",
-        22: "video/mp4",
-        37: "video/mp4",
-        59: "video/mp4",
-        35: "video/flv",
-        34: "video/flv"
-      };
-      let _gdProxyBase = "";
-      try {
-        if (window.CytubeNative && typeof CytubeNative.gdProxyBase === "function") {
-          _gdProxyBase = CytubeNative.gdProxyBase();
-        }
-      } catch (e) {
-      }
-      function viaProxy(link) {
-        return _gdProxyBase ? _gdProxyBase + encodeURIComponent(link) : link;
-      }
-      function mapLinks(links) {
-        const videos = { 1080: [], 720: [], 480: [], 360: [] };
-        Object.keys(links).forEach(function(itag) {
-          itag = parseInt(itag, 10);
-          if (!ITAG_QMAP.hasOwnProperty(itag)) return;
-          videos[ITAG_QMAP[itag]].push({ itag, contentType: ITAG_CMAP[itag], link: viaProxy(links[itag]) });
-        });
-        return videos;
-      }
-      function getVideoInfo(id, cb) {
-        const url = "https://docs.google.com/get_video_info?authuser=&docid=" + id + "&sle=true&hl=en";
-        nativeHttpGet(url, { "Accept": "*/*", "User-Agent": navigator.userAgent }).then(function(res) {
-          try {
-            if (!res || res.status !== 200) {
-              return cb("Google Drive request failed: HTTP " + (res ? res.status : "?"));
-            }
-            const text = res.body || "";
-            if (/accounts\.google\.com\/ServiceLogin/.test(text)) {
-              return cb("Google Docs request failed: This video requires you be logged into a Google account. Open your Gmail in another tab and then refresh video.");
-            }
-            const data = {};
-            text.split("&").forEach(function(kv) {
-              const pair = kv.split("=");
-              data[decodeURIComponent(pair[0])] = decodeURIComponent(pair[1] || "");
-            });
-            if (data.status === "fail") {
-              return cb("Google Drive request failed: " + unescape(data.reason || "").replace(/\+/g, " "));
-            }
-            if (!data.fmt_stream_map) {
-              return cb("Google has removed the video streams associated with this item.  It can no longer be played.");
-            }
-            data.links = {};
-            data.fmt_stream_map.split(",").forEach(function(item) {
-              const pair = item.split("|");
-              data.links[pair[0]] = pair[1];
-            });
-            data.videoMap = mapLinks(data.links);
-            cb(null, data);
-          } catch (e) {
-            cb("Google Drive parse error: " + (e && e.message ? e.message : e));
-          }
-        }).catch(function(e) {
-          cb("Google Drive request failed: " + (e && e.message ? e.message : "network error"));
-        });
-      }
-      window.__gdRealMeta = getVideoInfo;
-      window.getGoogleDriveMetadata = getVideoInfo;
-      window.hasDriveUserscript = true;
-      window.driveUserscriptVersion = "1.7";
-      if (Array.isArray(window.__gdQueue) && window.__gdQueue.length) {
-        const queued = window.__gdQueue.splice(0);
-        queued.forEach(function(p) {
-          getVideoInfo(p[0], p[1]);
-        });
-      }
-      console.log("[CyTube SC] Google Drive metadata helper ready");
-    }
-    function initMediaWatcher() {
-      if (typeof socket === "undefined" || !socket || typeof socket.on !== "function") {
-        setTimeout(initMediaWatcher, 600);
-        return;
-      }
-      let _lastMediaKey = "";
-      let _lastChangeMediaData = null;
-      let _roomPaused = false;
-      let _resyncArmed = false;
-      let _resyncTimer = null;
-      const renderedDuration = () => {
-        try {
-          const p = window.PLAYER;
-          if (p && p.yt && typeof p.yt.getDuration === "function") {
-            const d = p.yt.getDuration();
-            if (d > 0) return d;
-          }
-        } catch (e) {
-        }
-        try {
-          const v = document.querySelector("#ytapiplayer video, video");
-          if (v && v.duration > 0 && isFinite(v.duration)) return v.duration;
-        } catch (e) {
-        }
-        return null;
-      };
-      const playheadProbe = () => {
-        try {
-          const p = window.PLAYER;
-          if (p && p.yt && typeof p.yt.getCurrentTime === "function") {
-            const t = p.yt.getCurrentTime();
-            if (typeof t === "number") return t;
-          }
-        } catch (e) {
-        }
-        try {
-          const v = document.querySelector("#ytapiplayer video, video");
-          if (v && typeof v.currentTime === "number") return v.currentTime;
-        } catch (e) {
-        }
-        return null;
-      };
-      const rebuildPlayer = (d) => {
-        try {
-          if (typeof loadMediaPlayer === "function" && d) loadMediaPlayer(d);
-        } catch (e) {
-        }
-      };
-      const maybeRebuildIfStale = () => {
-        try {
-          const d = _lastChangeMediaData;
-          if (!d || _roomPaused) return;
-          const expected = typeof d.seconds === "number" && d.seconds > 0 ? d.seconds : null;
-          const rendered = renderedDuration();
-          if (expected != null && rendered != null && Math.abs(rendered - expected) > 4) {
-            rebuildPlayer(d);
-            return;
-          }
-          const t1 = playheadProbe();
-          if (t1 == null) return;
-          setTimeout(() => {
-            if (_roomPaused) return;
-            const t2 = playheadProbe();
-            if (t2 != null && Math.abs(t2 - t1) < 0.25) rebuildPlayer(d);
-          }, 2e3);
-        } catch (e) {
-        }
-      };
-      const armStaleCheck = () => {
-        if (typeof loadMediaPlayer !== "function") {
-          location.reload();
-          return;
-        }
-        _resyncArmed = true;
-        clearTimeout(_resyncTimer);
-        _resyncTimer = setTimeout(() => {
-          if (_resyncArmed) {
-            _resyncArmed = false;
-            maybeRebuildIfStale();
-          }
-        }, 1e4);
-      };
-      window.__scStaleResync = armStaleCheck;
-      socket.on("changeMedia", (data) => {
-        try {
-          _lastChangeMediaData = data;
-          if (data && typeof data.paused === "boolean") _roomPaused = data.paused;
-          if (_resyncArmed) {
-            _resyncArmed = false;
-            clearTimeout(_resyncTimer);
-            setTimeout(maybeRebuildIfStale, 4e3);
-          }
-          mediaState.currentMediaSeconds = data && typeof data.seconds === "number" ? data.seconds : 0;
-          mediaState.currentMediaType = data && data.type ? data.type : "";
-          const key = (data && (data.id || "")) + "|" + (data && (data.title || ""));
-          if (key === _lastMediaKey) return;
-          _lastMediaKey = key;
-          movieState.lastMovieTitle = "";
-          npState.data = null;
-          const _staleTrivia = document.getElementById("sc-trivia-btn");
-          if (_staleTrivia) _staleTrivia.remove();
-          clearTimeout(_drmCheckTimer);
-          hideDrmOverlay();
-          if (mediaState.currentMediaType === "yt") _drmCheckTimer = setTimeout(() => checkYtDrm(0), 1500);
-          setTimeout(triggerTitleInject, 350);
-        } catch (e) {
-        }
-      });
-      socket.on("mediaUpdate", (data) => {
-        if (data && typeof data.currentTime === "number") mediaState.currentPlaybackTime = data.currentTime;
-        if (data && typeof data.paused === "boolean") _roomPaused = data.paused;
-      });
-      let _wasDisconnected = false;
-      socket.on("disconnect", () => {
-        _wasDisconnected = true;
-      });
-      socket.on("connect", () => {
-        if (_wasDisconnected) {
-          _wasDisconnected = false;
-          armStaleCheck();
-        }
-      });
-      setTimeout(() => {
-        if (window.PLAYER && window.PLAYER.mediaType === "yt") checkYtDrm(0);
-      }, 2500);
-    }
     function initChatTimestamps() {
       if (typeof socket === "undefined" || !socket || typeof socket.on !== "function") {
         setTimeout(initChatTimestamps, 600);
@@ -3859,53 +3912,6 @@
       document.addEventListener("touchend", cancelPress, { passive: true });
       document.addEventListener("touchmove", cancelPress, { passive: true });
       document.addEventListener("touchcancel", cancelPress, { passive: true });
-    }
-    let _drmCheckTimer = null;
-    function openExternalUrl(url) {
-      try {
-        if (window.CytubeNative && typeof CytubeNative.openExternal === "function") {
-          CytubeNative.openExternal(url);
-        } else {
-          window.open(url, "_blank");
-        }
-      } catch (e) {
-      }
-    }
-    function hideDrmOverlay() {
-      const o = document.getElementById("sc-drm-overlay");
-      if (o) o.remove();
-    }
-    function showDrmOverlay(videoId, title) {
-      hideDrmOverlay();
-      const wrap = document.getElementById("videowrap") || document.body;
-      if (getComputedStyle(wrap).position === "static") wrap.style.position = "relative";
-      const url = "https://cytu.be/r/420Grindhouse";
-      const safeTitle = (title || "This title").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]);
-      const o = document.createElement("div");
-      o.id = "sc-drm-overlay";
-      o.innerHTML = '<div id="sc-drm-box"><div id="sc-drm-icon">🔒</div><div id="sc-drm-title">' + safeTitle + ' can’t play in the app</div><div id="sc-drm-msg">It’s a DRM-protected <b>YouTube Movies</b> title and the in-app player can’t decrypt it. Open <b>Grindhouse</b> in your browser — it plays there, with the room and chat still in sync.</div><div id="sc-drm-actions"><button id="sc-drm-open" class="sc-drm-btn">Open Grindhouse in Browser</button></div></div>';
-      wrap.appendChild(o);
-      const btn = document.getElementById("sc-drm-open");
-      if (btn) btn.addEventListener("click", () => openExternalUrl(url));
-    }
-    function checkYtDrm(tries) {
-      const p = window.PLAYER;
-      if (!p || p.mediaType !== "yt") {
-        hideDrmOverlay();
-        return;
-      }
-      let vd = null;
-      try {
-        vd = p.yt && p.yt.getVideoData ? p.yt.getVideoData() : null;
-      } catch (e) {
-      }
-      if (vd && vd.errorCode) {
-        showDrmOverlay(vd.video_id, vd.title);
-        return;
-      }
-      if ((tries || 0) < 10) {
-        _drmCheckTimer = setTimeout(() => checkYtDrm((tries || 0) + 1), 1e3);
-      }
     }
     function applyUserColors() {
       document.querySelectorAll('#messagebuffer [class*="chat-msg-"]').forEach((el) => {
