@@ -1,3 +1,7 @@
+import { parseMovieFilename } from './parse.js';
+import { detectReadabilityIssues } from './readability.js';
+import { usernameToColor } from './usercolors.js';
+
 (function () {
     'use strict';
 
@@ -320,21 +324,6 @@
                     replacements: (m.replacements || []).slice(0, 5).map(r => r.value),
                 }));
         } catch (e) { return []; }
-    }
-
-    /* ==========================================================
-       READABILITY CHECKS
-    ========================================================== */
-
-    function detectReadabilityIssues(text) {
-        const issues = [];
-        const allCaps = text.match(/\b[A-Z]{3,}\b/g);
-        if (allCaps) issues.push(`ALL CAPS: "${allCaps.join('", "')}" — hard to read`);
-        const repeated = text.match(/(.)\1{4,}/g);
-        if (repeated) issues.push(`Repeated characters: "${repeated.join('", "')}" — hard to read`);
-        const excessPunct = text.match(/[!?]{3,}/g);
-        if (excessPunct) issues.push(`Excessive punctuation: "${excessPunct.join('", "')}"`);
-        return issues;
     }
 
     /* ==========================================================
@@ -785,30 +774,6 @@
        Handles filenames like: White.Fire.[1984].mkv
        → returns { title: "White Fire", year: "1984" }
     ========================================================== */
-
-    function parseMovieFilename(raw) {
-        // Remove file extension
-        let s = raw.replace(/\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|divx|xvid|ogv)$/i, '');
-
-        // Extract year from brackets or parens: [1984] or (1984)
-        let year = null;
-        const yearMatch = s.match(/[\[(](\d{4})[\])]/);
-        if (yearMatch) {
-            year = yearMatch[1];
-            s = s.slice(0, yearMatch.index); // strip everything from year onwards
-        }
-
-        // Replace dots and underscores with spaces
-        s = s.replace(/[._]+/g, ' ');
-
-        // Strip leftover brackets and their contents (tags like [BluRay], [720p])
-        s = s.replace(/[\[(][^\])]*/g, '').replace(/[\])]/, '');
-
-        // Trim and collapse whitespace
-        s = s.replace(/\s+/g, ' ').trim();
-
-        return { title: s, year };
-    }
 
     // Aggressively clean a messy YouTube "full movie" title into a TMDB query.
     // e.g. "Sole Survivor 1984 HD (Full Movie) | Free Action Thriller" → {title:'Sole Survivor', year:'1984'}
@@ -2077,21 +2042,6 @@
        USER COLOR SYSTEM
     ========================================================== */
 
-    // djb2-xor hash — better bit spread than the old additive hash, so similar names
-    // (e.g. "mike"/"mikey") don't land on near-identical hues.
-    function hashString(str) {
-        let h = 5381;
-        for (let i = 0; i < str.length; i++) { h = ((h << 5) + h) ^ str.charCodeAt(i); h |= 0; }
-        return Math.abs(h);
-    }
-    function usernameToColor(u) {
-        // Your own name is always a fixed baby blue so it stands out at a glance.
-        try { if (window.CLIENT && CLIENT.name && u === CLIENT.name) return 'hsl(197, 90%, 78%)'; } catch (e) {}
-        // Golden-angle stepping (×137.508°) spreads hues as far apart as possible, so
-        // distinct usernames get visibly distinct colors instead of clustering.
-        const hue = (hashString(u) * 137.508) % 360;
-        return `hsl(${hue.toFixed(1)}, 72%, 70%)`;
-    }
     function applyUserColors() {
         document.querySelectorAll('#messagebuffer [class*="chat-msg-"]').forEach(el => {
             const cls = [...el.classList].find(c => c.startsWith('chat-msg-'));

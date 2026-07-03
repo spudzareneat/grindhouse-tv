@@ -1,5 +1,50 @@
 /* GENERATED FILE — do not edit. Source: web/src/**. Rebuild: cd web && npm run bundle */
 (() => {
+  // src/parse.js
+  function parseMovieFilename(raw) {
+    let s = raw.replace(/\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|divx|xvid|ogv)$/i, "");
+    let year = null;
+    const yearMatch = s.match(/[\[(](\d{4})[\])]/);
+    if (yearMatch) {
+      year = yearMatch[1];
+      s = s.slice(0, yearMatch.index);
+    }
+    s = s.replace(/[._]+/g, " ");
+    s = s.replace(/[\[(][^\])]*/g, "").replace(/[\])]/, "");
+    s = s.replace(/\s+/g, " ").trim();
+    return { title: s, year };
+  }
+
+  // src/readability.js
+  function detectReadabilityIssues(text) {
+    const issues = [];
+    const allCaps = text.match(/\b[A-Z]{3,}\b/g);
+    if (allCaps) issues.push(`ALL CAPS: "${allCaps.join('", "')}" — hard to read`);
+    const repeated = text.match(/(.)\1{4,}/g);
+    if (repeated) issues.push(`Repeated characters: "${repeated.join('", "')}" — hard to read`);
+    const excessPunct = text.match(/[!?]{3,}/g);
+    if (excessPunct) issues.push(`Excessive punctuation: "${excessPunct.join('", "')}"`);
+    return issues;
+  }
+
+  // src/usercolors.js
+  function hashString(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) {
+      h = (h << 5) + h ^ str.charCodeAt(i);
+      h |= 0;
+    }
+    return Math.abs(h);
+  }
+  function usernameToColor(u) {
+    try {
+      if (window.CLIENT && CLIENT.name && u === CLIENT.name) return "hsl(197, 90%, 78%)";
+    } catch (e) {
+    }
+    const hue = hashString(u) * 137.508 % 360;
+    return `hsl(${hue.toFixed(1)}, 72%, 70%)`;
+  }
+
   // src/legacy.js
   (function() {
     "use strict";
@@ -253,16 +298,6 @@
       } catch (e) {
         return [];
       }
-    }
-    function detectReadabilityIssues(text) {
-      const issues = [];
-      const allCaps = text.match(/\b[A-Z]{3,}\b/g);
-      if (allCaps) issues.push(`ALL CAPS: "${allCaps.join('", "')}" — hard to read`);
-      const repeated = text.match(/(.)\1{4,}/g);
-      if (repeated) issues.push(`Repeated characters: "${repeated.join('", "')}" — hard to read`);
-      const excessPunct = text.match(/[!?]{3,}/g);
-      if (excessPunct) issues.push(`Excessive punctuation: "${excessPunct.join('", "')}"`);
-      return issues;
     }
     function showReviewModal(text, ltMatches, readabilityIssues, onSend, onCancel) {
       const old = document.getElementById("sc-modal-overlay");
@@ -640,19 +675,6 @@
         if (input.getAttribute("inputmode") !== "none") input.setAttribute("inputmode", "none");
       }
     };
-    function parseMovieFilename(raw) {
-      let s = raw.replace(/\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|divx|xvid|ogv)$/i, "");
-      let year = null;
-      const yearMatch = s.match(/[\[(](\d{4})[\])]/);
-      if (yearMatch) {
-        year = yearMatch[1];
-        s = s.slice(0, yearMatch.index);
-      }
-      s = s.replace(/[._]+/g, " ");
-      s = s.replace(/[\[(][^\])]*/g, "").replace(/[\])]/, "");
-      s = s.replace(/\s+/g, " ").trim();
-      return { title: s, year };
-    }
     const YT_NOISE = [
       "full movie",
       "full length movie",
@@ -1811,22 +1833,6 @@
       };
       bindTitle();
       new MutationObserver(bindTitle).observe(document.body, { childList: true, subtree: true });
-    }
-    function hashString(str) {
-      let h = 5381;
-      for (let i = 0; i < str.length; i++) {
-        h = (h << 5) + h ^ str.charCodeAt(i);
-        h |= 0;
-      }
-      return Math.abs(h);
-    }
-    function usernameToColor(u) {
-      try {
-        if (window.CLIENT && CLIENT.name && u === CLIENT.name) return "hsl(197, 90%, 78%)";
-      } catch (e) {
-      }
-      const hue = hashString(u) * 137.508 % 360;
-      return `hsl(${hue.toFixed(1)}, 72%, 70%)`;
     }
     function applyUserColors() {
       document.querySelectorAll('#messagebuffer [class*="chat-msg-"]').forEach((el) => {
