@@ -27,3 +27,8 @@ keystore.properties
 
 # Claude Code worktrees / session scaffolding
 /.claude/
+
+# Local development notes/tooling — keep out of the public repo
+/CLAUDE.md
+/tools/
+/docs/GECKOVIEW_PORT_PLAN.md
