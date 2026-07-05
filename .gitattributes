@@ -4,3 +4,8 @@
 # bloating every future `npm run bundle` diff with thousands of no-op lines.
 # Force LF regardless of local autocrlf config.
 web/src/styles/*.css text eol=lf
+
+# The generated bundle itself is also always written LF by Node's esbuild —
+# force LF on checkout too, or the same CRLF/LF churn reappears one level up
+# (the whole file's own line endings, not just embedded CSS content).
+app/src/main/assets/cytube_mobile.js text eol=lf
