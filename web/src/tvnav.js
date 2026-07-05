@@ -3,6 +3,7 @@ import { holdScrubber, wakeVideoControls } from './player/scrubber.js';
 import { chromeState } from './chrome/state.js';
 import { hideTriviaCard } from './cards/trivia.js';
 import { hideNowPlayingCard } from './cards/nowplaying.js';
+import { pickDirectional } from './tvnav/geometry.js';
 
 // Let other UI (settings modal) place the remote's focus ring on an element.
 // settings.js reads tvNavState.setFocus instead of a bare reassignable binding.
@@ -341,28 +342,8 @@ export function initTvNav() {
         if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) { setFocus(list[0]); return; }
 
         const cur = focusEl.getBoundingClientRect();
-        const cx = cur.left + cur.width / 2, cy = cur.top + cur.height / 2;
-        // Two tiers: a candidate within 45° of the pressed direction (primary >= perp)
-        // always beats one off to the side, however close the latter scores. Without
-        // this, Right from the mute button picks the settings gear (4px rightward but
-        // a whole cluster-height up) over the CC button dead ahead across the bar.
-        // Off-cone candidates remain as fallback so loose diagonal hops still work.
-        let best = null, bestScore = Infinity, cone = null, coneScore = Infinity;
-        for (const el of list) {
-            if (el === focusEl) continue;
-            const r = el.getBoundingClientRect();
-            const dx = (r.left + r.width / 2) - cx, dy = (r.top + r.height / 2) - cy;
-            let primary, perp;
-            if (dir === 'left')       { if (dx > -4) continue; primary = -dx; perp = Math.abs(dy); }
-            else if (dir === 'right') { if (dx < 4)  continue; primary = dx;  perp = Math.abs(dy); }
-            else if (dir === 'up')    { if (dy > -4) continue; primary = -dy; perp = Math.abs(dx); }
-            else                      { if (dy < 4)  continue; primary = dy;  perp = Math.abs(dx); }
-            const score = primary + perp * 2;
-            if (primary >= perp && score < coneScore) { coneScore = score; cone = el; }
-            if (score < bestScore) { bestScore = score; best = el; }
-        }
-        if (cone) best = cone;
-        if (best) { setFocus(best); return; }
+        const idx = pickDirectional(dir, cur, list.map(el => el === focusEl ? null : el.getBoundingClientRect()));
+        if (idx !== -1) { setFocus(list[idx]); return; }
         // No neighbour that way — scroll a scrollable region if we're in one
         if (dir === 'up' || dir === 'down') {
             const sc = (scope.querySelector && scope.querySelector('#sc-trivia-list, #sc-settings-modal, #messagebuffer')) ||
