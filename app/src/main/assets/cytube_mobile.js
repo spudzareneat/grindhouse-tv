@@ -428,6 +428,20 @@
     return `hsl(${hue.toFixed(1)}, 72%, 70%)`;
   }
 
+  // src/socket.js
+  function whenSocket(cb, tries = 120) {
+    const s = typeof window !== "undefined" && window.socket;
+    if (s && typeof s.on === "function") {
+      cb(s);
+      return;
+    }
+    if (tries <= 0) return;
+    setTimeout(() => whenSocket(cb, tries - 1), 500);
+  }
+  function onSocket(event, handler) {
+    whenSocket((s) => s.on(event, handler));
+  }
+
   // src/posters.js
   function initPosterStrip() {
     const motd = document.getElementById("motdrow");
@@ -653,11 +667,13 @@
         return ((_a = nameSpan == null ? void 0 : nameSpan.textContent) == null ? void 0 : _a.trim()) || "";
       }).filter(Boolean).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
     };
-    const updateCount = () => {
-      var _a, _b;
-      const cytubCount = document.getElementById("usercount");
-      const raw = (_b = (_a = cytubCount == null ? void 0 : cytubCount.textContent) == null ? void 0 : _a.match(/\d+/)) == null ? void 0 : _b[0];
-      const count = raw ? parseInt(raw) : getUsers().length;
+    const updateCount = (n) => {
+      const count = typeof n === "number" ? n : (() => {
+        var _a, _b;
+        const cytubCount = document.getElementById("usercount");
+        const raw = (_b = (_a = cytubCount == null ? void 0 : cytubCount.textContent) == null ? void 0 : _a.match(/\d+/)) == null ? void 0 : _b[0];
+        return raw ? parseInt(raw) : getUsers().length;
+      })();
       btn.textContent = count + " USERS";
     };
     const renderPanel = () => {
@@ -696,10 +712,7 @@
         if (open) renderPanel();
       }).observe(ul, { childList: true, subtree: true });
     }
-    const uc = document.getElementById("usercount");
-    if (uc) {
-      new MutationObserver(updateCount).observe(uc, { childList: true, subtree: true, characterData: true });
-    }
+    onSocket("usercount", (n) => updateCount(n));
     updateCount();
   }
 

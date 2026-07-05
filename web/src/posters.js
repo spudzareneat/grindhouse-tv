@@ -1,5 +1,6 @@
 import { usernameToColor } from './usercolors.js';
 import { chromeState } from './chrome/state.js';
+import { onSocket } from './socket.js';
 
 /* ==========================================================
    POSTER STRIP — toggle show/hide the MOTD poster images
@@ -311,11 +312,14 @@ export function initUserCount() {
             .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
     };
 
-    const updateCount = () => {
-        // Prefer CyTube's own count (accurate, socket-driven)
-        const cytubCount = document.getElementById('usercount');
-        const raw = cytubCount?.textContent?.match(/\d+/)?.[0];
-        const count = raw ? parseInt(raw) : getUsers().length;
+    const updateCount = (n) => {
+        // n comes from the 'usercount' socket event (a plain integer). Falls back to a
+        // DOM read for the initial pre-join call, before any socket event has fired.
+        const count = (typeof n === 'number') ? n : (() => {
+            const cytubCount = document.getElementById('usercount');
+            const raw = cytubCount?.textContent?.match(/\d+/)?.[0];
+            return raw ? parseInt(raw) : getUsers().length;
+        })();
         btn.textContent = count + ' USERS';
     };
 
@@ -361,12 +365,8 @@ export function initUserCount() {
         }).observe(ul, { childList: true, subtree: true });
     }
 
-    // Also watch CyTube's usercount element for socket-driven updates
-    const uc = document.getElementById('usercount');
-    if (uc) {
-        new MutationObserver(updateCount)
-            .observe(uc, { childList: true, subtree: true, characterData: true });
-    }
+    // Socket-driven: CyTube emits 'usercount' with the new count directly.
+    onSocket('usercount', (n) => updateCount(n));
 
     updateCount();
 }
