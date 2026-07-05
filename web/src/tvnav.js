@@ -110,6 +110,7 @@ export function initLoginTvNav() {
 export function initTvNav() {
     if (!isTv) return;
     let focusEl = null;
+    let preOverlayFocusEl = null;
 
     const isVisible = (el) => {
         if (!el || !el.getBoundingClientRect) return false;
@@ -251,6 +252,16 @@ export function initTvNav() {
         try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e) {}
         holdScrubber(false);
         focusEl = null;
+    }
+
+    // Back-from-overlay restores focus to whatever opened it (settings gear,
+    // trivia button, ...) instead of leaving the ring cleared. Falls back to a
+    // plain clearFocus() if the opener is gone or hidden.
+    function restoreFocusAfterOverlayClose() {
+        const restore = preOverlayFocusEl;
+        preOverlayFocusEl = null;
+        clearFocus();
+        if (restore && isVisible(restore)) setFocus(restore);
     }
 
     function setFocus(el) {
@@ -416,7 +427,12 @@ export function initTvNav() {
         const ownerWrap = focusEl.classList && focusEl.classList.contains('vjs-menu-item') &&
             focusEl.closest('.vjs-menu-button');
         const ownerBtn = ownerWrap && ownerWrap.querySelector('button.vjs-menu-button');
+        // Remember what opened an overlay so Back can restore focus to it instead
+        // of just clearing the ring (see restoreFocusAfterOverlayClose()).
+        const opener = focusEl;
+        const hadOverlay = !!openOverlay();
         focusEl.click();
+        if (!hadOverlay && openOverlay()) preOverlayFocusEl = opener;
         if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) { clearFocus(); setFocus(ownerBtn); }
     }
 
@@ -441,17 +457,17 @@ export function initTvNav() {
         if (settings && isVisible(settings)) {
             const c = document.getElementById('sc-settings-cancel');
             if (c) c.click(); else settings.remove();
-            clearFocus(); return true;
+            restoreFocusAfterOverlayClose(); return true;
         }
         const modal = document.getElementById('sc-modal-overlay');
-        if (modal && isVisible(modal)) { (document.getElementById('sc-btn-cancel') || { click() { modal.remove(); } }).click(); clearFocus(); return true; }
+        if (modal && isVisible(modal)) { (document.getElementById('sc-btn-cancel') || { click() { modal.remove(); } }).click(); restoreFocusAfterOverlayClose(); return true; }
         const trivia = document.getElementById('sc-trivia-card');
-        if (trivia && trivia.classList.contains('sc-show')) { hideTriviaCard(); clearFocus(); return true; }
+        if (trivia && trivia.classList.contains('sc-show')) { hideTriviaCard(); restoreFocusAfterOverlayClose(); return true; }
         const np = document.getElementById('sc-np-card');
-        if (np && np.classList.contains('sc-np-visible')) { hideNowPlayingCard(); clearFocus(); return true; }
+        if (np && np.classList.contains('sc-np-visible')) { hideNowPlayingCard(); restoreFocusAfterOverlayClose(); return true; }
         for (const id of ['sc-users-panel', 'sc-poll-panel']) {
             const p = document.getElementById(id);
-            if (p && isVisible(p)) { p.style.display = 'none'; clearFocus(); return true; }
+            if (p && isVisible(p)) { p.style.display = 'none'; restoreFocusAfterOverlayClose(); return true; }
         }
         const poster = document.getElementById('sc-poster-strip');
         if (poster && poster.classList.contains('sc-poster-visible')) {

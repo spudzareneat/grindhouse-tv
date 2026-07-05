@@ -1490,6 +1490,7 @@
   function initTvNav() {
     if (!isTv) return;
     let focusEl = null;
+    let preOverlayFocusEl = null;
     const isVisible = (el) => {
       if (!el || !el.getBoundingClientRect) return false;
       const r = el.getBoundingClientRect();
@@ -1592,6 +1593,12 @@
       }
       holdScrubber(false);
       focusEl = null;
+    }
+    function restoreFocusAfterOverlayClose() {
+      const restore = preOverlayFocusEl;
+      preOverlayFocusEl = null;
+      clearFocus();
+      if (restore && isVisible(restore)) setFocus(restore);
     }
     function setFocus(el) {
       if (!el) return;
@@ -1726,7 +1733,10 @@
       }
       const ownerWrap = focusEl.classList && focusEl.classList.contains("vjs-menu-item") && focusEl.closest(".vjs-menu-button");
       const ownerBtn = ownerWrap && ownerWrap.querySelector("button.vjs-menu-button");
+      const opener = focusEl;
+      const hadOverlay = !!openOverlay();
       focusEl.click();
+      if (!hadOverlay && openOverlay()) preOverlayFocusEl = opener;
       if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) {
         clearFocus();
         setFocus(ownerBtn);
@@ -1761,7 +1771,7 @@
         const c = document.getElementById("sc-settings-cancel");
         if (c) c.click();
         else settings.remove();
-        clearFocus();
+        restoreFocusAfterOverlayClose();
         return true;
       }
       const modal = document.getElementById("sc-modal-overlay");
@@ -1769,26 +1779,26 @@
         (document.getElementById("sc-btn-cancel") || { click() {
           modal.remove();
         } }).click();
-        clearFocus();
+        restoreFocusAfterOverlayClose();
         return true;
       }
       const trivia = document.getElementById("sc-trivia-card");
       if (trivia && trivia.classList.contains("sc-show")) {
         hideTriviaCard();
-        clearFocus();
+        restoreFocusAfterOverlayClose();
         return true;
       }
       const np = document.getElementById("sc-np-card");
       if (np && np.classList.contains("sc-np-visible")) {
         hideNowPlayingCard();
-        clearFocus();
+        restoreFocusAfterOverlayClose();
         return true;
       }
       for (const id of ["sc-users-panel", "sc-poll-panel"]) {
         const p = document.getElementById(id);
         if (p && isVisible(p)) {
           p.style.display = "none";
-          clearFocus();
+          restoreFocusAfterOverlayClose();
           return true;
         }
       }
