@@ -1,0 +1,6 @@
+# The esbuild `text` loader embeds these files verbatim into a JS string
+# literal (see web/build.mjs). On a Windows checkout with core.autocrlf=true,
+# CRLF line endings get escaped as literal `\r` in the generated bundle,
+# bloating every future `npm run bundle` diff with thousands of no-op lines.
+# Force LF regardless of local autocrlf config.
+web/src/styles/*.css text eol=lf
