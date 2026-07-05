@@ -165,24 +165,16 @@ export function triggerTitleInject() {
     }
 }
 
-let _titleObsAttached = false;
-function attachHeaderObserver() {
-    if (_titleObsAttached) return;
-    const header = document.getElementById('videowrap-header');
-    if (!header) return;
-    _titleObsAttached = true;
-    new MutationObserver(triggerTitleInject).observe(header, { childList: true, subtree: true, characterData: true });
-}
-
+// Reactive title updates come from player/resync.js's onSocket('changeMedia', ...)
+// handler (setTimeout(triggerTitleInject, 350) once the media genuinely changes) —
+// the characterData MutationObserver that used to watch the header for any DOM
+// change has been removed as redundant with that socket-driven trigger.
 export function watchMovieTitle() {
     triggerTitleInject();
-    attachHeaderObserver();
     // First-load robustness: on a cold load the title/header often aren't ready
-    // when we boot, so poll for ~20s — attaching the observer once the header
-    // exists and re-trying the lookup until the title resolves.
+    // when we boot, so poll for ~20s, re-trying the lookup until the title resolves.
     let tries = 0;
     const poll = setInterval(() => {
-        attachHeaderObserver();
         triggerTitleInject();
         if (++tries >= 14) clearInterval(poll);
     }, 1500);

@@ -2505,20 +2505,10 @@
       }
     }
   }
-  var _titleObsAttached = false;
-  function attachHeaderObserver() {
-    if (_titleObsAttached) return;
-    const header = document.getElementById("videowrap-header");
-    if (!header) return;
-    _titleObsAttached = true;
-    new MutationObserver(triggerTitleInject).observe(header, { childList: true, subtree: true, characterData: true });
-  }
   function watchMovieTitle() {
     triggerTitleInject();
-    attachHeaderObserver();
     let tries = 0;
     const poll = setInterval(() => {
-      attachHeaderObserver();
       triggerTitleInject();
       if (++tries >= 14) clearInterval(poll);
     }, 1500);
