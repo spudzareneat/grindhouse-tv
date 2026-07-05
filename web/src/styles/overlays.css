@@ -300,6 +300,28 @@
             }
             #sc-settings-save:hover { background: rgba(192,176,255,0.35) !important; }
 
+            /* Tabbed settings modal */
+            #sc-settings-tabs {
+                display: flex !important; gap: 2px !important;
+                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+                margin: 0 0 2px 0 !important; padding: 0 !important;
+            }
+            .sc-settings-tab {
+                background: none !important; border: none !important;
+                border-bottom: 2px solid transparent !important;
+                color: rgba(255,255,255,0.5) !important;
+                font-size: 13px !important; font-weight: 600 !important;
+                padding: 8px 10px !important; cursor: pointer !important;
+                font-family: inherit !important;
+            }
+            .sc-settings-tab.sc-settings-tab-active {
+                color: #c0b0ff !important;
+                border-bottom-color: #c0b0ff !important;
+            }
+            .sc-settings-pane {
+                display: none !important; flex-direction: column !important; gap: 16px !important;
+            }
+            .sc-settings-pane.sc-settings-pane-active { display: flex !important; }
 
             /* Poll panel */
             #sc-poll-panel {

@@ -3841,6 +3841,28 @@
             }
             #sc-settings-save:hover { background: rgba(192,176,255,0.35) !important; }
 
+            /* Tabbed settings modal */
+            #sc-settings-tabs {
+                display: flex !important; gap: 2px !important;
+                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+                margin: 0 0 2px 0 !important; padding: 0 !important;
+            }
+            .sc-settings-tab {
+                background: none !important; border: none !important;
+                border-bottom: 2px solid transparent !important;
+                color: rgba(255,255,255,0.5) !important;
+                font-size: 13px !important; font-weight: 600 !important;
+                padding: 8px 10px !important; cursor: pointer !important;
+                font-family: inherit !important;
+            }
+            .sc-settings-tab.sc-settings-tab-active {
+                color: #c0b0ff !important;
+                border-bottom-color: #c0b0ff !important;
+            }
+            .sc-settings-pane {
+                display: none !important; flex-direction: column !important; gap: 16px !important;
+            }
+            .sc-settings-pane.sc-settings-pane-active { display: flex !important; }
 
             /* Poll panel */
             #sc-poll-panel {
@@ -5126,116 +5148,134 @@
                 <div id="sc-settings-title">⚙ Grindhouse Settings</div>
                 ${firstRun ? '<div class="sc-settings-intro">First-time setup — everything here is optional. Log in to chat, and enable TMDB for richer movie info. Reopen any time with the ⚙ button.</div>' : ""}
 
-                <div class="sc-settings-group">
-                    <label class="sc-settings-label">CyTube Account
-                        <span class="sc-settings-note">Opens the CyTube login page — your settings here are saved first</span>
-                    </label>
-                    <button id="sc-login-btn" class="sc-settings-btn-wide" type="button">Log in / Switch Account</button>
-                </div>
+                <nav id="sc-settings-tabs">
+                    <button type="button" class="sc-settings-tab" data-tab="account">Account</button>
+                    <button type="button" class="sc-settings-tab" data-tab="appearance">Appearance</button>
+                    <button type="button" class="sc-settings-tab" data-tab="playback">Playback</button>
+                    <button type="button" class="sc-settings-tab" data-tab="chat">Chat</button>
+                    <button type="button" class="sc-settings-tab" data-tab="updates">Updates</button>
+                </nav>
 
-                <div class="sc-settings-group sc-settings-divider">
-                    <label class="sc-settings-toggle-label">
-                        <span class="sc-toggle-row">
-                            <input type="checkbox" id="sc-input-tmdb-enable" ${tmdbVal ? "checked" : ""} />
-                            <span class="sc-toggle-text">Enable TMDB features</span>
-                        </span>
-                        <span class="sc-settings-note">Movie posters, ratings, runtime, IMDb/Letterboxd links</span>
-                    </label>
-                    <div id="sc-tmdb-fields" class="${tmdbVal ? "" : "sc-hidden"}">
-                        <div class="sc-settings-input-row">
-                            <input id="sc-input-tmdb" class="sc-settings-input" type="text"
-                                placeholder="Paste TMDB v3 key…" value="${tmdbVal}" spellcheck="false" />
-                            <button id="sc-test-tmdb" class="sc-settings-test" type="button">Test</button>
+                <div class="sc-settings-pane" data-pane="account">
+                    <div class="sc-settings-group sc-settings-divider">
+                        <label class="sc-settings-toggle-label">
+                            <span class="sc-toggle-row">
+                                <input type="checkbox" id="sc-input-tmdb-enable" ${tmdbVal ? "checked" : ""} />
+                                <span class="sc-toggle-text">Enable TMDB features</span>
+                            </span>
+                            <span class="sc-settings-note">Movie posters, ratings, runtime, IMDb/Letterboxd links</span>
+                        </label>
+                        <div id="sc-tmdb-fields" class="${tmdbVal ? "" : "sc-hidden"}">
+                            <div class="sc-settings-input-row">
+                                <input id="sc-input-tmdb" class="sc-settings-input" type="text"
+                                    placeholder="Paste TMDB v3 key…" value="${tmdbVal}" spellcheck="false" />
+                                <button id="sc-test-tmdb" class="sc-settings-test" type="button">Test</button>
+                            </div>
+                            <span id="sc-test-tmdb-status" class="sc-settings-test-status"></span>
+                            <a class="sc-settings-link" href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener">
+                                Get a free TMDB key ↗
+                            </a>
                         </div>
-                        <span id="sc-test-tmdb-status" class="sc-settings-test-status"></span>
-                        <a class="sc-settings-link" href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener">
-                            Get a free TMDB key ↗
-                        </a>
+                    </div>
+
+                    <div class="sc-settings-group">
+                        <label class="sc-settings-label">CyTube Account
+                            <span class="sc-settings-note">Opens the CyTube login page — your settings here are saved first</span>
+                        </label>
+                        <button id="sc-login-btn" class="sc-settings-btn-wide" type="button">Log in / Switch Account</button>
                     </div>
                 </div>
 
-                <div class="sc-settings-group sc-settings-toggle-group">
-                    <label class="sc-settings-toggle-label">
-                        <span class="sc-toggle-row">
-                            <input type="checkbox" id="sc-input-spellcheck" ${spellCheckEnabled() ? "checked" : ""} />
-                            <span class="sc-toggle-text">Grammar &amp; spell check popup</span>
-                        </span>
-                        <span class="sc-settings-note">When off, messages send immediately without review</span>
-                    </label>
-                </div>
+                <div class="sc-settings-pane" data-pane="appearance">
+                    <div class="sc-settings-group">
+                        <label class="sc-settings-toggle-label">
+                            <span class="sc-toggle-row">
+                                <input type="checkbox" id="sc-input-movielinks" ${movieLinksEnabled() ? "checked" : ""} />
+                                <span class="sc-toggle-text">Show movie links (IMDb / Letterboxd / Wiki)</span>
+                            </span>
+                            <span class="sc-settings-note">Adds clickable link badges next to the title — usually unneeded on a TV</span>
+                        </label>
+                    </div>
 
-                <div class="sc-settings-group sc-settings-toggle-group">
-                    <label class="sc-settings-toggle-label">
-                        <span class="sc-toggle-row">
-                            <input type="checkbox" id="sc-input-nokb" ${softKeyboardDisabled() ? "checked" : ""} />
-                            <span class="sc-toggle-text">Disable on-screen keyboard</span>
-                        </span>
-                        <span class="sc-settings-note">For physical keyboard users — tapping a text field won't pop up the Android keyboard</span>
-                    </label>
-                </div>
-
-                <div class="sc-settings-group sc-settings-toggle-group">
-                    <label class="sc-settings-toggle-label">
-                        <span class="sc-toggle-row">
-                            <input type="checkbox" id="sc-input-movielinks" ${movieLinksEnabled() ? "checked" : ""} />
-                            <span class="sc-toggle-text">Show movie links (IMDb / Letterboxd / Wiki)</span>
-                        </span>
-                        <span class="sc-settings-note">Adds clickable link badges next to the title — usually unneeded on a TV</span>
-                    </label>
-                </div>
-
-                <div class="sc-settings-group sc-settings-toggle-group">
-                    <label class="sc-settings-toggle-label">
-                        <span class="sc-toggle-row">
-                            <input type="checkbox" id="sc-input-couch" ${couchModeEnabled() ? "checked" : ""} />
-                            <span class="sc-toggle-text">Couch Mode</span>
-                        </span>
-                        <span class="sc-settings-note">When typing in sidebar chat, the input grows into a big, easy-to-read box over the video</span>
-                    </label>
-                </div>
-
-                <div class="sc-settings-group sc-settings-toggle-group">
-                    <label class="sc-settings-toggle-label">
-                        <span class="sc-toggle-row">
-                            <input type="checkbox" id="sc-input-watchalong" ${watchAlongEnabled() ? "checked" : ""} />
-                            <span class="sc-toggle-text">Watch-Only Mode</span>
-                        </span>
-                        <span class="sc-settings-note">Hides the chat input and the guest-login box — just read along, no typing</span>
-                    </label>
-                </div>
-
-                <div class="sc-settings-group sc-settings-toggle-group">
-                    <label class="sc-settings-toggle-label">
-                        <span class="sc-toggle-row">
-                            <input type="checkbox" id="sc-input-castmute" ${castFallbackMuted() ? "checked" : ""} />
-                            <span class="sc-toggle-text">Mute fallback audio while casting</span>
-                        </span>
-                        <span class="sc-settings-note">When a clip can't be cast (e.g. YouTube) it plays on this device instead — turn this on to keep that playback muted by default</span>
-                    </label>
-                </div>
-
-                <div class="sc-settings-group sc-settings-toggle-group">
-                    <label class="sc-settings-label">
-                        Chat font size
-                        <span class="sc-settings-note" id="sc-font-val">${getChatFontSize()}px</span>
-                    </label>
-                    <input type="range" id="sc-input-fontsize" class="sc-settings-range"
-                        min="11" max="28" step="1" value="${getChatFontSize()}" />
-                    <div id="sc-font-sample" class="sc-font-sample" style="font-size:${getChatFontSize()}px">
-                        Someone: that movie was wild
+                    <div class="sc-settings-group sc-settings-divider">
+                        <label class="sc-settings-label">
+                            Chat font size
+                            <span class="sc-settings-note" id="sc-font-val">${getChatFontSize()}px</span>
+                        </label>
+                        <input type="range" id="sc-input-fontsize" class="sc-settings-range"
+                            min="11" max="28" step="1" value="${getChatFontSize()}" />
+                        <div id="sc-font-sample" class="sc-font-sample" style="font-size:${getChatFontSize()}px">
+                            Someone: that movie was wild
+                        </div>
                     </div>
                 </div>
 
-                <div class="sc-settings-group sc-settings-divider" id="sc-update-group">
-                    <label class="sc-settings-label">App Updates
-                        <span class="sc-settings-note" id="sc-update-current">Installed: v${_appVersion() || "?"}</span>
-                    </label>
-                    <div id="sc-update-status" class="sc-settings-note">Checking for updates…</div>
-                    <div id="sc-update-notes" class="sc-update-notes sc-hidden"></div>
-                    <div class="sc-settings-input-row">
-                        <button id="sc-update-check" class="sc-settings-test" type="button">Check now</button>
+                <div class="sc-settings-pane" data-pane="playback">
+                    <div class="sc-settings-group">
+                        <label class="sc-settings-toggle-label">
+                            <span class="sc-toggle-row">
+                                <input type="checkbox" id="sc-input-castmute" ${castFallbackMuted() ? "checked" : ""} />
+                                <span class="sc-toggle-text">Mute fallback audio while casting</span>
+                            </span>
+                            <span class="sc-settings-note">When a clip can't be cast (e.g. YouTube) it plays on this device instead — turn this on to keep that playback muted by default</span>
+                        </label>
                     </div>
-                    <button id="sc-update-download" class="sc-settings-btn-wide sc-hidden" type="button">Get the update on GitHub ↗</button>
+
+                    <div class="sc-settings-group sc-settings-divider">
+                        <label class="sc-settings-toggle-label">
+                            <span class="sc-toggle-row">
+                                <input type="checkbox" id="sc-input-nokb" ${softKeyboardDisabled() ? "checked" : ""} />
+                                <span class="sc-toggle-text">Disable on-screen keyboard</span>
+                            </span>
+                            <span class="sc-settings-note">For physical keyboard users — tapping a text field won't pop up the Android keyboard</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="sc-settings-pane" data-pane="chat">
+                    <div class="sc-settings-group">
+                        <label class="sc-settings-toggle-label">
+                            <span class="sc-toggle-row">
+                                <input type="checkbox" id="sc-input-spellcheck" ${spellCheckEnabled() ? "checked" : ""} />
+                                <span class="sc-toggle-text">Grammar &amp; spell check popup</span>
+                            </span>
+                            <span class="sc-settings-note">When off, messages send immediately without review</span>
+                        </label>
+                    </div>
+
+                    <div class="sc-settings-group sc-settings-divider">
+                        <label class="sc-settings-toggle-label">
+                            <span class="sc-toggle-row">
+                                <input type="checkbox" id="sc-input-couch" ${couchModeEnabled() ? "checked" : ""} />
+                                <span class="sc-toggle-text">Couch Mode</span>
+                            </span>
+                            <span class="sc-settings-note">When typing in sidebar chat, the input grows into a big, easy-to-read box over the video</span>
+                        </label>
+                    </div>
+
+                    <div class="sc-settings-group sc-settings-divider">
+                        <label class="sc-settings-toggle-label">
+                            <span class="sc-toggle-row">
+                                <input type="checkbox" id="sc-input-watchalong" ${watchAlongEnabled() ? "checked" : ""} />
+                                <span class="sc-toggle-text">Watch-Only Mode</span>
+                            </span>
+                            <span class="sc-settings-note">Hides the chat input and the guest-login box — just read along, no typing</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="sc-settings-pane" data-pane="updates">
+                    <div class="sc-settings-group" id="sc-update-group">
+                        <label class="sc-settings-label">App Updates
+                            <span class="sc-settings-note" id="sc-update-current">Installed: v${_appVersion() || "?"}</span>
+                        </label>
+                        <div id="sc-update-status" class="sc-settings-note">Checking for updates…</div>
+                        <div id="sc-update-notes" class="sc-update-notes sc-hidden"></div>
+                        <div class="sc-settings-input-row">
+                            <button id="sc-update-check" class="sc-settings-test" type="button">Check now</button>
+                        </div>
+                        <button id="sc-update-download" class="sc-settings-btn-wide sc-hidden" type="button">Get the update on GitHub ↗</button>
+                    </div>
                 </div>
 
                 <div id="sc-settings-actions">
@@ -5245,6 +5285,14 @@
                 <div id="sc-settings-status"></div>
             </div>`;
       document.body.appendChild(overlay);
+      const tabs = [...overlay.querySelectorAll(".sc-settings-tab")];
+      const panes = [...overlay.querySelectorAll(".sc-settings-pane")];
+      const showTab = (name) => {
+        tabs.forEach((t) => t.classList.toggle("sc-settings-tab-active", t.dataset.tab === name));
+        panes.forEach((p) => p.classList.toggle("sc-settings-pane-active", p.dataset.pane === name));
+      };
+      tabs.forEach((t) => t.addEventListener("click", () => showTab(t.dataset.tab)));
+      showTab("account");
       overlay.addEventListener("click", (e) => {
         if (e.target === overlay) overlay.remove();
       });
