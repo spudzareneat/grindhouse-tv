@@ -1306,6 +1306,45 @@
     else showTriviaCard();
   }
 
+  // src/tvnav/geometry.js
+  function pickDirectional(dir, curRect, rects) {
+    const cx = curRect.left + curRect.width / 2, cy = curRect.top + curRect.height / 2;
+    let best = -1, bestScore = Infinity, cone = -1, coneScore = Infinity;
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i];
+      if (!r) continue;
+      const dx = r.left + r.width / 2 - cx, dy = r.top + r.height / 2 - cy;
+      let primary, perp;
+      if (dir === "left") {
+        if (dx > -4) continue;
+        primary = -dx;
+        perp = Math.abs(dy);
+      } else if (dir === "right") {
+        if (dx < 4) continue;
+        primary = dx;
+        perp = Math.abs(dy);
+      } else if (dir === "up") {
+        if (dy > -4) continue;
+        primary = -dy;
+        perp = Math.abs(dx);
+      } else {
+        if (dy < 4) continue;
+        primary = dy;
+        perp = Math.abs(dx);
+      }
+      const score = primary + perp * 2;
+      if (primary >= perp && score < coneScore) {
+        coneScore = score;
+        cone = i;
+      }
+      if (score < bestScore) {
+        bestScore = score;
+        best = i;
+      }
+    }
+    return cone !== -1 ? cone : best;
+  }
+
   // src/tvnav.js
   var tvNavState = { setFocus: null };
   function initLoginTvNav() {
@@ -1425,6 +1464,7 @@
   function initTvNav() {
     if (!isTv) return;
     let focusEl = null;
+    let preOverlayFocusEl = null;
     const isVisible = (el) => {
       if (!el || !el.getBoundingClientRect) return false;
       const r = el.getBoundingClientRect();
@@ -1508,6 +1548,12 @@
       }
       holdScrubber(false);
       focusEl = null;
+    }
+    function restoreFocusAfterOverlayClose() {
+      const restore = preOverlayFocusEl;
+      preOverlayFocusEl = null;
+      clearFocus();
+      if (restore && isVisible(restore)) setFocus(restore);
     }
     function setFocus(el) {
       if (!el) return;
@@ -1615,43 +1661,9 @@
         return;
       }
       const cur = focusEl.getBoundingClientRect();
-      const cx = cur.left + cur.width / 2, cy = cur.top + cur.height / 2;
-      let best = null, bestScore = Infinity, cone = null, coneScore = Infinity;
-      for (const el of list) {
-        if (el === focusEl) continue;
-        const r = el.getBoundingClientRect();
-        const dx = r.left + r.width / 2 - cx, dy = r.top + r.height / 2 - cy;
-        let primary, perp;
-        if (dir === "left") {
-          if (dx > -4) continue;
-          primary = -dx;
-          perp = Math.abs(dy);
-        } else if (dir === "right") {
-          if (dx < 4) continue;
-          primary = dx;
-          perp = Math.abs(dy);
-        } else if (dir === "up") {
-          if (dy > -4) continue;
-          primary = -dy;
-          perp = Math.abs(dx);
-        } else {
-          if (dy < 4) continue;
-          primary = dy;
-          perp = Math.abs(dx);
-        }
-        const score = primary + perp * 2;
-        if (primary >= perp && score < coneScore) {
-          coneScore = score;
-          cone = el;
-        }
-        if (score < bestScore) {
-          bestScore = score;
-          best = el;
-        }
-      }
-      if (cone) best = cone;
-      if (best) {
-        setFocus(best);
+      const idx = pickDirectional(dir, cur, list.map((el) => el === focusEl ? null : el.getBoundingClientRect()));
+      if (idx !== -1) {
+        setFocus(list[idx]);
         return;
       }
       if (dir === "up" || dir === "down") {
@@ -1677,7 +1689,10 @@
       }
       const ownerWrap = focusEl.classList && focusEl.classList.contains("vjs-menu-item") && focusEl.closest(".vjs-menu-button");
       const ownerBtn = ownerWrap && ownerWrap.querySelector("button.vjs-menu-button");
+      const opener = focusEl;
+      const hadOverlay = !!openOverlay();
       focusEl.click();
+      if (!hadOverlay && openOverlay()) preOverlayFocusEl = opener;
       if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) {
         clearFocus();
         setFocus(ownerBtn);
@@ -1712,7 +1727,7 @@
         const c = document.getElementById("sc-settings-cancel");
         if (c) c.click();
         else settings.remove();
-        clearFocus();
+        restoreFocusAfterOverlayClose();
         return true;
       }
       const modal = document.getElementById("sc-modal-overlay");
@@ -1720,26 +1735,26 @@
         (document.getElementById("sc-btn-cancel") || { click() {
           modal.remove();
         } }).click();
-        clearFocus();
+        restoreFocusAfterOverlayClose();
         return true;
       }
       const trivia = document.getElementById("sc-trivia-card");
       if (trivia && trivia.classList.contains("sc-show")) {
         hideTriviaCard();
-        clearFocus();
+        restoreFocusAfterOverlayClose();
         return true;
       }
       const np = document.getElementById("sc-np-card");
       if (np && np.classList.contains("sc-np-visible")) {
         hideNowPlayingCard();
-        clearFocus();
+        restoreFocusAfterOverlayClose();
         return true;
       }
       for (const id of ["sc-users-panel", "sc-poll-panel"]) {
         const p = document.getElementById(id);
         if (p && isVisible(p)) {
           p.style.display = "none";
-          clearFocus();
+          restoreFocusAfterOverlayClose();
           return true;
         }
       }
