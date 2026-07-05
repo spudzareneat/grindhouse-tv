@@ -228,15 +228,19 @@ export function initTvNav() {
 
     // Move within a single candidate list via the cone-weighted scorer, falling
     // back to scrolling scrollScope if nothing qualifies in an Up/Down press.
+    // Returns true if focus moved, so callers can tell "moved" from "nothing to
+    // do" (the zone dispatch in move() needs that to decide whether a door
+    // should still fire after an in-zone attempt finds nothing).
     function moveWithin(list, dir, scrollScope) {
-        if (!list.length) return;
-        if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) { setFocus(list[0]); return; }
+        if (!list.length) return false;
+        if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) { setFocus(list[0]); return true; }
         const cur = focusEl.getBoundingClientRect();
         const idx = pickDirectional(dir, cur, list.map(el => el === focusEl ? null : el.getBoundingClientRect()));
-        if (idx !== -1) { setFocus(list[idx]); return; }
+        if (idx !== -1) { setFocus(list[idx]); return true; }
         if ((dir === 'up' || dir === 'down') && scrollScope && scrollScope.scrollHeight > scrollScope.clientHeight) {
             scrollScope.scrollTop += (dir === 'down' ? 140 : -140);
         }
+        return false;
     }
 
     // Drop the focus ring from EVERY element (not just focusEl — an overlay that
@@ -373,12 +377,27 @@ export function initTvNav() {
         const zone = zoneOf(focusEl) || ZONE.TOP_STRIP;
         const playerBarEmpty = playerBarCandidates().length === 0;
         const door = resolveDoor(zone, dir, playerBarEmpty);
-        if (door) {
+
+        // Up is an immediate escape hatch to Top Strip, always — it doesn't wait
+        // for in-zone movement to run out first (unlike Left/Right/Down below).
+        if (door && dir === 'up') {
             const targetList = ZONE_BUILDERS[door]();
             if (targetList.length) setFocus(targetList[0]);
             return;
         }
-        moveWithin(ZONE_BUILDERS[zone](), dir, document.getElementById('messagebuffer'));
+
+        // Left/Right/Down: try moving within the current zone first — a zone can
+        // have several items along a door's own direction (e.g. Player Bar's
+        // several video.js controls, all reachable via Left/Right), and those
+        // need to be reachable before the door takes you out of the zone. Only
+        // take the door once in-zone movement finds nothing that way; suppress
+        // the scroll-fallback in that attempt so it doesn't fire before the door
+        // gets a chance.
+        if (moveWithin(ZONE_BUILDERS[zone](), dir, door ? null : document.getElementById('messagebuffer'))) return;
+        if (door) {
+            const targetList = ZONE_BUILDERS[door]();
+            if (targetList.length) setFocus(targetList[0]);
+        }
     }
 
     function activate() {

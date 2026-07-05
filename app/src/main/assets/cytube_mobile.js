@@ -1568,20 +1568,21 @@
       return null;
     }
     function moveWithin(list, dir, scrollScope) {
-      if (!list.length) return;
+      if (!list.length) return false;
       if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) {
         setFocus(list[0]);
-        return;
+        return true;
       }
       const cur = focusEl.getBoundingClientRect();
       const idx = pickDirectional(dir, cur, list.map((el) => el === focusEl ? null : el.getBoundingClientRect()));
       if (idx !== -1) {
         setFocus(list[idx]);
-        return;
+        return true;
       }
       if ((dir === "up" || dir === "down") && scrollScope && scrollScope.scrollHeight > scrollScope.clientHeight) {
         scrollScope.scrollTop += dir === "down" ? 140 : -140;
       }
+      return false;
     }
     function clearFocus() {
       document.querySelectorAll(".sc-tv-focus").forEach((e) => e.classList.remove("sc-tv-focus"));
@@ -1696,12 +1697,16 @@
       const zone = zoneOf(focusEl) || ZONE.TOP_STRIP;
       const playerBarEmpty = playerBarCandidates().length === 0;
       const door = resolveDoor(zone, dir, playerBarEmpty);
-      if (door) {
+      if (door && dir === "up") {
         const targetList = ZONE_BUILDERS[door]();
         if (targetList.length) setFocus(targetList[0]);
         return;
       }
-      moveWithin(ZONE_BUILDERS[zone](), dir, document.getElementById("messagebuffer"));
+      if (moveWithin(ZONE_BUILDERS[zone](), dir, door ? null : document.getElementById("messagebuffer"))) return;
+      if (door) {
+        const targetList = ZONE_BUILDERS[door]();
+        if (targetList.length) setFocus(targetList[0]);
+      }
     }
     function activate() {
       if (!focusEl) {
