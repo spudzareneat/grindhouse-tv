@@ -1345,6 +1345,32 @@
     return cone !== -1 ? cone : best;
   }
 
+  // src/tvnav/doors.js
+  var ZONE = { TOP_STRIP: "topstrip", DRAWER: "drawer", PLAYER: "player", CHAT: "chat" };
+  function resolveDoor(zone, dir, playerBarEmpty) {
+    if (zone === ZONE.TOP_STRIP) {
+      if (dir === "down") return playerBarEmpty ? ZONE.CHAT : ZONE.PLAYER;
+      return null;
+    }
+    if (zone === ZONE.DRAWER) {
+      if (dir === "up") return ZONE.TOP_STRIP;
+      if (dir === "right") return playerBarEmpty ? ZONE.CHAT : ZONE.PLAYER;
+      return null;
+    }
+    if (zone === ZONE.PLAYER) {
+      if (dir === "up") return ZONE.TOP_STRIP;
+      if (dir === "left") return ZONE.DRAWER;
+      if (dir === "right") return ZONE.CHAT;
+      return null;
+    }
+    if (zone === ZONE.CHAT) {
+      if (dir === "up") return ZONE.TOP_STRIP;
+      if (dir === "left") return playerBarEmpty ? ZONE.DRAWER : ZONE.PLAYER;
+      return null;
+    }
+    return null;
+  }
+
   // src/tvnav.js
   var tvNavState = { setFocus: null };
   function initLoginTvNav() {
@@ -1503,41 +1529,59 @@
         return [];
       }
     }
-    const MAIN_IDS = [
-      "sc-drm-open",
-      "sc-title-text",
-      "sc-chatmode-btn",
-      "sc-emote-proxy",
-      "sc-desync-btn",
-      "sc-settings-btn",
-      "sc-usercount-btn",
-      "sc-poll-btn",
-      "sc-poster-toggle",
-      "sc-trivia-btn",
-      "sc-newmsg-pill",
-      "sc-chat-collapse-btn",
-      "sc-chat-textarea"
-    ];
     const FOCUS_SEL = "button, a[href], input:not([type=hidden]), textarea, select, [tabindex]";
     const makeFocusable = (el) => {
       if (!el.hasAttribute("tabindex") && !/^(BUTTON|A|INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) el.tabIndex = -1;
     };
-    function candidates() {
-      const menu = openVjsMenu();
-      if (menu) {
-        const list = [...menu.querySelectorAll(".vjs-menu-item")].filter(isVisible);
-        if (list.length) return { scope: menu, list };
+    function topStripCandidates() {
+      const title = document.getElementById("sc-title-text");
+      const badges = [...document.querySelectorAll(".sc-movie-link")];
+      const trivia = document.getElementById("sc-trivia-btn");
+      const toggle = document.getElementById("sc-poster-toggle");
+      return [title, ...badges, trivia, toggle].filter((el) => el && isVisible(el));
+    }
+    function drawerCandidates() {
+      return ["sc-chatmode-btn", "sc-desync-btn", "sc-settings-btn"].map((id) => document.getElementById(id)).filter((el) => el && isVisible(el));
+    }
+    function playerBarCandidates() {
+      const drm = document.getElementById("sc-drm-open");
+      return [drm, ...controlBarTargets()].filter((el) => el && isVisible(el));
+    }
+    function chatCandidates() {
+      const header = ["sc-usercount-btn", "sc-poll-btn", "sc-chat-collapse-btn"].map((id) => document.getElementById(id)).filter((el) => el && isVisible(el));
+      const emote = document.getElementById("sc-emote-proxy");
+      const pill = document.getElementById("sc-newmsg-pill");
+      const textarea = document.getElementById("sc-chat-textarea");
+      return [...header, emote, pill && pill.classList.contains("sc-show") ? pill : null, textarea].filter((el) => el && isVisible(el));
+    }
+    const ZONE_BUILDERS = {
+      [ZONE.TOP_STRIP]: topStripCandidates,
+      [ZONE.DRAWER]: drawerCandidates,
+      [ZONE.PLAYER]: playerBarCandidates,
+      [ZONE.CHAT]: chatCandidates
+    };
+    function zoneOf(el) {
+      if (!el) return null;
+      for (const name of Object.keys(ZONE_BUILDERS)) {
+        if (ZONE_BUILDERS[name]().includes(el)) return name;
       }
-      const ov = openOverlay();
-      if (ov) {
-        let list = [...ov.querySelectorAll(FOCUS_SEL)].filter(isVisible).filter((e) => !e.disabled);
-        if (!list.length) list = [ov];
-        return { scope: ov, list };
+      return null;
+    }
+    function moveWithin(list, dir, scrollScope) {
+      if (!list.length) return;
+      if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) {
+        setFocus(list[0]);
+        return;
       }
-      const main = MAIN_IDS.map((id) => document.getElementById(id)).filter((el) => el && isVisible(el) && // The new-message pill is opacity-hidden (still sized) until shown — only
-      // make it a focus target while it's actually visible.
-      (el.id !== "sc-newmsg-pill" || el.classList.contains("sc-show")));
-      return { scope: document, list: main.concat(controlBarTargets()) };
+      const cur = focusEl.getBoundingClientRect();
+      const idx = pickDirectional(dir, cur, list.map((el) => el === focusEl ? null : el.getBoundingClientRect()));
+      if (idx !== -1) {
+        setFocus(list[idx]);
+        return;
+      }
+      if ((dir === "up" || dir === "down") && scrollScope && scrollScope.scrollHeight > scrollScope.clientHeight) {
+        scrollScope.scrollTop += dir === "down" ? 140 : -140;
+      }
     }
     function clearFocus() {
       document.querySelectorAll(".sc-tv-focus").forEach((e) => e.classList.remove("sc-tv-focus"));
@@ -1604,18 +1648,6 @@
         if (isDesynced()) seekBy(dir === "right" ? 10 : -10);
         return;
       }
-      if (focusEl && (dir === "left" || dir === "right") && !openVjsMenu()) {
-        const barEls = controlBarTargets();
-        if (barEls.includes(focusEl)) {
-          const sorted = barEls.slice().sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-          const i = sorted.indexOf(focusEl);
-          const ni = dir === "right" ? i + 1 : i - 1;
-          if (ni >= 0 && ni < sorted.length) {
-            setFocus(sorted[ni]);
-            return;
-          }
-        }
-      }
       if (focusEl && focusEl.type === "range" && (dir === "left" || dir === "right")) {
         const step = parseFloat(focusEl.step) || 1;
         const min = focusEl.min !== "" ? parseFloat(focusEl.min) : -Infinity;
@@ -1647,22 +1679,29 @@
           }
         }
       }
-      const { scope, list } = candidates();
-      if (!list.length) return;
-      if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) {
-        setFocus(list[0]);
+      const menu = openVjsMenu();
+      if (menu) {
+        const list = [...menu.querySelectorAll(".vjs-menu-item")].filter(isVisible);
+        moveWithin(list, dir, null);
         return;
       }
-      const cur = focusEl.getBoundingClientRect();
-      const idx = pickDirectional(dir, cur, list.map((el) => el === focusEl ? null : el.getBoundingClientRect()));
-      if (idx !== -1) {
-        setFocus(list[idx]);
+      const ov = openOverlay();
+      if (ov) {
+        let list = [...ov.querySelectorAll(FOCUS_SEL)].filter(isVisible).filter((e) => !e.disabled);
+        if (!list.length) list = [ov];
+        const scrollScope = ov.querySelector("#sc-trivia-list, #sc-settings-modal, #messagebuffer") || document.getElementById("messagebuffer");
+        moveWithin(list, dir, scrollScope);
         return;
       }
-      if (dir === "up" || dir === "down") {
-        const sc = scope.querySelector && scope.querySelector("#sc-trivia-list, #sc-settings-modal, #messagebuffer") || document.getElementById("messagebuffer");
-        if (sc && sc.scrollHeight > sc.clientHeight) sc.scrollTop += dir === "down" ? 140 : -140;
+      const zone = zoneOf(focusEl) || ZONE.TOP_STRIP;
+      const playerBarEmpty = playerBarCandidates().length === 0;
+      const door = resolveDoor(zone, dir, playerBarEmpty);
+      if (door) {
+        const targetList = ZONE_BUILDERS[door]();
+        if (targetList.length) setFocus(targetList[0]);
+        return;
       }
+      moveWithin(ZONE_BUILDERS[zone](), dir, document.getElementById("messagebuffer"));
     }
     function activate() {
       if (!focusEl) {
