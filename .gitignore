@@ -27,6 +27,7 @@ keystore.properties
 
 # Claude Code worktrees / session scaffolding
 /.claude/
+/.superpowers/
 
 # Local development notes/tooling — keep out of the public repo
 /CLAUDE.md
