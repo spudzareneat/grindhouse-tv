@@ -271,11 +271,16 @@ function _initPollWatcher(pollwrap) {
         }
     });
 
-    // Watch for poll changes
-    new MutationObserver(() => {
+    // Watch for poll changes. CyTube's own client updates #pollwrap's DOM in response
+    // to these same events (its handlers are registered long before ours), so we can
+    // keep reacting by re-scraping the DOM rather than parsing the socket payloads.
+    const reactToPollChange = () => {
         updateBtn();
         if (panelOpen) renderPanel();
-    }).observe(pollwrap, { childList: true, subtree: true, characterData: true });
+    };
+    onSocket('newPoll', reactToPollChange);
+    onSocket('updatePoll', reactToPollChange);
+    onSocket('closePoll', reactToPollChange);
 
     updateBtn();
 } // end _initPollWatcher

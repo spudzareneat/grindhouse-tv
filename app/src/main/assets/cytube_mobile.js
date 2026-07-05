@@ -642,10 +642,13 @@
         btn.classList.remove("sc-poll-btn-active");
       }
     });
-    new MutationObserver(() => {
+    const reactToPollChange = () => {
       updateBtn();
       if (panelOpen) renderPanel();
-    }).observe(pollwrap, { childList: true, subtree: true, characterData: true });
+    };
+    onSocket("newPoll", reactToPollChange);
+    onSocket("updatePoll", reactToPollChange);
+    onSocket("closePoll", reactToPollChange);
     updateBtn();
   }
   function initUserCount() {
