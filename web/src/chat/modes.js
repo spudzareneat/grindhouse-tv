@@ -2,6 +2,7 @@ import { isTv } from '../tvdetect.js';
 import { chromeState } from '../chrome/state.js';
 import { getChatFontSize, applyChatFontSize } from './fontsize.js';
 import { holdScrubber } from '../player/scrubber.js';
+import { onSocket } from '../socket.js';
 
 /* ==========================================================
    CINEMATIC + CHAT ENHANCEMENTS
@@ -74,8 +75,10 @@ const _CHAT_MODE_ICONS = { sidebar: '▐', overlay: '▣', hidden: '⊠', chaton
 const _CHAT_MODE_LABELS = { sidebar: 'Sidebar', overlay: 'Overlay', hidden: 'Hidden', chatonly: 'Chat Only' };
 
 // CHAT-ONLY side effects: pause + mute the player so the device is a pure chat client.
-// CyTube's sync conductor keeps trying to resume/seek, so we hold the media down with a
-// light 1s interval (also covers the player not being ready yet on a cold load).
+// CyTube's sync conductor keeps trying to resume/seek, so we hold the media down —
+// once on entry, reactively on the socket events that signal the conductor might have
+// just nudged playback, plus a 5s safety net (down from a 1s poll) for anything those
+// two don't catch (e.g. the player not being ready yet on a cold load).
 let _chatOnlyTimer = null, _inChatOnly = false;
 function _coStopMedia() {
     try { const vid = document.querySelector('#videowrap video'); if (vid) { vid.muted = true; if (!vid.paused) vid.pause(); } } catch (e) {}
@@ -89,11 +92,16 @@ function _coStopMedia() {
         }
     } catch (e) {}
 }
+// Registered once at module load (onSocket has no unsubscribe) — only actually holds
+// media down while _inChatOnly is true, harmless no-op the rest of the time.
+onSocket('changeMedia', () => { if (_inChatOnly) _coStopMedia(); });
+onSocket('mediaUpdate', () => { if (_inChatOnly) _coStopMedia(); });
+
 function enterChatOnly() {
     _inChatOnly = true;
     _coStopMedia();
     clearInterval(_chatOnlyTimer);
-    _chatOnlyTimer = setInterval(_coStopMedia, 1000);
+    _chatOnlyTimer = setInterval(_coStopMedia, 5000); // safety net, down from 1s
 }
 function exitChatOnly() {
     if (!_inChatOnly) return;       // only act when we're actually leaving chat-only

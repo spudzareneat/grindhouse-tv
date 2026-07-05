@@ -1832,11 +1832,17 @@
     } catch (e) {
     }
   }
+  onSocket("changeMedia", () => {
+    if (_inChatOnly) _coStopMedia();
+  });
+  onSocket("mediaUpdate", () => {
+    if (_inChatOnly) _coStopMedia();
+  });
   function enterChatOnly() {
     _inChatOnly = true;
     _coStopMedia();
     clearInterval(_chatOnlyTimer);
-    _chatOnlyTimer = setInterval(_coStopMedia, 1e3);
+    _chatOnlyTimer = setInterval(_coStopMedia, 5e3);
   }
   function exitChatOnly() {
     if (!_inChatOnly) return;
@@ -4919,7 +4925,11 @@
     }
     function startMonitorWatcher() {
       applyMonitorLayout();
-      setInterval(applyMonitorLayout, 800);
+      try {
+        window.matchMedia("(orientation: portrait)").addEventListener("change", applyMonitorLayout);
+      } catch (e) {
+      }
+      window.addEventListener("resize", applyMonitorLayout);
     }
     function installChatTextarea() {
       const originalInput = document.getElementById("chatline");

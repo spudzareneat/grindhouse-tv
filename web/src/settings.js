@@ -165,7 +165,13 @@ import tvCss from './styles/tv.css';
     }
     function startMonitorWatcher() {
         applyMonitorLayout();
-        setInterval(applyMonitorLayout, 800);
+        // window.screen dimensions (what isVerticalMonitor reads) change when the
+        // physical monitor/orientation changes — both a media-query match and a
+        // resize event fire when that happens, so poll-free detection is reliable here.
+        try {
+            window.matchMedia('(orientation: portrait)').addEventListener('change', applyMonitorLayout);
+        } catch (e) {}
+        window.addEventListener('resize', applyMonitorLayout);
     }
 
     /* ==========================================================
