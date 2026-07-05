@@ -48,6 +48,39 @@
     }, 80);
   }
 
+  // src/settings/schema.js
+  var DEFS = {
+    tmdbKey: { key: "sc_tmdb_key", type: "string", def: "" },
+    onboarded: { key: "sc_onboarded", type: "flag", def: false },
+    // set = true
+    spellcheck: { key: "sc_spellcheck", type: "offbool", def: true },
+    // 'off' disables
+    movieLinks: { key: "sc_movie_links", type: "offbool", def: true },
+    chatFontSize: { key: "sc_chat_fontsize", type: "string", def: "" },
+    couchMode: { key: "sc_couch_mode", type: "onbool", def: false },
+    // 'on' enables
+    watchAlong: { key: "sc_watch_along", type: "onbool", def: false },
+    castMute: { key: "sc_cast_fallback_mute", type: "onbool", def: false },
+    chatMode: { key: "sc_chat_mode", type: "string", def: "sidebar" },
+    updateCache: { key: "sc_update_cache", type: "json", def: null }
+  };
+  function getSetting(n) {
+    const d = DEFS[n];
+    const raw = localStorage.getItem(d.key);
+    if (raw === null || raw === "") return d.def;
+    if (d.type === "offbool") return raw !== "off";
+    if (d.type === "onbool") return raw === "on";
+    if (d.type === "flag") return true;
+    if (d.type === "json") {
+      try {
+        return JSON.parse(raw);
+      } catch (e) {
+        return d.def;
+      }
+    }
+    return raw;
+  }
+
   // src/store.js
   var LS_TMDB = "sc_tmdb_key";
   var LS_ONBOARDED = "sc_onboarded";
@@ -60,11 +93,11 @@
   var getKey = (id) => localStorage.getItem(id) || "";
   var setKey = (id, v) => localStorage.setItem(id, v.trim());
   var hasKey = (id) => !!getKey(id);
-  var spellCheckEnabled = () => getKey(LS_SPELLCHECK) !== "off";
-  var movieLinksEnabled = () => getKey(LS_MOVIE_LINKS) !== "off";
-  var couchModeEnabled = () => getKey(LS_COUCH) === "on";
-  var watchAlongEnabled = () => getKey(LS_WATCHALONG) === "on";
-  var castFallbackMuted = () => getKey(LS_CAST_MUTE) === "on";
+  var spellCheckEnabled = () => getSetting("spellcheck");
+  var movieLinksEnabled = () => getSetting("movieLinks");
+  var couchModeEnabled = () => getSetting("couchMode");
+  var watchAlongEnabled = () => getSetting("watchAlong");
+  var castFallbackMuted = () => getSetting("castMute");
 
   // src/readability.js
   function detectReadabilityIssues(text) {

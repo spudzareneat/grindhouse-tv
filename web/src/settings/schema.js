@@ -1,0 +1,30 @@
+// Storage stays legacy-compatible; normalization lives here.
+const DEFS = {
+    tmdbKey:      { key: 'sc_tmdb_key',           type: 'string', def: '' },
+    onboarded:    { key: 'sc_onboarded',          type: 'flag',   def: false },          // set = true
+    spellcheck:   { key: 'sc_spellcheck',         type: 'offbool', def: true },          // 'off' disables
+    movieLinks:   { key: 'sc_movie_links',        type: 'offbool', def: true },
+    chatFontSize: { key: 'sc_chat_fontsize',      type: 'string', def: '' },
+    couchMode:    { key: 'sc_couch_mode',         type: 'onbool', def: false },          // 'on' enables
+    watchAlong:   { key: 'sc_watch_along',        type: 'onbool', def: false },
+    castMute:     { key: 'sc_cast_fallback_mute', type: 'onbool', def: false },
+    chatMode:     { key: 'sc_chat_mode',          type: 'string', def: 'sidebar' },
+    updateCache:  { key: 'sc_update_cache',       type: 'json',   def: null },
+};
+export function getSetting(n) {
+    const d = DEFS[n]; const raw = localStorage.getItem(d.key);
+    if (raw === null || raw === '') return d.def;
+    if (d.type === 'offbool') return raw !== 'off';
+    if (d.type === 'onbool') return raw === 'on';
+    if (d.type === 'flag') return true;
+    if (d.type === 'json') { try { return JSON.parse(raw); } catch { return d.def; } }
+    return raw;
+}
+export function setSetting(n, v) {
+    const d = DEFS[n];
+    if (d.type === 'offbool') return localStorage.setItem(d.key, v ? 'on' : 'off');
+    if (d.type === 'onbool') return localStorage.setItem(d.key, v ? 'on' : '');
+    if (d.type === 'flag') return localStorage.setItem(d.key, '1');
+    if (d.type === 'json') return localStorage.setItem(d.key, JSON.stringify(v));
+    localStorage.setItem(d.key, String(v).trim());
+}
