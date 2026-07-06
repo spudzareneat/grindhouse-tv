@@ -1,5 +1,59 @@
 /* GENERATED FILE — do not edit. Source: web/src/**. Rebuild: cd web && npm run bundle */
 (() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __esm = (fn, res) => function __init() {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  };
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+
+  // src/native.js
+  var native_exports = {};
+  __export(native_exports, {
+    nativeHttpGet: () => nativeHttpGet
+  });
+  function nativeHttpGet(url, headers = {}) {
+    return new Promise((resolve, reject) => {
+      if (!(window.CytubeNative && typeof CytubeNative.httpGet === "function")) {
+        reject(new Error("native http unavailable"));
+        return;
+      }
+      const id = "h" + Math.random().toString(36).slice(2);
+      _scHttpCbs[id] = (res) => {
+        if (res && res.error) reject(new Error(res.error));
+        else resolve(res);
+      };
+      try {
+        CytubeNative.httpGet(id, url, JSON.stringify(headers));
+      } catch (e) {
+        delete _scHttpCbs[id];
+        reject(e);
+      }
+      setTimeout(() => {
+        if (_scHttpCbs[id]) {
+          delete _scHttpCbs[id];
+          reject(new Error("timeout"));
+        }
+      }, 1e4);
+    });
+  }
+  var _scHttpCbs;
+  var init_native = __esm({
+    "src/native.js"() {
+      _scHttpCbs = {};
+      window.__scHttpResolve = function(id, res) {
+        const cb = _scHttpCbs[id];
+        if (cb) {
+          delete _scHttpCbs[id];
+          cb(res);
+        }
+      };
+    }
+  });
+
   // src/chat/usernames.js
   function getChatUsernames() {
     const names = /* @__PURE__ */ new Set();
@@ -484,123 +538,47 @@
     return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
   }();
 
-  // src/lineup/data.js
-  async function getTonightsLineup() {
-    return {
-      items: [
-        {
-          cleanTitle: "The Beyond",
-          cleanYear: "1981",
-          isNowPlaying: true,
-          etaLabel: "",
-          poster: null,
-          backdrop: null,
-          overview: "A woman inherits a Louisiana hotel built over one of the seven gateways to Hell."
-        },
-        {
-          cleanTitle: "American Hunter",
-          cleanYear: "1988",
-          isNowPlaying: false,
-          etaLabel: "≈ 9:20 PM",
-          poster: null,
-          backdrop: null,
-          overview: "A grizzled ex-mercenary is hired to track a killer through the wilderness."
-        },
-        {
-          cleanTitle: "Zombie Holocaust",
-          cleanYear: "1980",
-          isNowPlaying: false,
-          etaLabel: "~ 11:00 PM",
-          poster: null,
-          backdrop: null,
-          overview: "A series of grisly murders at a New York hospital leads to a remote island of cannibals."
-        },
-        {
-          cleanTitle: "Nightbeast",
-          cleanYear: "1982",
-          isNowPlaying: false,
-          etaLabel: "LATE",
-          poster: null,
-          backdrop: null,
-          overview: "An alien crash-lands and terrorizes a small town."
-        },
-        {
-          cleanTitle: "Sole Survivor",
-          cleanYear: "1984",
-          isNowPlaying: false,
-          etaLabel: "LATE",
-          poster: null,
-          backdrop: null,
-          overview: "A plane crash survivor is stalked by the shadowy figures of everyone who was meant to die with her."
-        }
-      ]
-    };
-  }
-
-  // src/mediatime.js
-  var mediaState = {
-    currentMediaSeconds: 0,
-    currentMediaType: "",
-    currentPlaybackTime: 0
+  // src/lineup/letterboxd.js
+  var LISTS_URL = "https://letterboxd.com/420grindhouse/lists/";
+  var BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
   };
-  function parseTimeToSeconds(t) {
-    const parts = String(t).trim().split(":").map(Number);
-    if (!parts.length || parts.some(isNaN)) return 0;
-    return parts.reduce((acc, v) => acc * 60 + v, 0);
+  function findCurrentWeekListUrl(listsPageHtml) {
+    const m = listsPageHtml.match(/href="(\/420grindhouse\/list\/[^"]*grindhouse-schedule[^"]*\/)"/i);
+    return m ? "https://letterboxd.com" + m[1] : null;
   }
-  function getCurrentMediaSeconds() {
-    if (mediaState.currentMediaSeconds > 0) return mediaState.currentMediaSeconds;
-    const el = document.querySelector("#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time");
-    return el ? parseTimeToSeconds(el.textContent) : 0;
+  function decodeHtmlEntities(s) {
+    return s.replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10))).replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">");
   }
-  function getCurrentPlaybackSeconds() {
-    const v = document.querySelector("#videowrap video");
-    if (v && isFinite(v.currentTime) && v.currentTime > 0) return v.currentTime;
-    return mediaState.currentPlaybackTime;
-  }
-  function formatHMS(s) {
-    s = Math.max(0, Math.floor(s || 0));
-    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
-    const pad = (n) => String(n).padStart(2, "0");
-    return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
-  }
-
-  // src/native.js
-  var _scHttpCbs = {};
-  window.__scHttpResolve = function(id, res) {
-    const cb = _scHttpCbs[id];
-    if (cb) {
-      delete _scHttpCbs[id];
-      cb(res);
+  function parseListTitles(listPageHtml) {
+    const re = /data-item-name="([^"]*)"/g;
+    const items = [];
+    let m;
+    while (m = re.exec(listPageHtml)) {
+      const decoded = decodeHtmlEntities(m[1]);
+      const ym = decoded.match(/^(.*)\s\((\d{4})\)$/);
+      if (ym) items.push({ title: ym[1].trim(), year: ym[2] });
     }
-  };
-  function nativeHttpGet(url, headers = {}) {
-    return new Promise((resolve, reject) => {
-      if (!(window.CytubeNative && typeof CytubeNative.httpGet === "function")) {
-        reject(new Error("native http unavailable"));
-        return;
-      }
-      const id = "h" + Math.random().toString(36).slice(2);
-      _scHttpCbs[id] = (res) => {
-        if (res && res.error) reject(new Error(res.error));
-        else resolve(res);
-      };
-      try {
-        CytubeNative.httpGet(id, url, JSON.stringify(headers));
-      } catch (e) {
-        delete _scHttpCbs[id];
-        reject(e);
-      }
-      setTimeout(() => {
-        if (_scHttpCbs[id]) {
-          delete _scHttpCbs[id];
-          reject(new Error("timeout"));
-        }
-      }, 1e4);
-    });
+    return items;
   }
+  async function fetchTonightsSchedule() {
+    const { nativeHttpGet: nativeHttpGet2 } = await Promise.resolve().then(() => (init_native(), native_exports));
+    const listsRes = await nativeHttpGet2(LISTS_URL, BROWSER_HEADERS);
+    if (!listsRes || listsRes.status !== 200) throw new Error("Letterboxd lists HTTP " + (listsRes && listsRes.status));
+    const listUrl = findCurrentWeekListUrl(listsRes.body);
+    if (!listUrl) throw new Error("no current-week schedule list found");
+    const listRes = await nativeHttpGet2(listUrl, BROWSER_HEADERS);
+    if (!listRes || listRes.status !== 200) throw new Error("Letterboxd list HTTP " + (listRes && listRes.status));
+    const titles = parseListTitles(listRes.body);
+    if (!titles.length) throw new Error("no titles parsed from schedule list");
+    return titles;
+  }
+
+  // src/metadata/tmdb.js
+  init_native();
 
   // src/metadata/imdb.js
+  init_native();
   var IMDB_GQL = "https://caching.graphql.imdb.com/";
   var IMDB_HEADERS = {
     "Accept": "application/graphql+json, application/json",
@@ -789,6 +767,148 @@
     };
     movieState.movieLinkCache[cacheKey] = result;
     return result;
+  }
+
+  // src/mediatime.js
+  var mediaState = {
+    currentMediaSeconds: 0,
+    currentMediaType: "",
+    currentPlaybackTime: 0
+  };
+  function parseTimeToSeconds(t) {
+    const parts = String(t).trim().split(":").map(Number);
+    if (!parts.length || parts.some(isNaN)) return 0;
+    return parts.reduce((acc, v) => acc * 60 + v, 0);
+  }
+  function getCurrentMediaSeconds() {
+    if (mediaState.currentMediaSeconds > 0) return mediaState.currentMediaSeconds;
+    const el = document.querySelector("#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time");
+    return el ? parseTimeToSeconds(el.textContent) : 0;
+  }
+  function getCurrentPlaybackSeconds() {
+    const v = document.querySelector("#videowrap video");
+    if (v && isFinite(v.currentTime) && v.currentTime > 0) return v.currentTime;
+    return mediaState.currentPlaybackTime;
+  }
+  function formatHMS(s) {
+    s = Math.max(0, Math.floor(s || 0));
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+    const pad = (n) => String(n).padStart(2, "0");
+    return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+  }
+
+  // src/lineup/timing.js
+  function formatEta(hour24, minute, precision) {
+    if (precision === "late") return "LATE";
+    const period = hour24 >= 12 ? "PM" : "AM";
+    let h = hour24 % 12;
+    if (h === 0) h = 12;
+    const mm = String(minute).padStart(2, "0");
+    const prefix = precision === "approx" ? "~" : "≈";
+    return `${prefix} ${h}:${mm} ${period}`;
+  }
+  function medianGapSeconds(observedGaps) {
+    if (!observedGaps.length) return null;
+    const sorted = [...observedGaps].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
+  // src/lineup/data.js
+  var _scheduleCache = null;
+  var _fetchFailed = false;
+  var _lastChangeMedia = null;
+  var _observedGapSeconds = [];
+  var _lastUnmatchedStart = null;
+  onSocket("changeMedia", (d) => {
+    const title = d && d.title;
+    const matchesSchedule = !!(title && _scheduleCache && _scheduleCache.some((s) => s.title.toLowerCase() === title.toLowerCase()));
+    if (title && !matchesSchedule && _scheduleCache) {
+      _lastUnmatchedStart = Date.now();
+    } else if (_lastUnmatchedStart) {
+      _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1e3);
+      _lastUnmatchedStart = null;
+    }
+    _lastChangeMedia = d || null;
+  });
+  async function ensureSchedule() {
+    if (_scheduleCache || _fetchFailed) return;
+    try {
+      _scheduleCache = await fetchTonightsSchedule();
+    } catch (e) {
+      _fetchFailed = true;
+    }
+  }
+  function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+      items.push({
+        cleanTitle: movieState.lastMovieTitle,
+        cleanYear: null,
+        poster: null,
+        backdrop: null,
+        overview: "",
+        isNowPlaying: true,
+        etaLabel: ""
+      });
+    }
+    if (_lastChangeMedia && _lastChangeMedia.title && _lastChangeMedia.title !== movieState.lastMovieTitle) {
+      items.push({
+        cleanTitle: _lastChangeMedia.title,
+        cleanYear: null,
+        poster: null,
+        backdrop: null,
+        overview: "",
+        isNowPlaying: false,
+        etaLabel: "LATE"
+      });
+    }
+    return items;
+  }
+  async function getTonightsLineup() {
+    var _a;
+    await ensureSchedule();
+    if (!_scheduleCache) return { items: fallbackItems() };
+    const infos = await Promise.all(_scheduleCache.map(({ title, year }) => lookupMovie(title, year)));
+    const currentIndex = _scheduleCache.findIndex((s) => movieState.lastMovieTitle && s.title.toLowerCase() === movieState.lastMovieTitle.toLowerCase());
+    if (currentIndex === -1) {
+      return {
+        items: _scheduleCache.map(({ title, year }, i) => ({
+          cleanTitle: infos[i].cleanTitle || title,
+          cleanYear: infos[i].cleanYear || year,
+          poster: infos[i].poster || null,
+          backdrop: infos[i].backdrop || null,
+          overview: infos[i].overview || "",
+          isNowPlaying: false,
+          etaLabel: "LATE"
+        }))
+      };
+    }
+    const learnedGap = (_a = medianGapSeconds(_observedGapSeconds)) != null ? _a : 600;
+    let cumulative = Math.max(0, getCurrentMediaSeconds() - getCurrentPlaybackSeconds());
+    const items = [];
+    for (let i = currentIndex; i < _scheduleCache.length; i++) {
+      const { title, year } = _scheduleCache[i];
+      const info = infos[i];
+      const base = {
+        cleanTitle: info.cleanTitle || title,
+        cleanYear: info.cleanYear || year,
+        poster: info.poster || null,
+        backdrop: info.backdrop || null,
+        overview: info.overview || ""
+      };
+      const offset = i - currentIndex;
+      if (offset === 0) {
+        items.push({ ...base, isNowPlaying: true, etaLabel: "" });
+        continue;
+      }
+      cumulative += learnedGap;
+      const precision = offset === 1 ? "exact" : offset <= 3 ? "approx" : "late";
+      const eta = new Date(Date.now() + cumulative * 1e3);
+      items.push({ ...base, isNowPlaying: false, etaLabel: formatEta(eta.getHours(), eta.getMinutes(), precision) });
+      cumulative += info.runtime ? info.runtime * 60 : 0;
+    }
+    return { items };
   }
 
   // src/cards/trivia.js
@@ -2352,7 +2472,11 @@
     document.body.appendChild(btn);
   }
 
+  // src/settings.js
+  init_native();
+
   // src/update.js
+  init_native();
   var LS_UPDATE_CACHE = "sc_update_cache";
   var GH_RELEASES_API = "https://api.github.com/repos/spudzareneat/grindhouse-tv/releases/latest";
   var GH_RELEASES_PAGE = "https://github.com/spudzareneat/grindhouse-tv/releases/latest";
@@ -2699,6 +2823,7 @@
   }
 
   // src/player/drive.js
+  init_native();
   function initGoogleDrive() {
     const ITAG_QMAP = { 37: 1080, 46: 1080, 22: 720, 45: 720, 59: 480, 44: 480, 35: 480, 18: 360, 43: 360, 34: 360 };
     const ITAG_CMAP = {
