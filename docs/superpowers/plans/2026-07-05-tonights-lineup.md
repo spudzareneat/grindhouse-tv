@@ -1871,24 +1871,247 @@ git add web/src/tvnav.js app/src/main/assets/cytube_mobile.js
 git commit -m "fix: Lineup rail Left/Right can now reach items scrolled off the initial view"
 ```
 
-### Task 9i (design change per user's domain knowledge): widen the single-estimate cold-start window
+### Task 9i (design change per user's domain knowledge + real list data): parse the list's Published date
+
+**Files:**
+- Modify: `web/src/lineup/letterboxd.js`
+- Modify: `web/test/letterboxd.test.mjs`
+
+> **Context:** the user asked whether we know when a fetched Letterboxd list was actually created,
+> to tell a genuinely current list apart from a stale one left over from a prior week (relevant
+> Mon/Tue, before the new list is posted ~Wednesday). Checked the real list page
+> (`curl.exe`, 2026-07-06): it carries exactly one machine-readable timestamp,
+> `<span class="published">Published <time datetime="2026-07-01T16:00:37.212Z">`. This task parses
+> it; Task 9k uses it to gate on "is this list from the current week" using the actual system
+> clock, rather than guessing from a fixed day-count or day-of-week.
+
+**Interfaces:**
+- Produces: `parseListPublishedDate(listPageHtml)` -> ISO datetime string or `null`.
+  `fetchTonightsSchedule()`'s return shape gains a `publishedAt` field:
+  `{ listTitle, publishedAt, items }`.
+
+- [ ] **Step 1:** Add to `web/test/letterboxd.test.mjs` -- update the import line:
+
+```js
+import { findCurrentWeekListUrl, parseListPublishedDate, parseListTitle, parseListTitles } from '../src/lineup/letterboxd.js';
+```
+
+and add these two tests (the fixture is the real captured markup, 2026-07-06):
+
+```js
+const PUBLISHED_FIXTURE = '<p class="list-date"> <span class="published">Published <time datetime="2026-07-01T16:00:37.212Z" class="timeago -longform timeago-pending">2026-07-01T16:00:37.212Z</time></span> </p>';
+
+test('parseListPublishedDate extracts the ISO timestamp from the Published span', () => {
+    assert.strictEqual(parseListPublishedDate(PUBLISHED_FIXTURE), '2026-07-01T16:00:37.212Z');
+});
+test('parseListPublishedDate returns null when there is no Published span', () => {
+    assert.strictEqual(parseListPublishedDate('<p>no date here</p>'), null);
+});
+```
+
+- [ ] **Step 2:** Run to confirm the two new tests fail (module doesn't export
+      `parseListPublishedDate` yet): `cd web && node --test test/letterboxd.test.mjs`.
+- [ ] **Step 3:** In `web/src/lineup/letterboxd.js`, add the new function (place it after
+      `parseListTitle`):
+
+```js
+// The list page's "Published <time datetime="...">" gives the list's own creation timestamp --
+// used (Task 9k) to tell a genuinely current list apart from a stale one left from a prior week.
+export function parseListPublishedDate(listPageHtml) {
+    const m = listPageHtml.match(/<span class="published">[^<]*<time datetime="([^"]*)"/i);
+    return m ? m[1] : null;
+}
+```
+
+- [ ] **Step 4:** Change `fetchTonightsSchedule`'s return value -- replace:
+
+```js
+    const items = parseListTitles(listRes.body);
+    if (!items.length) throw new Error('no titles parsed from schedule list');
+    return { listTitle: parseListTitle(listRes.body), items };
+```
+
+with:
+
+```js
+    const items = parseListTitles(listRes.body);
+    if (!items.length) throw new Error('no titles parsed from schedule list');
+    return {
+        listTitle: parseListTitle(listRes.body),
+        publishedAt: parseListPublishedDate(listRes.body),
+        items,
+    };
+```
+
+- [ ] **Step 5:** Run all tests again: `node --test test/letterboxd.test.mjs` -- expect all PASS.
+- [ ] **Step 6:** `npm run lint` -- expect no errors.
+- [ ] **Step 7:** Commit:
+
+```bash
+git add web/src/lineup/letterboxd.js web/test/letterboxd.test.mjs
+git commit -m "feat: parse the Letterboxd list's Published date"
+```
+
+### Task 9j: `timing.js` -- current-week check (using system time) + widened cold-start window
+
+**Files:**
+- Modify: `web/src/lineup/timing.js`
+- Modify: `web/test/timing.test.mjs`
+
+**Interfaces:**
+- Produces: `isListForCurrentWeek(publishedAt, now = new Date())` -> boolean.
+  `isBeforeFridayNoonPacific(now = new Date())` -> boolean (moved here from `data.js`, widened,
+  and now independently unit-tested for the first time).
+
+> Per the user: rather than a fuzzy "N days old" threshold, use the actual system clock to check
+> whether the list's Published date falls in the *current* Mon-Sun calendar week (Pacific). A list
+> published Wednesday always covers the Fri-Sun immediately following, in the same Mon-Sun week --
+> so "published this week" is equivalent to "covers the upcoming/current weekend". This correctly
+> flips from `true` to `false` exactly at the Monday boundary, which is precisely the "no longer
+> Fri-Sun, and no new list yet" gap the user described.
+
+- [ ] **Step 1:** Add to `web/test/timing.test.mjs` the new tests (alongside the existing ones --
+      add this import line if not already present, and these test cases):
+
+```js
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from '../src/lineup/timing.js';
+
+// Fixed reference dates -- 2026-07-01 was confirmed a Wednesday from a real captured list page.
+const PUBLISHED = '2026-07-01T16:00:37.212Z'; // Wed 2026-07-01, 09:00 PDT
+
+test('isListForCurrentWeek: true for "now" later the same week (Friday)', () => {
+    assert.strictEqual(isListForCurrentWeek(PUBLISHED, new Date('2026-07-03T20:00:00.000Z')), true);
+});
+test('isListForCurrentWeek: true for "now" on the last day of that week (Sunday)', () => {
+    assert.strictEqual(isListForCurrentWeek(PUBLISHED, new Date('2026-07-05T20:00:00.000Z')), true);
+});
+test('isListForCurrentWeek: false once "now" crosses into the next week (Monday)', () => {
+    assert.strictEqual(isListForCurrentWeek(PUBLISHED, new Date('2026-07-06T20:00:00.000Z')), false);
+});
+test('isListForCurrentWeek: false well into the next week (Wednesday)', () => {
+    assert.strictEqual(isListForCurrentWeek(PUBLISHED, new Date('2026-07-08T20:00:00.000Z')), false);
+});
+test('isListForCurrentWeek: false when publishedAt is null', () => {
+    assert.strictEqual(isListForCurrentWeek(null, new Date('2026-07-03T20:00:00.000Z')), false);
+});
+test('isListForCurrentWeek: false when publishedAt is unparseable', () => {
+    assert.strictEqual(isListForCurrentWeek('not-a-date', new Date('2026-07-03T20:00:00.000Z')), false);
+});
+
+test('isBeforeFridayNoonPacific: true on Wednesday', () => {
+    assert.strictEqual(isBeforeFridayNoonPacific(new Date('2026-07-01T20:00:00.000Z')), true);
+});
+test('isBeforeFridayNoonPacific: true on Thursday', () => {
+    assert.strictEqual(isBeforeFridayNoonPacific(new Date('2026-07-02T20:00:00.000Z')), true);
+});
+test('isBeforeFridayNoonPacific: true Friday morning before noon Pacific', () => {
+    assert.strictEqual(isBeforeFridayNoonPacific(new Date('2026-07-03T18:00:00.000Z')), true); // 11:00 PDT
+});
+test('isBeforeFridayNoonPacific: false Friday afternoon after noon Pacific', () => {
+    assert.strictEqual(isBeforeFridayNoonPacific(new Date('2026-07-03T20:00:00.000Z')), false); // 13:00 PDT
+});
+test('isBeforeFridayNoonPacific: false on Saturday', () => {
+    assert.strictEqual(isBeforeFridayNoonPacific(new Date('2026-07-04T20:00:00.000Z')), false);
+});
+test('isBeforeFridayNoonPacific: false on Monday', () => {
+    assert.strictEqual(isBeforeFridayNoonPacific(new Date('2026-07-06T20:00:00.000Z')), false);
+});
+```
+
+  (If `formatEta`/`medianGapSeconds` are already imported from a prior task's test additions in
+  this file, merge the import list rather than duplicating the import statement.)
+
+- [ ] **Step 2:** Run to confirm the new tests fail (functions don't exist yet):
+      `cd web && node --test test/timing.test.mjs`.
+- [ ] **Step 3:** Add to `web/src/lineup/timing.js` (after the existing `medianGapSeconds`):
+
+```js
+const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+const DAY_MS = 86400000;
+
+// A UTC-anchored timestamp for just d's Pacific CALENDAR DATE (no time-of-day) -- safe for
+// day-difference arithmetic regardless of DST, since we never touch the time component.
+function pacificDateOnly(d) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(d);
+    const get = (t) => parts.find(p => p.type === t).value;
+    return Date.UTC(+get('year'), +get('month') - 1, +get('day'));
+}
+
+function pacificWeekday(d) {
+    return new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short' }).format(d);
+}
+
+// True if the list's Published timestamp falls within the current Mon-Sun week (Pacific) --
+// i.e. this is genuinely the current week's list, not a stale one left from a prior week. A
+// list published Wednesday always covers the Fri-Sun immediately following, in the same
+// Mon-Sun calendar week, so "published this week" is equivalent to "covers the
+// upcoming/current weekend".
+export function isListForCurrentWeek(publishedAt, now = new Date()) {
+    if (!publishedAt) return false;
+    const pub = new Date(publishedAt);
+    if (isNaN(pub.getTime())) return false;
+
+    const todayIdx = WEEKDAY_INDEX[pacificWeekday(now)];
+    const daysSinceMonday = (todayIdx + 6) % 7; // Mon=0 ... Sun=6
+    const startOfWeek = pacificDateOnly(now) - daysSinceMonday * DAY_MS;
+    const startOfNextWeek = startOfWeek + 7 * DAY_MS;
+
+    const pubDay = pacificDateOnly(pub);
+    return pubDay >= startOfWeek && pubDay < startOfNextWeek;
+}
+
+// True during the window the list exists but nothing live has started yet: the list is
+// typically posted Wednesday for the upcoming Fri-Sun marathon, and showtime is "about Noon
+// PST" on Friday. Wed/Thu/Fri-before-noon get one coarse "the first film starts around then"
+// guess; Sat/Sun (marathon likely live already) and Mon/Tue don't -- and by the time this is
+// checked, the caller has already confirmed via isListForCurrentWeek() that the list itself is
+// genuinely current, so Mon/Tue staleness is handled separately, not by this function.
+export function isBeforeFridayNoonPacific(now = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles', weekday: 'short', hour: 'numeric', hourCycle: 'h23',
+    }).formatToParts(now);
+    const weekday = parts.find(p => p.type === 'weekday').value;
+    const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
+    if (weekday === 'Wed' || weekday === 'Thu') return true;
+    if (weekday === 'Fri') return hour < 12;
+    return false;
+}
+```
+
+- [ ] **Step 4:** Run the tests again: `node --test test/timing.test.mjs` -- expect all PASS.
+- [ ] **Step 5:** `npm run lint` -- expect no errors.
+- [ ] **Step 6:** Commit:
+
+```bash
+git add web/src/lineup/timing.js web/test/timing.test.mjs
+git commit -m "feat: current-week check (system time) + widened cold-start estimate window"
+```
+
+### Task 9k: `data.js` -- gate on the list actually being current, wire the widened estimate window
 
 **Files:**
 - Modify: `web/src/lineup/data.js`
 
-> **Context:** the schedule list is typically posted on Wednesday for the upcoming Friday-Sunday
-> marathon, and there's no live anchor until the marathon actually starts (~Friday noon Pacific).
-> The existing `isFridayBeforeNoonPacific()` heuristic only offers the single first-film estimate
-> on Friday itself -- widen it to Wednesday/Thursday/Friday-before-noon, matching the real window
-> during which a list exists but nothing live has started yet. Saturday/Sunday/Monday/Tuesday keep
-> today's plain `LATE` behavior (no special estimate) -- Sat/Sun should have live data once the
-> marathon is running, and Mon/Tue is the stretch where the "newest" fetchable list is likely still
-> *last* week's already-aired one (no reliable way to detect that staleness without a posted-date
-> signal from the list page, so offering an estimate there risks being wrong rather than merely
-> imprecise -- a known, accepted limitation, not something this change attempts to solve).
+**Interfaces:**
+- Consumes: `isListForCurrentWeek`, `isBeforeFridayNoonPacific` from `./timing.js` (Task 9j);
+  `fetchTonightsSchedule()`'s `publishedAt` field (Task 9i).
 
-- [ ] **Step 1:** In `web/src/lineup/data.js`, rename and widen `isFridayBeforeNoonPacific` --
-      replace:
+- [ ] **Step 1:** Update the imports -- replace:
+
+```js
+import { formatEta, medianGapSeconds } from './timing.js';
+```
+
+with:
+
+```js
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+```
+
+- [ ] **Step 2:** Remove the now-redundant local `isFridayBeforeNoonPacific` function entirely --
+      delete this whole block (it's replaced by the imported `isBeforeFridayNoonPacific`):
 
 ```js
 // True only during the narrow window this heuristic exists for: the list is usually posted
@@ -1904,27 +2127,45 @@ function isFridayBeforeNoonPacific(now = new Date()) {
 }
 ```
 
-with:
+- [ ] **Step 3:** Gate `ensureSchedule()` on the list actually being for the current week -- replace:
 
 ```js
-// True during the window the list exists but nothing live has started yet: the list is
-// typically posted Wednesday for the upcoming Fri-Sun marathon, and showtime is "about Noon
-// PST" on Friday. Wed/Thu/Fri-before-noon get one coarse "the first film starts around
-// then" guess; Sat/Sun (marathon likely live already) and Mon/Tue (the newest fetchable list
-// is probably still last week's already-aired one, with no way to tell from here) don't.
-function isBeforeFridayNoonPacific(now = new Date()) {
-    const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/Los_Angeles', weekday: 'short', hour: 'numeric', hourCycle: 'h23',
-    }).formatToParts(now);
-    const weekday = parts.find(p => p.type === 'weekday').value;
-    const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
-    if (weekday === 'Wed' || weekday === 'Thu') return true;
-    if (weekday === 'Fri') return hour < 12;
-    return false;
+async function ensureSchedule() {
+    if (_scheduleCache || _fetchFailed) return;
+    try {
+        const result = await fetchTonightsSchedule();
+        _scheduleCache = result.items;
+        _listTitle = result.listTitle;
+    } catch (e) {
+        _fetchFailed = true;
+    }
 }
 ```
 
-- [ ] **Step 2:** Update the one call site -- replace:
+with:
+
+```js
+async function ensureSchedule() {
+    if (_scheduleCache || _fetchFailed) return;
+    try {
+        const result = await fetchTonightsSchedule();
+        if (!isListForCurrentWeek(result.publishedAt)) {
+            // Stale -- this list covers a weekend from a prior week (most likely Mon/Tue,
+            // before the new one is posted ~Wednesday). Treat it the same as a fetch
+            // failure: fall back to the Now/Next-only view rather than show a whole
+            // already-aired weekend's lineup as if it were still upcoming.
+            _fetchFailed = true;
+            return;
+        }
+        _scheduleCache = result.items;
+        _listTitle = result.listTitle;
+    } catch (e) {
+        _fetchFailed = true;
+    }
+}
+```
+
+- [ ] **Step 4:** Update the call site -- replace:
 
 ```js
         const fridayEstimate = isFridayBeforeNoonPacific();
@@ -1937,14 +2178,14 @@ with:
 ```
 
   (the local variable name `fridayEstimate` and the `'≈ Fri 12:00 PM'` label text stay exactly as
-  they are -- only the function that decides *when* to set it changes.)
+  they are -- only where the deciding function comes from changes.)
 
-- [ ] **Step 3:** `cd web && npm run lint` -- expect no errors.
-- [ ] **Step 4:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+- [ ] **Step 5:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 6:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
       `bundled OK` and exit 0.
-- [ ] **Step 5:** Commit:
+- [ ] **Step 7:** Commit:
 
 ```bash
 git add web/src/lineup/data.js app/src/main/assets/cytube_mobile.js
-git commit -m "feat: offer the cold-start estimate Wed-Fri-noon, not just Friday morning"
+git commit -m "feat: fall back when the fetched list isn't for the current week"
 ```
