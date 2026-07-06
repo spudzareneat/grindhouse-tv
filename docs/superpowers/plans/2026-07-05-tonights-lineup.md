@@ -2189,3 +2189,197 @@ with:
 git add web/src/lineup/data.js app/src/main/assets/cytube_mobile.js
 git commit -m "feat: fall back when the fetched list isn't for the current week"
 ```
+
+### Task 9l (device feedback): extract MOTD poster-image reading into a shared module
+
+**Files:**
+- Create: `web/src/motd.js`
+- Modify: `web/src/posters.js`
+
+> **Context:** the "Now/Next" fallback (used when Letterboxd is unreachable or this week's list
+> hasn't posted yet) doesn't work well as a user experience. Feedback: fall back to the same
+> admin-curated "Coming Attractions" poster art the small strip already shows instead -- there's
+> always something real to look at that way. Both the poster strip (`posters.js`) and the Lineup
+> fallback (`lineup/data.js`, Task 9m) need the same MOTD-image-reading logic. Putting it in a
+> shared `motd.js` (rather than having `data.js` import from `posters.js` directly) avoids a
+> circular import: `posters.js` already imports `showLineupScreen` from `lineup/screen.js`, which
+> imports `getTonightsLineup` from `lineup/data.js` -- `data.js` importing back from `posters.js`
+> would complete a cycle.
+
+**Interfaces:**
+- Produces: `getMotdPosterImages()` -> array of `<img>` elements (empty array if `#motdrow`
+  doesn't exist or has no qualifying images). Consumed by `posters.js` (this task) and
+  `lineup/data.js` (Task 9m).
+
+- [ ] **Step 1:** Create `web/src/motd.js`:
+
+```js
+/* ==========================================================
+   MOTD POSTER IMAGES -- the admin-curated "Coming Attractions" art from
+   #motdrow. Shared by the small poster strip (posters.js) and the
+   Tonight's Lineup fallback (lineup/data.js) when Letterboxd isn't
+   usable, so there's still real curated art to look at either way.
+========================================================== */
+export function getMotdPosterImages() {
+    const motd = document.getElementById('motdrow');
+    if (!motd) return [];
+    return [...motd.querySelectorAll('img')].filter((img) => {
+        // Poster images in the MOTD are 125x175 — keep portrait-ish images, skip wide banners.
+        const w = parseInt(img.getAttribute('width') || '0', 10);
+        const h = parseInt(img.getAttribute('height') || '0', 10);
+        return h >= 100 && w <= 200;
+    });
+}
+```
+
+- [ ] **Step 2:** In `web/src/posters.js`, add the import at the top of the file:
+
+```js
+import { getMotdPosterImages } from './motd.js';
+```
+
+- [ ] **Step 3:** In `initPosterStrip()`, replace the inline MOTD lookup/filter -- change:
+
+```js
+export function initPosterStrip() {
+    const motd = document.getElementById('motdrow');
+    if (!motd) return;
+
+    // Build the poster strip container from MOTD images
+    const imgs = [...motd.querySelectorAll('img')].filter(img => {
+        // Read HTML attributes (not rendered dimensions — motdrow is hidden so rendered = 0)
+        const w = parseInt(img.getAttribute('width') || 0);
+        const h = parseInt(img.getAttribute('height') || 0);
+        // Poster images in the MOTD are 125x175 — keep portrait-ish images, skip wide banners
+        return h >= 100 && w <= 200;
+    });
+    if (!imgs.length) return;
+```
+
+to:
+
+```js
+export function initPosterStrip() {
+    // Build the poster strip container from MOTD images
+    const imgs = getMotdPosterImages();
+    if (!imgs.length) return;
+```
+
+- [ ] **Step 4:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 5:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 6 (DEVICE smoke, quick check only):** the small Coming Attractions poster strip
+      (phone/touch behavior, or the toggle-button path if somehow reached) should look and behave
+      completely unchanged -- this step is a pure refactor with no intended behavior change.
+- [ ] **Step 7:** Commit:
+
+```bash
+git add web/src/motd.js web/src/posters.js app/src/main/assets/cytube_mobile.js
+git commit -m "refactor: extract MOTD poster-image reading into a shared module"
+```
+
+### Task 9m (device feedback): fall back to the static Coming Attractions art, not a live Now/Next view
+
+**Files:**
+- Modify: `web/src/lineup/data.js`
+
+**Interfaces:**
+- Consumes: `getMotdPosterImages()` from `../motd.js` (Task 9l).
+
+- [ ] **Step 1:** Add the import -- change:
+
+```js
+import { fetchTonightsSchedule } from './letterboxd.js';
+import { lookupMovie, movieState } from '../metadata/tmdb.js';
+import { onSocket } from '../socket.js';
+import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+```
+
+to:
+
+```js
+import { fetchTonightsSchedule } from './letterboxd.js';
+import { lookupMovie, movieState } from '../metadata/tmdb.js';
+import { onSocket } from '../socket.js';
+import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+import { getMotdPosterImages } from '../motd.js';
+```
+
+- [ ] **Step 2:** Rename the fallback title constant to match what it now actually shows -- change:
+
+```js
+const FALLBACK_LIST_TITLE = 'Now / Next';
+```
+
+to:
+
+```js
+const FALLBACK_LIST_TITLE = 'Coming Attractions';
+```
+
+- [ ] **Step 3:** Rewrite `fallbackItems()` -- replace:
+
+```js
+// Now/Next-only fallback: only what a plain viewer can see live, no future lineup.
+function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+        items.push({
+            cleanTitle: movieState.lastMovieTitle, cleanYear: null,
+            poster: null, backdrop: null, overview: '',
+            isNowPlaying: true, etaLabel: '',
+        });
+    }
+    if (_lastChangeMedia && _lastChangeMedia.title && _lastChangeMedia.title !== movieState.lastMovieTitle) {
+        items.push({
+            cleanTitle: _lastChangeMedia.title, cleanYear: null,
+            poster: null, backdrop: null, overview: '',
+            isNowPlaying: false, etaLabel: 'LATE',
+        });
+    }
+    return items;
+}
+```
+
+with:
+
+```js
+// Fallback when Letterboxd is unreachable or this week's list hasn't posted yet: the current
+// item (if known) plus the same admin-curated "Coming Attractions" art the small poster strip
+// shows -- no real title/time data for those, but still something real to look at instead of
+// an empty or thin live-only view.
+function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+        items.push({
+            cleanTitle: movieState.lastMovieTitle, cleanYear: null,
+            poster: null, backdrop: null, overview: '',
+            isNowPlaying: true, etaLabel: '',
+        });
+    }
+    getMotdPosterImages().forEach((img) => {
+        items.push({
+            cleanTitle: img.title || img.alt || 'Coming Attraction', cleanYear: null,
+            poster: img.src, backdrop: null, overview: '',
+            isNowPlaying: false, etaLabel: 'LATE',
+        });
+    });
+    return items;
+}
+```
+
+  Note: `_lastChangeMedia` is still read by the bumper-gap-learning `onSocket('changeMedia', ...)`
+  listener elsewhere in this file -- only `fallbackItems()`'s own use of it is removed here, the
+  variable itself and that listener are untouched.
+
+- [ ] **Step 4:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 5:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 6:** Commit:
+
+```bash
+git add web/src/lineup/data.js app/src/main/assets/cytube_mobile.js
+git commit -m "fix: Lineup fallback shows the static Coming Attractions art, not a thin Now/Next view"
+```
