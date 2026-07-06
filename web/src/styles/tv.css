@@ -537,14 +537,28 @@
             #sc-lineup-rail {
                 display: flex !important; gap: 22px !important; width: 100% !important;
                 overflow-x: auto !important; overflow-y: hidden !important;
-                padding: 8px 4px 16px !important; scrollbar-width: none !important;
+                padding: 8px 4px 16px !important;
+                /* Snap fully to each item so paging Left/Right (and scrolling back) always
+                   settles on a whole poster — without this, scrollIntoView({inline:'nearest'})
+                   can leave a partially-scrolled position that chops a poster's edge. */
+                scroll-snap-type: x mandatory !important;
+                scrollbar-width: thin !important;
+                scrollbar-color: rgba(255,255,255,0.28) transparent !important;
             }
-            #sc-lineup-rail::-webkit-scrollbar { display: none !important; }
+            #sc-lineup-rail::-webkit-scrollbar { height: 8px !important; }
+            #sc-lineup-rail::-webkit-scrollbar-track { background: rgba(255,255,255,0.05) !important; border-radius: 10px !important; }
+            #sc-lineup-rail::-webkit-scrollbar-thumb {
+                background: rgba(255,255,255,0.28) !important; border-radius: 10px !important;
+                border: 2px solid transparent !important; background-clip: padding-box !important;
+            }
+            #sc-lineup-rail::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.45) !important; background-clip: padding-box !important; }
+            body.sc-tv #sc-lineup-rail::-webkit-scrollbar { height: 10px !important; }
             #sc-lineup-loading { color: rgba(255,255,255,0.6) !important; font-size: 18px !important; }
             .sc-lineup-item {
                 flex: 0 0 220px !important; background: transparent !important; border: none !important;
                 color: #fff !important; cursor: pointer !important; text-align: left !important;
                 padding: 0 !important; display: flex !important; flex-direction: column !important; gap: 10px !important;
+                scroll-snap-align: start !important;
             }
             .sc-lineup-poster {
                 width: 220px !important; height: 308px !important; border-radius: 8px !important;
@@ -558,6 +572,14 @@
             .sc-lineup-title { font-size: 15px !important; font-weight: 600 !important; line-height: 1.3 !important; }
             .sc-lineup-eta { font-size: 13px !important; color: rgba(255,255,255,0.6) !important; }
             .sc-lineup-item-current .sc-lineup-eta { color: var(--np-accent, #ff5b73) !important; font-weight: 700 !important; }
+            /* D-pad focus ring highlights just the poster art (not the whole tile — title/eta
+               stay plain), matching how the "now playing" marker above is scoped. Overrides
+               the generic body.sc-tv .sc-tv-focus rule via higher selector specificity. */
+            body.sc-tv .sc-lineup-item.sc-tv-focus { outline: none !important; box-shadow: none !important; }
+            body.sc-tv .sc-lineup-item.sc-tv-focus .sc-lineup-poster {
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
             body.sc-tv .sc-lineup-item { flex-basis: 260px !important; }
             body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }
             body.sc-tv .sc-lineup-title { font-size: 19px !important; }

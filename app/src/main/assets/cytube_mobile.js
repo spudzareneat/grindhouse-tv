@@ -4631,14 +4631,28 @@
             #sc-lineup-rail {\r
                 display: flex !important; gap: 22px !important; width: 100% !important;\r
                 overflow-x: auto !important; overflow-y: hidden !important;\r
-                padding: 8px 4px 16px !important; scrollbar-width: none !important;\r
+                padding: 8px 4px 16px !important;\r
+                /* Snap fully to each item so paging Left/Right (and scrolling back) always\r
+                   settles on a whole poster — without this, scrollIntoView({inline:'nearest'})\r
+                   can leave a partially-scrolled position that chops a poster's edge. */\r
+                scroll-snap-type: x mandatory !important;\r
+                scrollbar-width: thin !important;\r
+                scrollbar-color: rgba(255,255,255,0.28) transparent !important;\r
             }\r
-            #sc-lineup-rail::-webkit-scrollbar { display: none !important; }\r
+            #sc-lineup-rail::-webkit-scrollbar { height: 8px !important; }\r
+            #sc-lineup-rail::-webkit-scrollbar-track { background: rgba(255,255,255,0.05) !important; border-radius: 10px !important; }\r
+            #sc-lineup-rail::-webkit-scrollbar-thumb {\r
+                background: rgba(255,255,255,0.28) !important; border-radius: 10px !important;\r
+                border: 2px solid transparent !important; background-clip: padding-box !important;\r
+            }\r
+            #sc-lineup-rail::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.45) !important; background-clip: padding-box !important; }\r
+            body.sc-tv #sc-lineup-rail::-webkit-scrollbar { height: 10px !important; }\r
             #sc-lineup-loading { color: rgba(255,255,255,0.6) !important; font-size: 18px !important; }\r
             .sc-lineup-item {\r
                 flex: 0 0 220px !important; background: transparent !important; border: none !important;\r
                 color: #fff !important; cursor: pointer !important; text-align: left !important;\r
                 padding: 0 !important; display: flex !important; flex-direction: column !important; gap: 10px !important;\r
+                scroll-snap-align: start !important;\r
             }\r
             .sc-lineup-poster {\r
                 width: 220px !important; height: 308px !important; border-radius: 8px !important;\r
@@ -4652,6 +4666,14 @@
             .sc-lineup-title { font-size: 15px !important; font-weight: 600 !important; line-height: 1.3 !important; }\r
             .sc-lineup-eta { font-size: 13px !important; color: rgba(255,255,255,0.6) !important; }\r
             .sc-lineup-item-current .sc-lineup-eta { color: var(--np-accent, #ff5b73) !important; font-weight: 700 !important; }\r
+            /* D-pad focus ring highlights just the poster art (not the whole tile — title/eta\r
+               stay plain), matching how the "now playing" marker above is scoped. Overrides\r
+               the generic body.sc-tv .sc-tv-focus rule via higher selector specificity. */\r
+            body.sc-tv .sc-lineup-item.sc-tv-focus { outline: none !important; box-shadow: none !important; }\r
+            body.sc-tv .sc-lineup-item.sc-tv-focus .sc-lineup-poster {\r
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;\r
+                box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 10px 30px rgba(0,0,0,0.5) !important;\r
+            }\r
             body.sc-tv .sc-lineup-item { flex-basis: 260px !important; }\r
             body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }\r
             body.sc-tv .sc-lineup-title { font-size: 19px !important; }\r
