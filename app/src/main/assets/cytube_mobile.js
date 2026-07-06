@@ -4819,12 +4819,12 @@
                 scroll-snap-align: start !important;\r
             }\r
             .sc-lineup-poster {\r
-                width: 220px !important; height: 330px !important; border-radius: 8px !important;\r
+                width: 220px !important; height: 308px !important; border-radius: 8px !important;\r
                 background-color: rgba(255,255,255,0.08) !important;\r
-                background-size: cover !important; background-position: center !important;\r
+                background-size: contain !important; background-repeat: no-repeat !important;\r
+                background-position: center !important;\r
                 box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;\r
-                flex-shrink: 0 !important; /* keep the 2:3 box exact; the item column may\r
-                                              scroll/overflow before the poster compresses */\r
+                flex-shrink: 0 !important; /* keep the box exact regardless of available space */\r
             }\r
             .sc-lineup-item-current .sc-lineup-poster {\r
                 box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 10px 30px rgba(0,0,0,0.5) !important;\r
@@ -4841,7 +4841,7 @@
                 box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 10px 30px rgba(0,0,0,0.5) !important;\r
             }\r
             body.sc-tv .sc-lineup-item { flex-basis: 260px !important; }\r
-            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 390px !important; }\r
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }\r
             body.sc-tv .sc-lineup-title { font-size: 19px !important; }\r
             body.sc-tv .sc-lineup-eta { font-size: 16px !important; }\r
 \r

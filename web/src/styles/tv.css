@@ -566,12 +566,12 @@
                 scroll-snap-align: start !important;
             }
             .sc-lineup-poster {
-                width: 220px !important; height: 330px !important; border-radius: 8px !important;
+                width: 220px !important; height: 308px !important; border-radius: 8px !important;
                 background-color: rgba(255,255,255,0.08) !important;
-                background-size: cover !important; background-position: center !important;
+                background-size: contain !important; background-repeat: no-repeat !important;
+                background-position: center !important;
                 box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
-                flex-shrink: 0 !important; /* keep the 2:3 box exact; the item column may
-                                              scroll/overflow before the poster compresses */
+                flex-shrink: 0 !important; /* keep the box exact regardless of available space */
             }
             .sc-lineup-item-current .sc-lineup-poster {
                 box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 10px 30px rgba(0,0,0,0.5) !important;
@@ -588,7 +588,7 @@
                 box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 10px 30px rgba(0,0,0,0.5) !important;
             }
             body.sc-tv .sc-lineup-item { flex-basis: 260px !important; }
-            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 390px !important; }
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }
             body.sc-tv .sc-lineup-title { font-size: 19px !important; }
             body.sc-tv .sc-lineup-eta { font-size: 16px !important; }
 
