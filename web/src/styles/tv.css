@@ -518,6 +518,51 @@
             body.sc-tv #sc-trivia-close { width: 44px !important; height: 44px !important; font-size: 20px !important; }
             body.sc-tv .sc-trivia-item { font-size: 20px !important; padding: 16px 0 !important; }
 
+            /* ── TONIGHT'S LINEUP (full-screen TV schedule rail) ─────────────── */
+            #sc-lineup-screen {
+                position: fixed !important; inset: 0 !important;
+                z-index: 20500 !important; /* below #sc-np-card (21000) so OK on a film covers this */
+                background: rgba(6,4,9,0.97) !important;
+                display: none !important; flex-direction: column !important;
+                align-items: flex-start !important; justify-content: center !important;
+                font-family: 'Inter','Roboto',system-ui,sans-serif !important;
+                padding: 5vh 4vw !important; box-sizing: border-box !important;
+            }
+            #sc-lineup-screen.sc-lineup-visible { display: flex !important; }
+            #sc-lineup-header {
+                color: #fff !important; font-size: 15px !important; font-weight: 700 !important;
+                letter-spacing: 0.14em !important; text-transform: uppercase !important;
+                opacity: 0.6 !important; margin-bottom: 28px !important;
+            }
+            #sc-lineup-rail {
+                display: flex !important; gap: 22px !important; width: 100% !important;
+                overflow-x: auto !important; overflow-y: hidden !important;
+                padding: 8px 4px 16px !important; scrollbar-width: none !important;
+            }
+            #sc-lineup-rail::-webkit-scrollbar { display: none !important; }
+            #sc-lineup-loading { color: rgba(255,255,255,0.6) !important; font-size: 18px !important; }
+            .sc-lineup-item {
+                flex: 0 0 220px !important; background: transparent !important; border: none !important;
+                color: #fff !important; cursor: pointer !important; text-align: left !important;
+                padding: 0 !important; display: flex !important; flex-direction: column !important; gap: 10px !important;
+            }
+            .sc-lineup-poster {
+                width: 220px !important; height: 308px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: cover !important; background-position: center !important;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
+            .sc-lineup-item-current .sc-lineup-poster {
+                box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
+            .sc-lineup-title { font-size: 15px !important; font-weight: 600 !important; line-height: 1.3 !important; }
+            .sc-lineup-eta { font-size: 13px !important; color: rgba(255,255,255,0.6) !important; }
+            .sc-lineup-item-current .sc-lineup-eta { color: var(--np-accent, #ff5b73) !important; font-weight: 700 !important; }
+            body.sc-tv .sc-lineup-item { flex-basis: 260px !important; }
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }
+            body.sc-tv .sc-lineup-title { font-size: 19px !important; }
+            body.sc-tv .sc-lineup-eta { font-size: 16px !important; }
+
             /* Vertical phones (if enabled there): stack poster above text */
             body.sc-vertical #sc-np-content { flex-direction: column !important; align-items: flex-start !important; gap: 18px !important; bottom: 8% !important; }
             body.sc-vertical #sc-np-poster { width: 130px !important; }
@@ -555,6 +600,7 @@
             html body.sc-pip #sc-desync-btn, html body.sc-pip #sc-settings-btn,
             html body.sc-pip #sc-users-panel, html body.sc-pip #sc-poll-panel,
             html body.sc-pip #sc-np-card, html body.sc-pip #sc-trivia-card,
+            html body.sc-pip #sc-lineup-screen,
             html body.sc-pip #sc-mobile-input-row, html body.sc-pip .video-js .vjs-control-bar {
                 display: none !important;
             }

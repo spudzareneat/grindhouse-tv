@@ -4507,6 +4507,51 @@
             body.sc-tv #sc-trivia-close { width: 44px !important; height: 44px !important; font-size: 20px !important; }\r
             body.sc-tv .sc-trivia-item { font-size: 20px !important; padding: 16px 0 !important; }\r
 \r
+            /* ── TONIGHT'S LINEUP (full-screen TV schedule rail) ─────────────── */\r
+            #sc-lineup-screen {\r
+                position: fixed !important; inset: 0 !important;\r
+                z-index: 20500 !important; /* below #sc-np-card (21000) so OK on a film covers this */\r
+                background: rgba(6,4,9,0.97) !important;\r
+                display: none !important; flex-direction: column !important;\r
+                align-items: flex-start !important; justify-content: center !important;\r
+                font-family: 'Inter','Roboto',system-ui,sans-serif !important;\r
+                padding: 5vh 4vw !important; box-sizing: border-box !important;\r
+            }\r
+            #sc-lineup-screen.sc-lineup-visible { display: flex !important; }\r
+            #sc-lineup-header {\r
+                color: #fff !important; font-size: 15px !important; font-weight: 700 !important;\r
+                letter-spacing: 0.14em !important; text-transform: uppercase !important;\r
+                opacity: 0.6 !important; margin-bottom: 28px !important;\r
+            }\r
+            #sc-lineup-rail {\r
+                display: flex !important; gap: 22px !important; width: 100% !important;\r
+                overflow-x: auto !important; overflow-y: hidden !important;\r
+                padding: 8px 4px 16px !important; scrollbar-width: none !important;\r
+            }\r
+            #sc-lineup-rail::-webkit-scrollbar { display: none !important; }\r
+            #sc-lineup-loading { color: rgba(255,255,255,0.6) !important; font-size: 18px !important; }\r
+            .sc-lineup-item {\r
+                flex: 0 0 220px !important; background: transparent !important; border: none !important;\r
+                color: #fff !important; cursor: pointer !important; text-align: left !important;\r
+                padding: 0 !important; display: flex !important; flex-direction: column !important; gap: 10px !important;\r
+            }\r
+            .sc-lineup-poster {\r
+                width: 220px !important; height: 308px !important; border-radius: 8px !important;\r
+                background-color: rgba(255,255,255,0.08) !important;\r
+                background-size: cover !important; background-position: center !important;\r
+                box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;\r
+            }\r
+            .sc-lineup-item-current .sc-lineup-poster {\r
+                box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 10px 30px rgba(0,0,0,0.5) !important;\r
+            }\r
+            .sc-lineup-title { font-size: 15px !important; font-weight: 600 !important; line-height: 1.3 !important; }\r
+            .sc-lineup-eta { font-size: 13px !important; color: rgba(255,255,255,0.6) !important; }\r
+            .sc-lineup-item-current .sc-lineup-eta { color: var(--np-accent, #ff5b73) !important; font-weight: 700 !important; }\r
+            body.sc-tv .sc-lineup-item { flex-basis: 260px !important; }\r
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }\r
+            body.sc-tv .sc-lineup-title { font-size: 19px !important; }\r
+            body.sc-tv .sc-lineup-eta { font-size: 16px !important; }\r
+\r
             /* Vertical phones (if enabled there): stack poster above text */\r
             body.sc-vertical #sc-np-content { flex-direction: column !important; align-items: flex-start !important; gap: 18px !important; bottom: 8% !important; }\r
             body.sc-vertical #sc-np-poster { width: 130px !important; }\r
@@ -4544,6 +4589,7 @@
             html body.sc-pip #sc-desync-btn, html body.sc-pip #sc-settings-btn,\r
             html body.sc-pip #sc-users-panel, html body.sc-pip #sc-poll-panel,\r
             html body.sc-pip #sc-np-card, html body.sc-pip #sc-trivia-card,\r
+            html body.sc-pip #sc-lineup-screen,\r
             html body.sc-pip #sc-mobile-input-row, html body.sc-pip .video-js .vjs-control-bar {\r
                 display: none !important;\r
             }\r
