@@ -1069,3 +1069,397 @@ git commit -m "feat: Tonight's Lineup real Letterboxd pipeline (Stage 1)"
 - [ ] **Step 7: STOP.** Report results to the user and confirm Tonight's Lineup is complete, or
       note any follow-up (e.g. persisting the learned bumper gap across nights, which the vision
       doc mentions as a nice-to-have but this plan keeps session-only).
+
+---
+
+## Round 3 amendments (real-device + domain-knowledge feedback, added 2026-07-06)
+
+Live-tested against the actual room and Letterboxd site during Task 10 (see ledger). Feedback:
+the Letterboxd list spans the whole weekend undifferentiated by day (a linked Reddit post breaks
+it down by day, but that's explicitly out of scope for now -- "let's try starting with" simpler);
+the screen should show the real list title + a standing disclaimer instead of the static "Tonight's
+Lineup" label; estimates should only be attempted for the next 4 upcoming films (not just 3); a
+new cold-start case (current time is Friday before the usual noon-Pacific start, no live anchor at
+all) should give exactly one estimate (the first film, at Friday noon) and nothing else; browsing a
+film should show its IMDb parental-guide chips (the data was already being fetched by `lookupMovie`
+but silently dropped when building each item); poster art aspect ratio doesn't match TMDB's actual
+2:3 ratio, causing crop.
+
+### Task 8b: `letterboxd.js` -- parse the list's own title
+
+**Files:**
+- Modify: `web/src/lineup/letterboxd.js`
+- Modify: `web/test/letterboxd.test.mjs`
+
+**Interfaces:**
+- Produces: `parseListTitle(listPageHtml)` -> string or `null`. `fetchTonightsSchedule()`'s return
+  shape changes from `[{title, year}]` to `{ listTitle, items: [{title, year}] }`.
+
+> **Verified against the live site 2026-07-06** (`curl.exe`): the list page's
+> `<meta property="og:title" content="...">` carries the list's own clean title with no
+> site-suffix to strip (e.g. `"4th of July Weekend Grindhouse Schedule - Fri 7/3 - Sun 7/5/26"`)
+> -- cleaner than the `<title>` tag, which appends `" bull Letterboxd"`.
+
+- [ ] **Step 1:** Add to `web/test/letterboxd.test.mjs` (alongside the existing tests, same file):
+
+```js
+import { findCurrentWeekListUrl, parseListTitle, parseListTitles } from '../src/lineup/letterboxd.js';
+```
+
+(replacing the existing `import { findCurrentWeekListUrl, parseListTitles } from '../src/lineup/letterboxd.js';` line -- same import, just adding `parseListTitle`), and add these two tests:
+
+```js
+const TITLE_FIXTURE = '<html><head><meta property="og:title" content="4th of July Weekend Grindhouse Schedule - Fri 7/3 - Sun 7/5/26"></head><body></body></html>';
+
+test('parseListTitle extracts the lists own title from og:title', () => {
+    assert.strictEqual(parseListTitle(TITLE_FIXTURE), '4th of July Weekend Grindhouse Schedule - Fri 7/3 - Sun 7/5/26');
+});
+test('parseListTitle returns null when og:title is missing', () => {
+    assert.strictEqual(parseListTitle('<html><head></head><body></body></html>'), null);
+});
+```
+
+- [ ] **Step 2:** Run to confirm the two new tests fail (module doesn't export `parseListTitle`
+      yet): `cd web && node --test test/letterboxd.test.mjs`.
+- [ ] **Step 3:** In `web/src/lineup/letterboxd.js`, add the new function (place it after
+      `findCurrentWeekListUrl`, before `decodeHtmlEntities`):
+
+```js
+// The list page's <meta property="og:title"> carries the list's own clean title, no
+// site-suffix to strip (unlike the <title> tag, which appends a Letterboxd suffix).
+export function parseListTitle(listPageHtml) {
+    const m = listPageHtml.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']*)["']/i);
+    return m ? decodeHtmlEntities(m[1]).trim() : null;
+}
+```
+
+  Note: this places a call to `decodeHtmlEntities` before its definition in the file -- that's fine
+  for a `function` declaration (hoisted), but move `parseListTitle` to after
+  `decodeHtmlEntities` instead if you'd rather avoid relying on hoisting; either ordering works.
+
+- [ ] **Step 4:** Change `fetchTonightsSchedule`'s return value -- replace:
+
+```js
+    const titles = parseListTitles(listRes.body);
+    if (!titles.length) throw new Error('no titles parsed from schedule list');
+    return titles;
+```
+
+with:
+
+```js
+    const items = parseListTitles(listRes.body);
+    if (!items.length) throw new Error('no titles parsed from schedule list');
+    return { listTitle: parseListTitle(listRes.body), items };
+```
+
+- [ ] **Step 5:** Run all tests again: `node --test test/letterboxd.test.mjs` -> expect all PASS.
+- [ ] **Step 6:** `npm run lint` -- expect no errors.
+- [ ] **Step 7:** Commit:
+
+```bash
+git add web/src/lineup/letterboxd.js web/test/letterboxd.test.mjs
+git commit -m "feat: parse the Letterboxd list's own title for the Lineup screen header"
+```
+
+### Task 9b: `data.js` -- real list title, 4-film estimate window, Friday cold-start, parental-guide passthrough
+
+**Files:**
+- Modify: `web/src/lineup/data.js`
+
+**Interfaces:**
+- Consumes: `fetchTonightsSchedule()`'s new `{ listTitle, items }` shape (Task 8b).
+- Produces: `getTonightsLineup()` now returns `{ listTitle, items: [...] }` (items gain `rating`,
+  `genres`, `parentalGuide`, `killCount`, `imdbId` fields, passed straight through from `lookupMovie`
+  so browsing a film in `showNowPlayingCard` shows the same IMDb parental-guide chips/kill count
+  the real now-playing card shows).
+
+- [ ] **Step 1:** Replace the full contents of `web/src/lineup/data.js`:
+
+```js
+import { fetchTonightsSchedule } from './letterboxd.js';
+import { lookupMovie, movieState } from '../metadata/tmdb.js';
+import { onSocket } from '../socket.js';
+import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
+import { formatEta, medianGapSeconds } from './timing.js';
+
+/* ==========================================================
+   TONIGHT'S LINEUP -- data interface consumed by lineup/screen.js.
+   Fetches + caches the Letterboxd schedule once per session, locates "now" in
+   it via the live current title, and projects each of the next 4 upcoming
+   films' ETA from TMDB runtimes plus a learned median bumper-gap (beyond that,
+   compounding uncertainty isn't worth displaying as a time). Falls back to a
+   Now/Next-only view (built purely from live changeMedia data) if the
+   Letterboxd fetch fails, or to running-order-only (no times) if "now" can't
+   be placed on the list -- except the one case where a coarse anchor still
+   exists without a live match: Friday before the marathon's usual noon-Pacific
+   start, where the first film gets a single "starts around then" estimate.
+========================================================== */
+
+let _scheduleCache = null;   // [{title, year}] for the whole weekend, or null before first fetch
+let _listTitle = null;       // the real Letterboxd list's own title, shown as the screen header
+let _fetchFailed = false;    // sticky for the session once Letterboxd is unreachable
+let _lastChangeMedia = null; // most recent changeMedia payload (title), for the fallback
+let _observedGapSeconds = []; // durations (s) of changeMedia items that didn't match the schedule
+let _lastUnmatchedStart = null; // Date.now() when the current unmatched (bumper) item started
+
+const FALLBACK_LIST_TITLE = 'Now / Next';
+const MAX_ESTIMATED_AHEAD = 4; // only the next N upcoming films get any time estimate at all
+
+// Learn bumper-gap duration live: a changeMedia title that doesn't match anything in
+// tonight's schedule is a bumper; the time between it starting and the next
+// (matched-or-not) changeMedia is one observed gap sample.
+onSocket('changeMedia', (d) => {
+    const title = d && d.title;
+    const matchesSchedule = !!(title && _scheduleCache &&
+        _scheduleCache.some(s => s.title.toLowerCase() === title.toLowerCase()));
+    if (title && !matchesSchedule && _scheduleCache) {
+        _lastUnmatchedStart = Date.now();
+    } else if (_lastUnmatchedStart) {
+        _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1000);
+        _lastUnmatchedStart = null;
+    }
+    _lastChangeMedia = d || null;
+});
+
+async function ensureSchedule() {
+    if (_scheduleCache || _fetchFailed) return;
+    try {
+        const result = await fetchTonightsSchedule();
+        _scheduleCache = result.items;
+        _listTitle = result.listTitle;
+    } catch (e) {
+        _fetchFailed = true;
+    }
+}
+
+// Now/Next-only fallback: only what a plain viewer can see live, no future lineup.
+function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+        items.push({
+            cleanTitle: movieState.lastMovieTitle, cleanYear: null,
+            poster: null, backdrop: null, overview: '',
+            isNowPlaying: true, etaLabel: '',
+        });
+    }
+    if (_lastChangeMedia && _lastChangeMedia.title && _lastChangeMedia.title !== movieState.lastMovieTitle) {
+        items.push({
+            cleanTitle: _lastChangeMedia.title, cleanYear: null,
+            poster: null, backdrop: null, overview: '',
+            isNowPlaying: false, etaLabel: 'LATE',
+        });
+    }
+    return items;
+}
+
+// True only during the narrow window this heuristic exists for: the list is usually posted
+// mid-week and showtime is "about Noon PST" on Friday, so before Friday noon Pacific we have
+// no live anchor yet but CAN still make one coarse guess (the first film starts around then).
+function isFridayBeforeNoonPacific(now = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles', weekday: 'short', hour: 'numeric', hourCycle: 'h23',
+    }).formatToParts(now);
+    const weekday = parts.find(p => p.type === 'weekday').value;
+    const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
+    return weekday === 'Fri' && hour < 12;
+}
+
+// Every item's TMDB/IMDb-enriched fields, shared by both the matched and unmatched branches
+// below -- including parentalGuide/killCount/imdbId/rating/genres, which lookupMovie() already
+// fetches but earlier code dropped when building each item (browsing a film from the rail
+// showed none of the parent-guide chips the real now-playing card shows).
+function buildBase(info, title, year) {
+    return {
+        cleanTitle: info.cleanTitle || title,
+        cleanYear: info.cleanYear || year,
+        poster: info.poster || null,
+        backdrop: info.backdrop || null,
+        overview: info.overview || '',
+        rating: info.rating ?? null,
+        genres: info.genres || [],
+        parentalGuide: info.parentalGuide || null,
+        killCount: info.killCount ?? null,
+        imdbId: info.imdbId || null,
+    };
+}
+
+export async function getTonightsLineup() {
+    await ensureSchedule();
+    if (!_scheduleCache) return { listTitle: FALLBACK_LIST_TITLE, items: fallbackItems() };
+
+    const infos = await Promise.all(_scheduleCache.map(({ title, year }) => lookupMovie(title, year)));
+    const currentIndex = _scheduleCache.findIndex(s =>
+        movieState.lastMovieTitle && s.title.toLowerCase() === movieState.lastMovieTitle.toLowerCase());
+
+    if (currentIndex === -1) {
+        // Can't place "now" on the list (a bumper is playing, an off-schedule item is airing,
+        // or the marathon hasn't started this week) -- running order only, no times, per the
+        // vision doc's "never display precision the data can't support" -- except the single
+        // Friday-before-noon case, where the first film gets one coarse estimate.
+        const fridayEstimate = isFridayBeforeNoonPacific();
+        return {
+            listTitle: _listTitle || FALLBACK_LIST_TITLE,
+            items: _scheduleCache.map(({ title, year }, i) => ({
+                ...buildBase(infos[i], title, year),
+                isNowPlaying: false,
+                etaLabel: (fridayEstimate && i === 0) ? '≈ Fri 12:00 PM' : 'LATE',
+            })),
+        };
+    }
+
+    const learnedGap = medianGapSeconds(_observedGapSeconds) ?? 600; // 10-min cold-start default
+    let cumulative = Math.max(0, getCurrentMediaSeconds() - getCurrentPlaybackSeconds());
+    const items = [];
+    for (let i = currentIndex; i < _scheduleCache.length; i++) {
+        const { title, year } = _scheduleCache[i];
+        const info = infos[i];
+        const base = buildBase(info, title, year);
+        const offset = i - currentIndex;
+        if (offset === 0) { items.push({ ...base, isNowPlaying: true, etaLabel: '' }); continue; }
+
+        cumulative += learnedGap; // a bumper precedes this feature
+        if (offset > MAX_ESTIMATED_AHEAD) {
+            items.push({ ...base, isNowPlaying: false, etaLabel: 'LATE' });
+        } else {
+            const precision = offset === 1 ? 'exact' : 'approx';
+            const eta = new Date(Date.now() + cumulative * 1000);
+            items.push({ ...base, isNowPlaying: false, etaLabel: formatEta(eta.getHours(), eta.getMinutes(), precision) });
+        }
+        cumulative += info.runtime ? info.runtime * 60 : 0; // then this feature's own runtime
+    }
+    return { listTitle: _listTitle || FALLBACK_LIST_TITLE, items };
+}
+```
+
+- [ ] **Step 2:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 3:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 4:** Commit:
+
+```bash
+git add web/src/lineup/data.js app/src/main/assets/cytube_mobile.js
+git commit -m "feat: real list title, 4-film estimate window, Friday cold-start estimate, parental-guide passthrough"
+```
+
+### Task 9c: `screen.js` + `tv.css` -- dynamic header/subtitle, poster aspect-ratio fix
+
+**Files:**
+- Modify: `web/src/lineup/screen.js`
+- Modify: `web/src/styles/tv.css`
+
+**Interfaces:**
+- Consumes: `data.listTitle` from `getTonightsLineup()` (Task 9b).
+
+- [ ] **Step 1:** In `web/src/lineup/screen.js`'s `ensureScreenDom`, replace:
+
+```js
+    screen.innerHTML = `
+        <div id="sc-lineup-header">Tonight's Lineup</div>
+        <div id="sc-lineup-rail"></div>`;
+```
+
+with:
+
+```js
+    screen.innerHTML = `
+        <div id="sc-lineup-header"></div>
+        <div id="sc-lineup-subtitle">Titles/times may be subject to change.</div>
+        <div id="sc-lineup-rail"></div>`;
+```
+
+- [ ] **Step 2:** In the same file's `renderItems`, set the header text from the real list title
+      (add this as the first line of the function body):
+
+```js
+function renderItems(screen, data) {
+    const header = screen.querySelector('#sc-lineup-header');
+    if (header) header.textContent = (data && data.listTitle) || 'Grindhouse Lineup';
+    const rail = screen.querySelector('#sc-lineup-rail');
+```
+
+  (keep the rest of the function exactly as it is -- only the two new lines are added before the
+  existing `const rail = ...` line).
+
+- [ ] **Step 3:** In `web/src/styles/tv.css`, replace the header rule:
+
+```css
+            #sc-lineup-header {
+                color: #fff !important; font-size: 15px !important; font-weight: 700 !important;
+                letter-spacing: 0.14em !important; text-transform: uppercase !important;
+                opacity: 0.6 !important; margin-bottom: 28px !important;
+            }
+```
+
+with (dropping the small-caps "eyebrow" treatment now that this holds a real, longer title, and
+adding the new subtitle):
+
+```css
+            #sc-lineup-header {
+                color: #fff !important; font-size: 20px !important; font-weight: 700 !important;
+                line-height: 1.25 !important; margin-bottom: 4px !important;
+            }
+            #sc-lineup-subtitle {
+                color: rgba(255,255,255,0.45) !important; font-size: 12px !important;
+                margin-bottom: 24px !important;
+            }
+            body.sc-tv #sc-lineup-header { font-size: 26px !important; }
+            body.sc-tv #sc-lineup-subtitle { font-size: 15px !important; }
+```
+
+- [ ] **Step 4:** In the same file, fix the poster aspect ratio to TMDB's real 2:3 ratio (currently
+      220x308 / 260x364, neither of which is exactly 2:3, causing `background-size: cover` to crop
+      the art) -- replace:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 308px !important; border-radius: 8px !important;
+```
+
+with:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 330px !important; border-radius: 8px !important;
+```
+
+  and replace:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }
+```
+
+with:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 390px !important; }
+```
+
+- [ ] **Step 5:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 6:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 7:** Commit:
+
+```bash
+git add web/src/lineup/screen.js web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "feat: Lineup screen shows the real list title + disclaimer, fix poster aspect ratio"
+```
+
+### Task 10b (DEVICE, stage gate): Validate Round 3 changes -- STOP for explicit go-ahead
+
+- [ ] **Step 1:** Rebuild, reinstall, launch on the TV against the live room.
+- [ ] **Step 2:** Open the Lineup screen. Expect: the header shows the REAL current Letterboxd
+      list title (not "Tonight's Lineup"), with "Titles/times may be subject to change." beneath
+      it in a smaller, muted line.
+- [ ] **Step 3:** Confirm posters fill their frame without visible cropping at the top/bottom.
+- [ ] **Step 4:** If the current room item matches the schedule: confirm only the next 4 upcoming
+      films show a time estimate (approx/exact), and the 5th-and-beyond show `LATE`.
+- [ ] **Step 5:** If it's currently Friday before ~noon Pacific and nothing matches: confirm the
+      first film shows an estimate around Friday noon and every other film shows `LATE` with no
+      other times. On any other day/time with no match, confirm every film shows `LATE` (no
+      Friday estimate).
+- [ ] **Step 6:** OK on a film. Expect: the Now-Playing card in browse mode now shows IMDb
+      parent-guide chips (and kill count, if in the community JSONL) exactly like the real
+      now-playing card does.
+- [ ] **Step 7: STOP.** Report results to the user and confirm Tonight's Lineup is complete, or
+      note any follow-up.
