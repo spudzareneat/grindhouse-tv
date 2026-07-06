@@ -26,6 +26,13 @@ function decodeHtmlEntities(s) {
         .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 }
 
+// The list page's <meta property="og:title"> carries the list's own clean title, no
+// site-suffix to strip (unlike the <title> tag, which appends a Letterboxd suffix).
+export function parseListTitle(listPageHtml) {
+    const m = listPageHtml.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']*)["']/i);
+    return m ? decodeHtmlEntities(m[1]).trim() : null;
+}
+
 // Every poster on the list page carries data-item-name="Title (Year)", in schedule order —
 // this is the complete, ordered list (unlike the meta description's ~5-title sample).
 export function parseListTitles(listPageHtml) {
@@ -51,7 +58,7 @@ export async function fetchTonightsSchedule() {
     if (!listUrl) throw new Error('no current-week schedule list found');
     const listRes = await nativeHttpGet(listUrl, BROWSER_HEADERS);
     if (!listRes || listRes.status !== 200) throw new Error('Letterboxd list HTTP ' + (listRes && listRes.status));
-    const titles = parseListTitles(listRes.body);
-    if (!titles.length) throw new Error('no titles parsed from schedule list');
-    return titles;
+    const items = parseListTitles(listRes.body);
+    if (!items.length) throw new Error('no titles parsed from schedule list');
+    return { listTitle: parseListTitle(listRes.body), items };
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { findCurrentWeekListUrl, parseListTitles } from '../src/lineup/letterboxd.js';
+import { findCurrentWeekListUrl, parseListTitle, parseListTitles } from '../src/lineup/letterboxd.js';
 
 const LISTS_PAGE_FIXTURE = `
 <div class="list-set">
@@ -38,4 +38,13 @@ test('parseListTitles extracts every "Title (Year)" from each poster\'s data-ite
 });
 test('parseListTitles returns an empty array when there are no posters', () => {
     assert.deepStrictEqual(parseListTitles('<html><body></body></html>'), []);
+});
+
+const TITLE_FIXTURE = '<html><head><meta property="og:title" content="4th of July Weekend Grindhouse Schedule - Fri 7/3 - Sun 7/5/26"></head><body></body></html>';
+
+test('parseListTitle extracts the lists own title from og:title', () => {
+    assert.strictEqual(parseListTitle(TITLE_FIXTURE), '4th of July Weekend Grindhouse Schedule - Fri 7/3 - Sun 7/5/26');
+});
+test('parseListTitle returns null when og:title is missing', () => {
+    assert.strictEqual(parseListTitle('<html><head></head><body></body></html>'), null);
 });
