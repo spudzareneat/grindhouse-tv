@@ -3,23 +3,15 @@ import { chromeState } from './chrome/state.js';
 import { onSocket } from './socket.js';
 import { isTv } from './tvdetect.js';
 import { showLineupScreen } from './lineup/screen.js';
+import { getMotdPosterImages } from './motd.js';
 
 /* ==========================================================
    POSTER STRIP — toggle show/hide the MOTD poster images
 ========================================================== */
 
 export function initPosterStrip() {
-    const motd = document.getElementById('motdrow');
-    if (!motd) return;
-
     // Build the poster strip container from MOTD images
-    const imgs = [...motd.querySelectorAll('img')].filter(img => {
-        // Read HTML attributes (not rendered dimensions — motdrow is hidden so rendered = 0)
-        const w = parseInt(img.getAttribute('width') || 0);
-        const h = parseInt(img.getAttribute('height') || 0);
-        // Poster images in the MOTD are 125x175 — keep portrait-ish images, skip wide banners
-        return h >= 100 && w <= 200;
-    });
+    const imgs = getMotdPosterImages();
     if (!imgs.length) return;
 
     // Create our strip outside of #motdrow so we control it fully

@@ -1275,15 +1275,20 @@
     if (screen2) screen2.classList.remove("sc-lineup-visible");
   }
 
-  // src/posters.js
-  function initPosterStrip() {
+  // src/motd.js
+  function getMotdPosterImages() {
     const motd = document.getElementById("motdrow");
-    if (!motd) return;
-    const imgs = [...motd.querySelectorAll("img")].filter((img) => {
-      const w = parseInt(img.getAttribute("width") || 0);
-      const h = parseInt(img.getAttribute("height") || 0);
+    if (!motd) return [];
+    return [...motd.querySelectorAll("img")].filter((img) => {
+      const w = parseInt(img.getAttribute("width") || "0", 10);
+      const h = parseInt(img.getAttribute("height") || "0", 10);
       return h >= 100 && w <= 200;
     });
+  }
+
+  // src/posters.js
+  function initPosterStrip() {
+    const imgs = getMotdPosterImages();
     if (!imgs.length) return;
     const strip = document.createElement("div");
     strip.id = "sc-poster-strip";
