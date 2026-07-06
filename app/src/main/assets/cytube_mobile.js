@@ -475,6 +475,606 @@
     whenSocket((s) => s.on(event, handler));
   }
 
+  // src/tvdetect.js
+  var isTv = function() {
+    try {
+      if (window.CytubeNative && typeof CytubeNative.isTv === "function") return !!CytubeNative.isTv();
+    } catch (e) {
+    }
+    return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
+  }();
+
+  // src/lineup/data.js
+  async function getTonightsLineup() {
+    return {
+      items: [
+        {
+          cleanTitle: "The Beyond",
+          cleanYear: "1981",
+          isNowPlaying: true,
+          etaLabel: "",
+          poster: null,
+          backdrop: null,
+          overview: "A woman inherits a Louisiana hotel built over one of the seven gateways to Hell."
+        },
+        {
+          cleanTitle: "American Hunter",
+          cleanYear: "1988",
+          isNowPlaying: false,
+          etaLabel: "≈ 9:20 PM",
+          poster: null,
+          backdrop: null,
+          overview: "A grizzled ex-mercenary is hired to track a killer through the wilderness."
+        },
+        {
+          cleanTitle: "Zombie Holocaust",
+          cleanYear: "1980",
+          isNowPlaying: false,
+          etaLabel: "~ 11:00 PM",
+          poster: null,
+          backdrop: null,
+          overview: "A series of grisly murders at a New York hospital leads to a remote island of cannibals."
+        },
+        {
+          cleanTitle: "Nightbeast",
+          cleanYear: "1982",
+          isNowPlaying: false,
+          etaLabel: "LATE",
+          poster: null,
+          backdrop: null,
+          overview: "An alien crash-lands and terrorizes a small town."
+        },
+        {
+          cleanTitle: "Sole Survivor",
+          cleanYear: "1984",
+          isNowPlaying: false,
+          etaLabel: "LATE",
+          poster: null,
+          backdrop: null,
+          overview: "A plane crash survivor is stalked by the shadowy figures of everyone who was meant to die with her."
+        }
+      ]
+    };
+  }
+
+  // src/mediatime.js
+  var mediaState = {
+    currentMediaSeconds: 0,
+    currentMediaType: "",
+    currentPlaybackTime: 0
+  };
+  function parseTimeToSeconds(t) {
+    const parts = String(t).trim().split(":").map(Number);
+    if (!parts.length || parts.some(isNaN)) return 0;
+    return parts.reduce((acc, v) => acc * 60 + v, 0);
+  }
+  function getCurrentMediaSeconds() {
+    if (mediaState.currentMediaSeconds > 0) return mediaState.currentMediaSeconds;
+    const el = document.querySelector("#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time");
+    return el ? parseTimeToSeconds(el.textContent) : 0;
+  }
+  function getCurrentPlaybackSeconds() {
+    const v = document.querySelector("#videowrap video");
+    if (v && isFinite(v.currentTime) && v.currentTime > 0) return v.currentTime;
+    return mediaState.currentPlaybackTime;
+  }
+  function formatHMS(s) {
+    s = Math.max(0, Math.floor(s || 0));
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+    const pad = (n) => String(n).padStart(2, "0");
+    return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+  }
+
+  // src/native.js
+  var _scHttpCbs = {};
+  window.__scHttpResolve = function(id, res) {
+    const cb = _scHttpCbs[id];
+    if (cb) {
+      delete _scHttpCbs[id];
+      cb(res);
+    }
+  };
+  function nativeHttpGet(url, headers = {}) {
+    return new Promise((resolve, reject) => {
+      if (!(window.CytubeNative && typeof CytubeNative.httpGet === "function")) {
+        reject(new Error("native http unavailable"));
+        return;
+      }
+      const id = "h" + Math.random().toString(36).slice(2);
+      _scHttpCbs[id] = (res) => {
+        if (res && res.error) reject(new Error(res.error));
+        else resolve(res);
+      };
+      try {
+        CytubeNative.httpGet(id, url, JSON.stringify(headers));
+      } catch (e) {
+        delete _scHttpCbs[id];
+        reject(e);
+      }
+      setTimeout(() => {
+        if (_scHttpCbs[id]) {
+          delete _scHttpCbs[id];
+          reject(new Error("timeout"));
+        }
+      }, 1e4);
+    });
+  }
+
+  // src/metadata/imdb.js
+  var IMDB_GQL = "https://caching.graphql.imdb.com/";
+  var IMDB_HEADERS = {
+    "Accept": "application/graphql+json, application/json",
+    "Content-Type": "application/json",
+    "x-imdb-client-name": "imdb-web-next-localized",
+    "x-imdb-user-language": "en-US",
+    "x-imdb-user-country": "US"
+  };
+  async function imdbQuery(operationName, query, variables) {
+    const url = IMDB_GQL + "?operationName=" + encodeURIComponent(operationName) + "&query=" + encodeURIComponent(query) + "&variables=" + encodeURIComponent(JSON.stringify(variables));
+    const res = await nativeHttpGet(url, IMDB_HEADERS);
+    if (!res || res.status !== 200) throw new Error("IMDb GQL HTTP " + (res && res.status));
+    return JSON.parse(res.body);
+  }
+  async function fetchImdbParentalGuide(tconst) {
+    if (!tconst) return null;
+    const q = "query GHGuide($id: ID!){ title(id:$id){ parentsGuide{ categories{ category{ text } severity{ text } } } } }";
+    try {
+      const data = await imdbQuery("GHGuide", q, { id: tconst });
+      const cats = data && data.data && data.data.title && data.data.title.parentsGuide ? data.data.title.parentsGuide.categories : null;
+      if (!cats) return null;
+      return cats.map((c) => ({ category: c.category && c.category.text, severity: c.severity && c.severity.text })).filter((c) => c.category && c.severity);
+    } catch (e) {
+      return null;
+    }
+  }
+  var _triviaCache = {};
+  async function fetchImdbTrivia(tconst) {
+    if (!tconst) return null;
+    if (_triviaCache[tconst]) return _triviaCache[tconst];
+    const q = "query GHTrivia($id: ID!){ title(id:$id){ trivia(first: 30){ edges{ node{ text{ plainText } } } } } }";
+    try {
+      const data = await imdbQuery("GHTrivia", q, { id: tconst });
+      const edges = data && data.data && data.data.title && data.data.title.trivia ? data.data.title.trivia.edges : [];
+      const items = (edges || []).map((e) => e && e.node && e.node.text && e.node.text.plainText).filter(Boolean);
+      _triviaCache[tconst] = items;
+      return items;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // src/metadata/tmdb.js
+  var LINK_DEFS = [
+    { key: "imdb", label: "IMDb", color: "#f5c518", fg: "#000", char: "i" },
+    { key: "letterboxd", label: "Letterboxd", color: "#2c4a2e", fg: "#00e054", char: "L" },
+    { key: "wiki", label: "Wikipedia", color: "#444", fg: "#eee", char: "W" }
+  ];
+  var movieState = {
+    lastMovieTitle: "",
+    movieLinkCache: {}
+    // cache by raw title to avoid repeat lookups
+  };
+  var killCountDb = null;
+  async function getKillCountDb() {
+    if (killCountDb !== null) return killCountDb;
+    killCountDb = {};
+    try {
+      const text = await new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: "GET",
+          url: "https://raw.githubusercontent.com/lklynet/Kill-Count/main/killcounts.jsonl",
+          onload: (r) => r.status === 200 ? resolve(r.responseText) : reject(new Error(`HTTP ${r.status}`)),
+          onerror: reject
+        });
+      });
+      let loaded = 0;
+      for (const line of text.split("\n")) {
+        const s = line.trim();
+        if (!s) continue;
+        try {
+          const entry = JSON.parse(s);
+          if (entry.tmdb_id != null) {
+            killCountDb[String(entry.tmdb_id)] = entry.count;
+            loaded++;
+          }
+        } catch (e) {
+        }
+      }
+    } catch (e) {
+      console.warn("[CyTube SC] Kill count DB failed to load:", e);
+    }
+    return killCountDb;
+  }
+  async function validateTmdbKey(key) {
+    if (!key) return "invalid";
+    const url = `https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(key)}`;
+    try {
+      const res = await fetch(url);
+      if (res.status === 200) return "valid";
+      if (res.status === 401) return "invalid";
+      return "error";
+    } catch (e) {
+      try {
+        const r = await nativeHttpGet(url);
+        if (r.status === 200) return "valid";
+        if (r.status === 401) return "invalid";
+        return "error";
+      } catch (e2) {
+        return "error";
+      }
+    }
+  }
+  async function lookupMovie(title, year) {
+    var _a, _b;
+    const cacheKey = title + (year || "");
+    if (movieState.movieLinkCache[cacheKey] !== void 0) return movieState.movieLinkCache[cacheKey];
+    let tmdbResult = null;
+    let wikiUrl = null;
+    const tmdbPromise = hasKey(LS_TMDB) ? (async () => {
+      var _a2, _b2;
+      try {
+        const params = new URLSearchParams({ api_key: getKey(LS_TMDB), query: title, language: "en-US" });
+        if (year) params.set("year", year);
+        const res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!((_a2 = data.results) == null ? void 0 : _a2.length)) return;
+        let best = data.results[0];
+        if (year) {
+          const withYear = data.results.find((r) => {
+            var _a3;
+            return (_a3 = r.release_date) == null ? void 0 : _a3.startsWith(year);
+          });
+          if (withYear) best = withYear;
+        }
+        const detailRes = await fetch(
+          `https://api.themoviedb.org/3/movie/${best.id}?api_key=${getKey(LS_TMDB)}&append_to_response=external_ids`
+        );
+        if (!detailRes.ok) return;
+        const detail = await detailRes.json();
+        tmdbResult = {
+          tmdbId: best.id,
+          imdbId: detail.imdb_id || ((_b2 = detail.external_ids) == null ? void 0 : _b2.imdb_id) || null,
+          title: detail.title,
+          year: detail.release_date ? detail.release_date.slice(0, 4) : year,
+          poster: detail.poster_path ? `https://image.tmdb.org/t/p/w500${detail.poster_path}` : null,
+          backdrop: detail.backdrop_path ? `https://image.tmdb.org/t/p/w1280${detail.backdrop_path}` : null,
+          rating: detail.vote_average ? Math.round(detail.vote_average * 10) / 10 : null,
+          runtime: detail.runtime || null,
+          overview: detail.overview || "",
+          genres: (detail.genres || []).map((g) => g.name)
+        };
+      } catch (e) {
+      }
+    })() : Promise.resolve();
+    const wikiPromise = (async () => {
+      var _a2, _b2;
+      try {
+        const searchTitle = title + (year ? " " + year : "") + " film";
+        const res = await fetch(
+          `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(searchTitle)}&srlimit=1&format=json&origin=*`
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const hit = (_b2 = (_a2 = data == null ? void 0 : data.query) == null ? void 0 : _a2.search) == null ? void 0 : _b2[0];
+        if (hit) wikiUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(hit.title.replace(/ /g, "_"))}`;
+      } catch (e) {
+      }
+    })();
+    await Promise.all([tmdbPromise, wikiPromise]);
+    let killCount = null;
+    if (tmdbResult == null ? void 0 : tmdbResult.tmdbId) {
+      const db = await getKillCountDb();
+      const count = db[String(tmdbResult.tmdbId)];
+      if (count !== void 0 && count !== null) killCount = count;
+    }
+    const parentalGuide = await fetchImdbParentalGuide(tmdbResult == null ? void 0 : tmdbResult.imdbId);
+    const result = {
+      links: {
+        imdb: (tmdbResult == null ? void 0 : tmdbResult.imdbId) ? `https://www.imdb.com/title/${tmdbResult.imdbId}/` : null,
+        letterboxd: (tmdbResult == null ? void 0 : tmdbResult.tmdbId) ? `https://letterboxd.com/tmdb/${tmdbResult.tmdbId}` : null,
+        wiki: wikiUrl
+      },
+      killCount,
+      parentalGuide,
+      imdbId: (tmdbResult == null ? void 0 : tmdbResult.imdbId) || null,
+      cleanTitle: (tmdbResult == null ? void 0 : tmdbResult.title) || null,
+      cleanYear: (tmdbResult == null ? void 0 : tmdbResult.year) || null,
+      poster: (tmdbResult == null ? void 0 : tmdbResult.poster) || null,
+      backdrop: (tmdbResult == null ? void 0 : tmdbResult.backdrop) || null,
+      rating: (_a = tmdbResult == null ? void 0 : tmdbResult.rating) != null ? _a : null,
+      runtime: (_b = tmdbResult == null ? void 0 : tmdbResult.runtime) != null ? _b : null,
+      overview: (tmdbResult == null ? void 0 : tmdbResult.overview) || "",
+      genres: (tmdbResult == null ? void 0 : tmdbResult.genres) || []
+    };
+    movieState.movieLinkCache[cacheKey] = result;
+    return result;
+  }
+
+  // src/cards/trivia.js
+  function _escHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function showTriviaCard() {
+    const tconst = npState.data && npState.data.imdbId;
+    if (!tconst) return;
+    let card = document.getElementById("sc-trivia-card");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "sc-trivia-card";
+      card.innerHTML = `
+            <div id="sc-trivia-panel">
+                <div id="sc-trivia-head">
+                    <span id="sc-trivia-title">Trivia</span>
+                    <button id="sc-trivia-close" type="button">✕</button>
+                </div>
+                <div id="sc-trivia-list"></div>
+            </div>`;
+      document.body.appendChild(card);
+      card.addEventListener("click", (e) => {
+        if (e.target === card) hideTriviaCard();
+      });
+      card.querySelector("#sc-trivia-close").addEventListener("click", hideTriviaCard);
+    }
+    card.querySelector("#sc-trivia-title").textContent = "Trivia" + (npState.data.cleanTitle ? " — " + npState.data.cleanTitle : "");
+    const list = card.querySelector("#sc-trivia-list");
+    list.innerHTML = '<div class="sc-trivia-item">Loading…</div>';
+    card.classList.add("sc-show");
+    fetchImdbTrivia(tconst).then((items) => {
+      if (!document.getElementById("sc-trivia-card")) return;
+      if (!items || !items.length) {
+        list.innerHTML = '<div class="sc-trivia-item">No trivia found.</div>';
+        return;
+      }
+      list.innerHTML = items.map((t) => `<div class="sc-trivia-item">${_escHtml(t)}</div>`).join("");
+      list.scrollTop = 0;
+    });
+  }
+  function hideTriviaCard() {
+    const card = document.getElementById("sc-trivia-card");
+    if (card) card.classList.remove("sc-show");
+  }
+  function toggleTriviaCard() {
+    const card = document.getElementById("sc-trivia-card");
+    if (card && card.classList.contains("sc-show")) hideTriviaCard();
+    else showTriviaCard();
+  }
+
+  // src/cards/nowplaying.js
+  var NP_PG_SHORT = {
+    "Sex & Nudity": "Sex/Nudity",
+    "Violence & Gore": "Violence",
+    "Profanity": "Profanity",
+    "Alcohol, Drugs & Smoking": "Drugs",
+    "Frightening & Intense Scenes": "Frightening"
+  };
+  var npState = {
+    data: null,
+    // latest movie data for the card
+    introDone: false
+    // startup intro card has run (see initIntroSequence)
+  };
+  var _npHideTimer = null;
+  var _npProgTimer = null;
+  var _npWatcherInit = false;
+  function _renderNpProgress() {
+    const card = document.getElementById("sc-np-card");
+    if (!card) {
+      clearInterval(_npProgTimer);
+      return;
+    }
+    const wrap = card.querySelector("#sc-np-progress");
+    const fill = card.querySelector("#sc-np-prog-fill");
+    const elapsedEl = card.querySelector("#sc-np-prog-elapsed");
+    const totalEl = card.querySelector("#sc-np-prog-total");
+    const remainEl = card.querySelector("#sc-np-prog-remain");
+    if (!wrap || !fill) return;
+    const dur = getCurrentMediaSeconds();
+    if (dur > 0) {
+      const elapsed = Math.min(getCurrentPlaybackSeconds(), dur);
+      const pct = Math.max(0, Math.min(100, elapsed / dur * 100));
+      fill.style.setProperty("width", pct + "%", "important");
+      elapsedEl.textContent = formatHMS(elapsed);
+      totalEl.textContent = formatHMS(dur);
+      remainEl.textContent = "−" + formatHMS(dur - elapsed) + " left";
+      wrap.style.display = "";
+    } else {
+      wrap.style.display = "none";
+    }
+  }
+  function _npCardEnabled() {
+    return isTv;
+  }
+  var _npScrollTimer = null;
+  var _npScrollRaf = null;
+  var _NP_SCROLL_DELAY = 3500;
+  function _autoScrollOverview() {
+    clearTimeout(_npScrollTimer);
+    cancelAnimationFrame(_npScrollRaf);
+    const card = document.getElementById("sc-np-card");
+    const ov = card && card.querySelector("#sc-np-overview");
+    if (!ov) return 0;
+    ov.scrollTop = 0;
+    const dist = ov.scrollHeight - ov.clientHeight;
+    if (dist <= 4) return 0;
+    const dur = Math.min(12e3, Math.max(2500, dist / 24 * 1e3));
+    _npScrollTimer = setTimeout(() => {
+      const start = ov.scrollTop;
+      const span = ov.scrollHeight - ov.clientHeight - start;
+      if (span <= 0) return;
+      const t0 = performance.now();
+      const step = (now) => {
+        const c = document.getElementById("sc-np-card");
+        if (!c || !c.classList.contains("sc-np-visible")) return;
+        const p = Math.min(1, (now - t0) / dur);
+        const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+        ov.scrollTop = start + span * e;
+        if (p < 1) _npScrollRaf = requestAnimationFrame(step);
+      };
+      _npScrollRaf = requestAnimationFrame(step);
+    }, _NP_SCROLL_DELAY);
+    return _NP_SCROLL_DELAY + dur;
+  }
+  function showNowPlayingCard(data, opts = {}) {
+    if (!data || !data.cleanTitle && !data.backdrop) return;
+    let card = document.getElementById("sc-np-card");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "sc-np-card";
+      card.innerHTML = `
+            <div id="sc-np-backdrop"></div>
+            <div id="sc-np-scrim"></div>
+            <div id="sc-np-content">
+                <img id="sc-np-poster" alt="" />
+                <div id="sc-np-info">
+                    <div id="sc-np-eyebrow">Now Playing</div>
+                    <div id="sc-np-title"></div>
+                    <div id="sc-np-meta"></div>
+                    <div id="sc-np-overview"></div>
+                    <div id="sc-np-chips"></div>
+                    <div id="sc-np-progress">
+                        <div id="sc-np-prog-bar"><div id="sc-np-prog-fill"></div></div>
+                        <div id="sc-np-prog-times">
+                            <span id="sc-np-prog-elapsed">0:00</span>
+                            <span id="sc-np-prog-remain"></span>
+                            <span id="sc-np-prog-total">0:00</span>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+      document.body.appendChild(card);
+      card.addEventListener("click", hideNowPlayingCard);
+    }
+    const title = data.cleanTitle || movieState.lastMovieTitle || "";
+    const year = data.cleanYear ? ` (${data.cleanYear})` : "";
+    const bd = card.querySelector("#sc-np-backdrop");
+    const poster = card.querySelector("#sc-np-poster");
+    const meta = card.querySelector("#sc-np-meta");
+    const chips = card.querySelector("#sc-np-chips");
+    bd.style.backgroundImage = data.backdrop ? `url(${data.backdrop})` : "none";
+    if (data.poster) {
+      poster.src = data.poster;
+      poster.style.display = "";
+    } else poster.style.display = "none";
+    card.querySelector("#sc-np-title").textContent = title + year;
+    card.querySelector("#sc-np-overview").textContent = data.overview || "";
+    const metaParts = [];
+    if (data.rating) metaParts.push(`⭐ ${data.rating}`);
+    if (data.runtime) metaParts.push(`${Math.floor(data.runtime / 60)}h ${data.runtime % 60}m`);
+    if (data.genres && data.genres.length) metaParts.push(data.genres.slice(0, 3).join(" · "));
+    meta.textContent = metaParts.join("     ");
+    const chipHtml = [];
+    (data.parentalGuide || []).forEach((pg) => {
+      const sev = String(pg.severity || "").toLowerCase();
+      const label = NP_PG_SHORT[pg.category] || pg.category;
+      chipHtml.push(`<span class="sc-np-chip sc-sev-${sev}">${label}: ${pg.severity}</span>`);
+    });
+    if (data.killCount !== null && data.killCount !== void 0) {
+      chipHtml.push(`<span class="sc-np-chip">💀 ${data.killCount} kills</span>`);
+    }
+    chips.innerHTML = chipHtml.join("");
+    card.classList.add("sc-np-visible");
+    _renderNpProgress();
+    clearInterval(_npProgTimer);
+    _npProgTimer = setInterval(_renderNpProgress, 500);
+    const revealMs = _autoScrollOverview();
+    clearTimeout(_npHideTimer);
+    if (opts.autoHide) {
+      const v = document.querySelector("#videowrap video");
+      const playing = v && !v.paused;
+      if (playing || !v) _npHideTimer = setTimeout(hideNowPlayingCard, Math.max(7e3, revealMs + 2500));
+    }
+  }
+  function hideNowPlayingCard() {
+    const card = document.getElementById("sc-np-card");
+    if (card) card.classList.remove("sc-np-visible");
+    clearTimeout(_npHideTimer);
+    clearInterval(_npProgTimer);
+    clearTimeout(_npScrollTimer);
+    cancelAnimationFrame(_npScrollRaf);
+  }
+  function initNowPlayingWatcher() {
+    if (_npWatcherInit) return;
+    _npWatcherInit = true;
+    const toggle = () => {
+      const card = document.getElementById("sc-np-card");
+      if (card && card.classList.contains("sc-np-visible")) hideNowPlayingCard();
+      else if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
+    };
+    document.addEventListener("keydown", (e) => {
+      const t = e.target;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
+      if (e.key === "i" || e.key === "I") toggle();
+      else if (e.key === "t" || e.key === "T") toggleTriviaCard();
+    });
+    const bindTitle = () => {
+      const h = document.getElementById("videowrap-header");
+      if (!h) return;
+      if (npState.data && npState.data.imdbId && !document.getElementById("sc-trivia-btn")) {
+        const btn = document.createElement("button");
+        btn.id = "sc-trivia-btn";
+        btn.type = "button";
+        btn.textContent = "Trivia";
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          showTriviaCard();
+        });
+        if (document.body.classList.contains("sc-video-dimmed")) btn.classList.add("sc-bar-dim");
+        h.appendChild(btn);
+      }
+    };
+    bindTitle();
+    new MutationObserver(bindTitle).observe(document.body, { childList: true, subtree: true });
+  }
+
+  // src/lineup/screen.js
+  function ensureScreenDom() {
+    let screen2 = document.getElementById("sc-lineup-screen");
+    if (screen2) return screen2;
+    screen2 = document.createElement("div");
+    screen2.id = "sc-lineup-screen";
+    screen2.innerHTML = `
+        <div id="sc-lineup-header">Tonight's Lineup</div>
+        <div id="sc-lineup-rail"></div>`;
+    document.body.appendChild(screen2);
+    return screen2;
+  }
+  function renderLoading(screen2) {
+    screen2.querySelector("#sc-lineup-rail").innerHTML = `<div id="sc-lineup-loading">Fetching tonight's lineup…</div>`;
+  }
+  function renderItems(screen2, data) {
+    const rail = screen2.querySelector("#sc-lineup-rail");
+    const items = data && data.items || [];
+    if (!items.length) {
+      rail.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
+      return;
+    }
+    rail.innerHTML = "";
+    items.forEach((item) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "sc-lineup-item" + (item.isNowPlaying ? " sc-lineup-item-current" : "");
+      btn.innerHTML = `
+            <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ""}"></div>
+            <div class="sc-lineup-title">${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ""}</div>
+            <div class="sc-lineup-eta">${item.isNowPlaying ? "NOW PLAYING" : item.etaLabel || ""}</div>`;
+      btn.addEventListener("click", () => showNowPlayingCard(item, { autoHide: false }));
+      rail.appendChild(btn);
+    });
+  }
+  function showLineupScreen() {
+    const screen2 = ensureScreenDom();
+    screen2.classList.add("sc-lineup-visible");
+    renderLoading(screen2);
+    getTonightsLineup().then((data) => renderItems(screen2, data)).catch(() => {
+      renderItems(screen2, { items: [] });
+    });
+  }
+  function hideLineupScreen() {
+    const screen2 = document.getElementById("sc-lineup-screen");
+    if (screen2) screen2.classList.remove("sc-lineup-visible");
+  }
+
   // src/posters.js
   function initPosterStrip() {
     const motd = document.getElementById("motdrow");
@@ -562,6 +1162,7 @@
       });
       const wrap = document.createElement("a");
       wrap.appendChild(thumb);
+      if (isTv) wrap.addEventListener("click", () => showLineupScreen());
       strip.appendChild(wrap);
     });
     document.body.appendChild(strip);
@@ -768,15 +1369,6 @@
     }
   }
 
-  // src/tvdetect.js
-  var isTv = function() {
-    try {
-      if (window.CytubeNative && typeof CytubeNative.isTv === "function") return !!CytubeNative.isTv();
-    } catch (e) {
-    }
-    return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
-  }();
-
   // src/player/scrubber.js
   function wakeVideoControls() {
     try {
@@ -814,502 +1406,6 @@
       el.classList.add("vjs-user-inactive");
       el.classList.remove("vjs-user-active");
     }
-  }
-
-  // src/native.js
-  var _scHttpCbs = {};
-  window.__scHttpResolve = function(id, res) {
-    const cb = _scHttpCbs[id];
-    if (cb) {
-      delete _scHttpCbs[id];
-      cb(res);
-    }
-  };
-  function nativeHttpGet(url, headers = {}) {
-    return new Promise((resolve, reject) => {
-      if (!(window.CytubeNative && typeof CytubeNative.httpGet === "function")) {
-        reject(new Error("native http unavailable"));
-        return;
-      }
-      const id = "h" + Math.random().toString(36).slice(2);
-      _scHttpCbs[id] = (res) => {
-        if (res && res.error) reject(new Error(res.error));
-        else resolve(res);
-      };
-      try {
-        CytubeNative.httpGet(id, url, JSON.stringify(headers));
-      } catch (e) {
-        delete _scHttpCbs[id];
-        reject(e);
-      }
-      setTimeout(() => {
-        if (_scHttpCbs[id]) {
-          delete _scHttpCbs[id];
-          reject(new Error("timeout"));
-        }
-      }, 1e4);
-    });
-  }
-
-  // src/metadata/imdb.js
-  var IMDB_GQL = "https://caching.graphql.imdb.com/";
-  var IMDB_HEADERS = {
-    "Accept": "application/graphql+json, application/json",
-    "Content-Type": "application/json",
-    "x-imdb-client-name": "imdb-web-next-localized",
-    "x-imdb-user-language": "en-US",
-    "x-imdb-user-country": "US"
-  };
-  async function imdbQuery(operationName, query, variables) {
-    const url = IMDB_GQL + "?operationName=" + encodeURIComponent(operationName) + "&query=" + encodeURIComponent(query) + "&variables=" + encodeURIComponent(JSON.stringify(variables));
-    const res = await nativeHttpGet(url, IMDB_HEADERS);
-    if (!res || res.status !== 200) throw new Error("IMDb GQL HTTP " + (res && res.status));
-    return JSON.parse(res.body);
-  }
-  async function fetchImdbParentalGuide(tconst) {
-    if (!tconst) return null;
-    const q = "query GHGuide($id: ID!){ title(id:$id){ parentsGuide{ categories{ category{ text } severity{ text } } } } }";
-    try {
-      const data = await imdbQuery("GHGuide", q, { id: tconst });
-      const cats = data && data.data && data.data.title && data.data.title.parentsGuide ? data.data.title.parentsGuide.categories : null;
-      if (!cats) return null;
-      return cats.map((c) => ({ category: c.category && c.category.text, severity: c.severity && c.severity.text })).filter((c) => c.category && c.severity);
-    } catch (e) {
-      return null;
-    }
-  }
-  var _triviaCache = {};
-  async function fetchImdbTrivia(tconst) {
-    if (!tconst) return null;
-    if (_triviaCache[tconst]) return _triviaCache[tconst];
-    const q = "query GHTrivia($id: ID!){ title(id:$id){ trivia(first: 30){ edges{ node{ text{ plainText } } } } } }";
-    try {
-      const data = await imdbQuery("GHTrivia", q, { id: tconst });
-      const edges = data && data.data && data.data.title && data.data.title.trivia ? data.data.title.trivia.edges : [];
-      const items = (edges || []).map((e) => e && e.node && e.node.text && e.node.text.plainText).filter(Boolean);
-      _triviaCache[tconst] = items;
-      return items;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  // src/mediatime.js
-  var mediaState = {
-    currentMediaSeconds: 0,
-    currentMediaType: "",
-    currentPlaybackTime: 0
-  };
-  function parseTimeToSeconds(t) {
-    const parts = String(t).trim().split(":").map(Number);
-    if (!parts.length || parts.some(isNaN)) return 0;
-    return parts.reduce((acc, v) => acc * 60 + v, 0);
-  }
-  function getCurrentMediaSeconds() {
-    if (mediaState.currentMediaSeconds > 0) return mediaState.currentMediaSeconds;
-    const el = document.querySelector("#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time");
-    return el ? parseTimeToSeconds(el.textContent) : 0;
-  }
-  function getCurrentPlaybackSeconds() {
-    const v = document.querySelector("#videowrap video");
-    if (v && isFinite(v.currentTime) && v.currentTime > 0) return v.currentTime;
-    return mediaState.currentPlaybackTime;
-  }
-  function formatHMS(s) {
-    s = Math.max(0, Math.floor(s || 0));
-    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
-    const pad = (n) => String(n).padStart(2, "0");
-    return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
-  }
-
-  // src/metadata/tmdb.js
-  var LINK_DEFS = [
-    { key: "imdb", label: "IMDb", color: "#f5c518", fg: "#000", char: "i" },
-    { key: "letterboxd", label: "Letterboxd", color: "#2c4a2e", fg: "#00e054", char: "L" },
-    { key: "wiki", label: "Wikipedia", color: "#444", fg: "#eee", char: "W" }
-  ];
-  var movieState = {
-    lastMovieTitle: "",
-    movieLinkCache: {}
-    // cache by raw title to avoid repeat lookups
-  };
-  var killCountDb = null;
-  async function getKillCountDb() {
-    if (killCountDb !== null) return killCountDb;
-    killCountDb = {};
-    try {
-      const text = await new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({
-          method: "GET",
-          url: "https://raw.githubusercontent.com/lklynet/Kill-Count/main/killcounts.jsonl",
-          onload: (r) => r.status === 200 ? resolve(r.responseText) : reject(new Error(`HTTP ${r.status}`)),
-          onerror: reject
-        });
-      });
-      let loaded = 0;
-      for (const line of text.split("\n")) {
-        const s = line.trim();
-        if (!s) continue;
-        try {
-          const entry = JSON.parse(s);
-          if (entry.tmdb_id != null) {
-            killCountDb[String(entry.tmdb_id)] = entry.count;
-            loaded++;
-          }
-        } catch (e) {
-        }
-      }
-    } catch (e) {
-      console.warn("[CyTube SC] Kill count DB failed to load:", e);
-    }
-    return killCountDb;
-  }
-  async function validateTmdbKey(key) {
-    if (!key) return "invalid";
-    const url = `https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(key)}`;
-    try {
-      const res = await fetch(url);
-      if (res.status === 200) return "valid";
-      if (res.status === 401) return "invalid";
-      return "error";
-    } catch (e) {
-      try {
-        const r = await nativeHttpGet(url);
-        if (r.status === 200) return "valid";
-        if (r.status === 401) return "invalid";
-        return "error";
-      } catch (e2) {
-        return "error";
-      }
-    }
-  }
-  async function lookupMovie(title, year) {
-    var _a, _b;
-    const cacheKey = title + (year || "");
-    if (movieState.movieLinkCache[cacheKey] !== void 0) return movieState.movieLinkCache[cacheKey];
-    let tmdbResult = null;
-    let wikiUrl = null;
-    const tmdbPromise = hasKey(LS_TMDB) ? (async () => {
-      var _a2, _b2;
-      try {
-        const params = new URLSearchParams({ api_key: getKey(LS_TMDB), query: title, language: "en-US" });
-        if (year) params.set("year", year);
-        const res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!((_a2 = data.results) == null ? void 0 : _a2.length)) return;
-        let best = data.results[0];
-        if (year) {
-          const withYear = data.results.find((r) => {
-            var _a3;
-            return (_a3 = r.release_date) == null ? void 0 : _a3.startsWith(year);
-          });
-          if (withYear) best = withYear;
-        }
-        const detailRes = await fetch(
-          `https://api.themoviedb.org/3/movie/${best.id}?api_key=${getKey(LS_TMDB)}&append_to_response=external_ids`
-        );
-        if (!detailRes.ok) return;
-        const detail = await detailRes.json();
-        tmdbResult = {
-          tmdbId: best.id,
-          imdbId: detail.imdb_id || ((_b2 = detail.external_ids) == null ? void 0 : _b2.imdb_id) || null,
-          title: detail.title,
-          year: detail.release_date ? detail.release_date.slice(0, 4) : year,
-          poster: detail.poster_path ? `https://image.tmdb.org/t/p/w500${detail.poster_path}` : null,
-          backdrop: detail.backdrop_path ? `https://image.tmdb.org/t/p/w1280${detail.backdrop_path}` : null,
-          rating: detail.vote_average ? Math.round(detail.vote_average * 10) / 10 : null,
-          runtime: detail.runtime || null,
-          overview: detail.overview || "",
-          genres: (detail.genres || []).map((g) => g.name)
-        };
-      } catch (e) {
-      }
-    })() : Promise.resolve();
-    const wikiPromise = (async () => {
-      var _a2, _b2;
-      try {
-        const searchTitle = title + (year ? " " + year : "") + " film";
-        const res = await fetch(
-          `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(searchTitle)}&srlimit=1&format=json&origin=*`
-        );
-        if (!res.ok) return;
-        const data = await res.json();
-        const hit = (_b2 = (_a2 = data == null ? void 0 : data.query) == null ? void 0 : _a2.search) == null ? void 0 : _b2[0];
-        if (hit) wikiUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(hit.title.replace(/ /g, "_"))}`;
-      } catch (e) {
-      }
-    })();
-    await Promise.all([tmdbPromise, wikiPromise]);
-    let killCount = null;
-    if (tmdbResult == null ? void 0 : tmdbResult.tmdbId) {
-      const db = await getKillCountDb();
-      const count = db[String(tmdbResult.tmdbId)];
-      if (count !== void 0 && count !== null) killCount = count;
-    }
-    const parentalGuide = await fetchImdbParentalGuide(tmdbResult == null ? void 0 : tmdbResult.imdbId);
-    const result = {
-      links: {
-        imdb: (tmdbResult == null ? void 0 : tmdbResult.imdbId) ? `https://www.imdb.com/title/${tmdbResult.imdbId}/` : null,
-        letterboxd: (tmdbResult == null ? void 0 : tmdbResult.tmdbId) ? `https://letterboxd.com/tmdb/${tmdbResult.tmdbId}` : null,
-        wiki: wikiUrl
-      },
-      killCount,
-      parentalGuide,
-      imdbId: (tmdbResult == null ? void 0 : tmdbResult.imdbId) || null,
-      cleanTitle: (tmdbResult == null ? void 0 : tmdbResult.title) || null,
-      cleanYear: (tmdbResult == null ? void 0 : tmdbResult.year) || null,
-      poster: (tmdbResult == null ? void 0 : tmdbResult.poster) || null,
-      backdrop: (tmdbResult == null ? void 0 : tmdbResult.backdrop) || null,
-      rating: (_a = tmdbResult == null ? void 0 : tmdbResult.rating) != null ? _a : null,
-      runtime: (_b = tmdbResult == null ? void 0 : tmdbResult.runtime) != null ? _b : null,
-      overview: (tmdbResult == null ? void 0 : tmdbResult.overview) || "",
-      genres: (tmdbResult == null ? void 0 : tmdbResult.genres) || []
-    };
-    movieState.movieLinkCache[cacheKey] = result;
-    return result;
-  }
-
-  // src/cards/nowplaying.js
-  var NP_PG_SHORT = {
-    "Sex & Nudity": "Sex/Nudity",
-    "Violence & Gore": "Violence",
-    "Profanity": "Profanity",
-    "Alcohol, Drugs & Smoking": "Drugs",
-    "Frightening & Intense Scenes": "Frightening"
-  };
-  var npState = {
-    data: null,
-    // latest movie data for the card
-    introDone: false
-    // startup intro card has run (see initIntroSequence)
-  };
-  var _npHideTimer = null;
-  var _npProgTimer = null;
-  var _npWatcherInit = false;
-  function _renderNpProgress() {
-    const card = document.getElementById("sc-np-card");
-    if (!card) {
-      clearInterval(_npProgTimer);
-      return;
-    }
-    const wrap = card.querySelector("#sc-np-progress");
-    const fill = card.querySelector("#sc-np-prog-fill");
-    const elapsedEl = card.querySelector("#sc-np-prog-elapsed");
-    const totalEl = card.querySelector("#sc-np-prog-total");
-    const remainEl = card.querySelector("#sc-np-prog-remain");
-    if (!wrap || !fill) return;
-    const dur = getCurrentMediaSeconds();
-    if (dur > 0) {
-      const elapsed = Math.min(getCurrentPlaybackSeconds(), dur);
-      const pct = Math.max(0, Math.min(100, elapsed / dur * 100));
-      fill.style.setProperty("width", pct + "%", "important");
-      elapsedEl.textContent = formatHMS(elapsed);
-      totalEl.textContent = formatHMS(dur);
-      remainEl.textContent = "−" + formatHMS(dur - elapsed) + " left";
-      wrap.style.display = "";
-    } else {
-      wrap.style.display = "none";
-    }
-  }
-  function _npCardEnabled() {
-    return isTv;
-  }
-  var _npScrollTimer = null;
-  var _npScrollRaf = null;
-  var _NP_SCROLL_DELAY = 3500;
-  function _autoScrollOverview() {
-    clearTimeout(_npScrollTimer);
-    cancelAnimationFrame(_npScrollRaf);
-    const card = document.getElementById("sc-np-card");
-    const ov = card && card.querySelector("#sc-np-overview");
-    if (!ov) return 0;
-    ov.scrollTop = 0;
-    const dist = ov.scrollHeight - ov.clientHeight;
-    if (dist <= 4) return 0;
-    const dur = Math.min(12e3, Math.max(2500, dist / 24 * 1e3));
-    _npScrollTimer = setTimeout(() => {
-      const start = ov.scrollTop;
-      const span = ov.scrollHeight - ov.clientHeight - start;
-      if (span <= 0) return;
-      const t0 = performance.now();
-      const step = (now) => {
-        const c = document.getElementById("sc-np-card");
-        if (!c || !c.classList.contains("sc-np-visible")) return;
-        const p = Math.min(1, (now - t0) / dur);
-        const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-        ov.scrollTop = start + span * e;
-        if (p < 1) _npScrollRaf = requestAnimationFrame(step);
-      };
-      _npScrollRaf = requestAnimationFrame(step);
-    }, _NP_SCROLL_DELAY);
-    return _NP_SCROLL_DELAY + dur;
-  }
-  function showNowPlayingCard(data, opts = {}) {
-    if (!data || !data.cleanTitle && !data.backdrop) return;
-    let card = document.getElementById("sc-np-card");
-    if (!card) {
-      card = document.createElement("div");
-      card.id = "sc-np-card";
-      card.innerHTML = `
-            <div id="sc-np-backdrop"></div>
-            <div id="sc-np-scrim"></div>
-            <div id="sc-np-content">
-                <img id="sc-np-poster" alt="" />
-                <div id="sc-np-info">
-                    <div id="sc-np-eyebrow">Now Playing</div>
-                    <div id="sc-np-title"></div>
-                    <div id="sc-np-meta"></div>
-                    <div id="sc-np-overview"></div>
-                    <div id="sc-np-chips"></div>
-                    <div id="sc-np-progress">
-                        <div id="sc-np-prog-bar"><div id="sc-np-prog-fill"></div></div>
-                        <div id="sc-np-prog-times">
-                            <span id="sc-np-prog-elapsed">0:00</span>
-                            <span id="sc-np-prog-remain"></span>
-                            <span id="sc-np-prog-total">0:00</span>
-                        </div>
-                    </div>
-                </div>
-            </div>`;
-      document.body.appendChild(card);
-      card.addEventListener("click", hideNowPlayingCard);
-    }
-    const title = data.cleanTitle || movieState.lastMovieTitle || "";
-    const year = data.cleanYear ? ` (${data.cleanYear})` : "";
-    const bd = card.querySelector("#sc-np-backdrop");
-    const poster = card.querySelector("#sc-np-poster");
-    const meta = card.querySelector("#sc-np-meta");
-    const chips = card.querySelector("#sc-np-chips");
-    bd.style.backgroundImage = data.backdrop ? `url(${data.backdrop})` : "none";
-    if (data.poster) {
-      poster.src = data.poster;
-      poster.style.display = "";
-    } else poster.style.display = "none";
-    card.querySelector("#sc-np-title").textContent = title + year;
-    card.querySelector("#sc-np-overview").textContent = data.overview || "";
-    const metaParts = [];
-    if (data.rating) metaParts.push(`⭐ ${data.rating}`);
-    if (data.runtime) metaParts.push(`${Math.floor(data.runtime / 60)}h ${data.runtime % 60}m`);
-    if (data.genres && data.genres.length) metaParts.push(data.genres.slice(0, 3).join(" · "));
-    meta.textContent = metaParts.join("     ");
-    const chipHtml = [];
-    (data.parentalGuide || []).forEach((pg) => {
-      const sev = String(pg.severity || "").toLowerCase();
-      const label = NP_PG_SHORT[pg.category] || pg.category;
-      chipHtml.push(`<span class="sc-np-chip sc-sev-${sev}">${label}: ${pg.severity}</span>`);
-    });
-    if (data.killCount !== null && data.killCount !== void 0) {
-      chipHtml.push(`<span class="sc-np-chip">💀 ${data.killCount} kills</span>`);
-    }
-    chips.innerHTML = chipHtml.join("");
-    card.classList.add("sc-np-visible");
-    _renderNpProgress();
-    clearInterval(_npProgTimer);
-    _npProgTimer = setInterval(_renderNpProgress, 500);
-    const revealMs = _autoScrollOverview();
-    clearTimeout(_npHideTimer);
-    if (opts.autoHide) {
-      const v = document.querySelector("#videowrap video");
-      const playing = v && !v.paused;
-      if (playing || !v) _npHideTimer = setTimeout(hideNowPlayingCard, Math.max(7e3, revealMs + 2500));
-    }
-  }
-  function hideNowPlayingCard() {
-    const card = document.getElementById("sc-np-card");
-    if (card) card.classList.remove("sc-np-visible");
-    clearTimeout(_npHideTimer);
-    clearInterval(_npProgTimer);
-    clearTimeout(_npScrollTimer);
-    cancelAnimationFrame(_npScrollRaf);
-  }
-  function initNowPlayingWatcher() {
-    if (_npWatcherInit) return;
-    _npWatcherInit = true;
-    const toggle = () => {
-      const card = document.getElementById("sc-np-card");
-      if (card && card.classList.contains("sc-np-visible")) hideNowPlayingCard();
-      else if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
-    };
-    document.addEventListener("keydown", (e) => {
-      const t = e.target;
-      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
-      if (e.key === "i" || e.key === "I") toggle();
-      else if (e.key === "t" || e.key === "T") toggleTriviaCard();
-    });
-    const bindTitle = () => {
-      const h = document.getElementById("videowrap-header");
-      if (!h) return;
-      if (npState.data && npState.data.imdbId && !document.getElementById("sc-trivia-btn")) {
-        const btn = document.createElement("button");
-        btn.id = "sc-trivia-btn";
-        btn.type = "button";
-        btn.textContent = "Trivia";
-        btn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          showTriviaCard();
-        });
-        if (document.body.classList.contains("sc-video-dimmed")) btn.classList.add("sc-bar-dim");
-        h.appendChild(btn);
-      }
-    };
-    bindTitle();
-    new MutationObserver(bindTitle).observe(document.body, { childList: true, subtree: true });
-  }
-
-  // src/cards/trivia.js
-  function _escHtml(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-  function showTriviaCard() {
-    const tconst = npState.data && npState.data.imdbId;
-    if (!tconst) return;
-    let card = document.getElementById("sc-trivia-card");
-    if (!card) {
-      card = document.createElement("div");
-      card.id = "sc-trivia-card";
-      card.innerHTML = `
-            <div id="sc-trivia-panel">
-                <div id="sc-trivia-head">
-                    <span id="sc-trivia-title">Trivia</span>
-                    <button id="sc-trivia-close" type="button">✕</button>
-                </div>
-                <div id="sc-trivia-list"></div>
-            </div>`;
-      document.body.appendChild(card);
-      card.addEventListener("click", (e) => {
-        if (e.target === card) hideTriviaCard();
-      });
-      card.querySelector("#sc-trivia-close").addEventListener("click", hideTriviaCard);
-    }
-    card.querySelector("#sc-trivia-title").textContent = "Trivia" + (npState.data.cleanTitle ? " — " + npState.data.cleanTitle : "");
-    const list = card.querySelector("#sc-trivia-list");
-    list.innerHTML = '<div class="sc-trivia-item">Loading…</div>';
-    card.classList.add("sc-show");
-    fetchImdbTrivia(tconst).then((items) => {
-      if (!document.getElementById("sc-trivia-card")) return;
-      if (!items || !items.length) {
-        list.innerHTML = '<div class="sc-trivia-item">No trivia found.</div>';
-        return;
-      }
-      list.innerHTML = items.map((t) => `<div class="sc-trivia-item">${_escHtml(t)}</div>`).join("");
-      list.scrollTop = 0;
-    });
-  }
-  function hideTriviaCard() {
-    const card = document.getElementById("sc-trivia-card");
-    if (card) card.classList.remove("sc-show");
-  }
-  function toggleTriviaCard() {
-    const card = document.getElementById("sc-trivia-card");
-    if (card && card.classList.contains("sc-show")) hideTriviaCard();
-    else showTriviaCard();
-  }
-
-  // src/lineup/screen.js
-  function hideLineupScreen() {
-    const screen2 = document.getElementById("sc-lineup-screen");
-    if (screen2) screen2.classList.remove("sc-lineup-visible");
   }
 
   // src/tvnav/geometry.js

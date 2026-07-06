@@ -1,6 +1,8 @@
 import { usernameToColor } from './usercolors.js';
 import { chromeState } from './chrome/state.js';
 import { onSocket } from './socket.js';
+import { isTv } from './tvdetect.js';
+import { showLineupScreen } from './lineup/screen.js';
 
 /* ==========================================================
    POSTER STRIP — toggle show/hide the MOTD poster images
@@ -123,6 +125,12 @@ export function initPosterStrip() {
         // raw image URL on click/OK navigated the WebView and broke the app.
         const wrap = document.createElement('a');
         wrap.appendChild(thumb);
+        // TV only: OK opens the full Tonight's Lineup screen instead of just the
+        // hover-zoom preview (which tvnav.js's setPosterFocus already triggers on
+        // focus). The click event still bubbles to the document-level dismiss
+        // handler above, which collapses the zoom — harmless, since we're navigating
+        // to a full-screen overlay anyway.
+        if (isTv) wrap.addEventListener('click', () => showLineupScreen());
         strip.appendChild(wrap);
     });
     document.body.appendChild(strip);
