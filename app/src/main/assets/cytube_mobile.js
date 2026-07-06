@@ -554,6 +554,10 @@
     const m = listPageHtml.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']*)["']/i);
     return m ? decodeHtmlEntities(m[1]).trim() : null;
   }
+  function parseListPublishedDate(listPageHtml) {
+    const m = listPageHtml.match(/<span class="published">[^<]*<time datetime="([^"]*)"/i);
+    return m ? m[1] : null;
+  }
   function parseListTitles(listPageHtml) {
     const re = /data-item-name="([^"]*)"/g;
     const items = [];
@@ -575,7 +579,11 @@
     if (!listRes || listRes.status !== 200) throw new Error("Letterboxd list HTTP " + (listRes && listRes.status));
     const items = parseListTitles(listRes.body);
     if (!items.length) throw new Error("no titles parsed from schedule list");
-    return { listTitle: parseListTitle(listRes.body), items };
+    return {
+      listTitle: parseListTitle(listRes.body),
+      publishedAt: parseListPublishedDate(listRes.body),
+      items
+    };
   }
 
   // src/metadata/tmdb.js
@@ -817,6 +825,45 @@
     const mid = Math.floor(sorted.length / 2);
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
   }
+  var WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  var DAY_MS = 864e5;
+  function pacificDateOnly(d) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(d);
+    const get = (t) => parts.find((p) => p.type === t).value;
+    return Date.UTC(+get("year"), +get("month") - 1, +get("day"));
+  }
+  function pacificWeekday(d) {
+    return new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", weekday: "short" }).format(d);
+  }
+  function isListForCurrentWeek(publishedAt, now = /* @__PURE__ */ new Date()) {
+    if (!publishedAt) return false;
+    const pub = new Date(publishedAt);
+    if (isNaN(pub.getTime())) return false;
+    const todayIdx = WEEKDAY_INDEX[pacificWeekday(now)];
+    const daysSinceMonday = (todayIdx + 6) % 7;
+    const startOfWeek = pacificDateOnly(now) - daysSinceMonday * DAY_MS;
+    const startOfNextWeek = startOfWeek + 7 * DAY_MS;
+    const pubDay = pacificDateOnly(pub);
+    return pubDay >= startOfWeek && pubDay < startOfNextWeek;
+  }
+  function isBeforeFridayNoonPacific(now = /* @__PURE__ */ new Date()) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      weekday: "short",
+      hour: "numeric",
+      hourCycle: "h23"
+    }).formatToParts(now);
+    const weekday = parts.find((p) => p.type === "weekday").value;
+    const hour = parseInt(parts.find((p) => p.type === "hour").value, 10);
+    if (weekday === "Wed" || weekday === "Thu") return true;
+    if (weekday === "Fri") return hour < 12;
+    return false;
+  }
 
   // src/lineup/data.js
   var _scheduleCache = null;
@@ -842,6 +889,10 @@
     if (_scheduleCache || _fetchFailed) return;
     try {
       const result = await fetchTonightsSchedule();
+      if (!isListForCurrentWeek(result.publishedAt)) {
+        _fetchFailed = true;
+        return;
+      }
       _scheduleCache = result.items;
       _listTitle = result.listTitle;
     } catch (e) {
@@ -874,17 +925,6 @@
     }
     return items;
   }
-  function isFridayBeforeNoonPacific(now = /* @__PURE__ */ new Date()) {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/Los_Angeles",
-      weekday: "short",
-      hour: "numeric",
-      hourCycle: "h23"
-    }).formatToParts(now);
-    const weekday = parts.find((p) => p.type === "weekday").value;
-    const hour = parseInt(parts.find((p) => p.type === "hour").value, 10);
-    return weekday === "Fri" && hour < 12;
-  }
   function buildBase(info, title, year) {
     var _a, _b;
     return {
@@ -907,7 +947,7 @@
     const infos = await Promise.all(_scheduleCache.map(({ title, year }) => lookupMovie(title, year)));
     const currentIndex = _scheduleCache.findIndex((s) => movieState.lastMovieTitle && s.title.toLowerCase() === movieState.lastMovieTitle.toLowerCase());
     if (currentIndex === -1) {
-      const fridayEstimate = isFridayBeforeNoonPacific();
+      const fridayEstimate = isBeforeFridayNoonPacific();
       return {
         listTitle: _listTitle || FALLBACK_LIST_TITLE,
         items: _scheduleCache.map(({ title, year }, i) => ({

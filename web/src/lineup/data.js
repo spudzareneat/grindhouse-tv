@@ -2,7 +2,7 @@ import { fetchTonightsSchedule } from './letterboxd.js';
 import { lookupMovie, movieState } from '../metadata/tmdb.js';
 import { onSocket } from '../socket.js';
 import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
-import { formatEta, medianGapSeconds } from './timing.js';
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
 
 /* ==========================================================
    TONIGHT'S LINEUP -- data interface consumed by lineup/screen.js.
@@ -47,6 +47,14 @@ async function ensureSchedule() {
     if (_scheduleCache || _fetchFailed) return;
     try {
         const result = await fetchTonightsSchedule();
+        if (!isListForCurrentWeek(result.publishedAt)) {
+            // Stale -- this list covers a weekend from a prior week (most likely Mon/Tue,
+            // before the new one is posted ~Wednesday). Treat it the same as a fetch
+            // failure: fall back to the Now/Next-only view rather than show a whole
+            // already-aired weekend's lineup as if it were still upcoming.
+            _fetchFailed = true;
+            return;
+        }
         _scheduleCache = result.items;
         _listTitle = result.listTitle;
     } catch (e) {
@@ -72,18 +80,6 @@ function fallbackItems() {
         });
     }
     return items;
-}
-
-// True only during the narrow window this heuristic exists for: the list is usually posted
-// mid-week and showtime is "about Noon PST" on Friday, so before Friday noon Pacific we have
-// no live anchor yet but CAN still make one coarse guess (the first film starts around then).
-function isFridayBeforeNoonPacific(now = new Date()) {
-    const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/Los_Angeles', weekday: 'short', hour: 'numeric', hourCycle: 'h23',
-    }).formatToParts(now);
-    const weekday = parts.find(p => p.type === 'weekday').value;
-    const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
-    return weekday === 'Fri' && hour < 12;
 }
 
 // Every item's TMDB/IMDb-enriched fields, shared by both the matched and unmatched branches
@@ -118,7 +114,7 @@ export async function getTonightsLineup() {
         // or the marathon hasn't started this week) -- running order only, no times, per the
         // vision doc's "never display precision the data can't support" -- except the single
         // Friday-before-noon case, where the first film gets one coarse estimate.
-        const fridayEstimate = isFridayBeforeNoonPacific();
+        const fridayEstimate = isBeforeFridayNoonPacific();
         return {
             listTitle: _listTitle || FALLBACK_LIST_TITLE,
             items: _scheduleCache.map(({ title, year }, i) => ({
