@@ -1790,3 +1790,161 @@ with:
 git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
 git commit -m "fix: make the Lineup TV poster frame an exact 2:3 ratio, eliminating side letterboxing"
 ```
+
+### Task 9h (device feedback: real bug): D-pad can't scroll the Lineup rail past the initially-visible items
+
+**Files:**
+- Modify: `web/src/tvnav.js`
+
+> **Root cause:** the Lineup screen was designed to rely on the generic overlay `candidates()`
+> path (scoped cone-weighted scorer) for Left/Right paging, on the assumption that being an
+> `OVERLAY_IDS` member was enough. It isn't: `candidates()`'s generic list is filtered through
+> `isVisible()`, which explicitly excludes any element whose bounding rect is off-screen
+> (`r.right < 0 || r.left > innerWidth`). For a horizontally-scrolling rail, items beyond the
+> initially-visible window are off-screen and therefore never enter the candidate list at all —
+> so the D-pad can never move focus to them (a chicken-and-egg problem: an item only becomes
+> visible once scrolled into view, but it can only be scrolled into view by first being focused).
+> This is exactly the problem the Coming Attractions poster strip already solves with its own
+> explicit, NOT-`isVisible`-filtered special case in `move()` — the Lineup rail needs the same
+> treatment.
+
+**Interfaces:**
+- No new exports; this only adds a new branch inside `web/src/tvnav.js`'s existing `move()`
+  function.
+
+- [ ] **Step 1:** In `web/src/tvnav.js`'s `move(dir)`, insert a new special case immediately after
+      the existing Coming Attractions poster-strip block and before the generic
+      `const { scope, list } = candidates();` fallback. Find this exact code (the end of the
+      poster-strip block):
+
+```js
+                    // up / down → step back out of the reel onto the toggle
+                    posterZoom(focusEl, false);
+                    if (toggle) setFocus(toggle);
+                    return;
+                }
+            }
+        }
+
+        const { scope, list } = candidates();
+```
+
+Replace it with:
+
+```js
+                    // up / down → step back out of the reel onto the toggle
+                    posterZoom(focusEl, false);
+                    if (toggle) setFocus(toggle);
+                    return;
+                }
+            }
+        }
+
+        // Tonight's Lineup rail: a horizontal reel like the Coming Attractions strip above —
+        // items scrolled past the rail's edge are off-viewport but still valid targets, so
+        // (like the poster strip) this list is NOT isVisible-filtered. Without this, the
+        // generic candidates() path below would strand navigation at whatever's currently
+        // on-screen, since isVisible() excludes anything scrolled out of view.
+        const lineupScreen = document.getElementById('sc-lineup-screen');
+        if (lineupScreen && lineupScreen.classList.contains('sc-lineup-visible') &&
+            (dir === 'left' || dir === 'right')) {
+            const rail = document.getElementById('sc-lineup-rail');
+            const items = rail ? [...rail.querySelectorAll('.sc-lineup-item')] : [];
+            if (items.length) {
+                const i = items.indexOf(focusEl);
+                const ni = dir === 'right' ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
+                setFocus(items[ni]);
+                return;
+            }
+        }
+
+        const { scope, list } = candidates();
+```
+
+- [ ] **Step 2:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 3:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 4:** Commit:
+
+```bash
+git add web/src/tvnav.js app/src/main/assets/cytube_mobile.js
+git commit -m "fix: Lineup rail Left/Right can now reach items scrolled off the initial view"
+```
+
+### Task 9i (design change per user's domain knowledge): widen the single-estimate cold-start window
+
+**Files:**
+- Modify: `web/src/lineup/data.js`
+
+> **Context:** the schedule list is typically posted on Wednesday for the upcoming Friday-Sunday
+> marathon, and there's no live anchor until the marathon actually starts (~Friday noon Pacific).
+> The existing `isFridayBeforeNoonPacific()` heuristic only offers the single first-film estimate
+> on Friday itself -- widen it to Wednesday/Thursday/Friday-before-noon, matching the real window
+> during which a list exists but nothing live has started yet. Saturday/Sunday/Monday/Tuesday keep
+> today's plain `LATE` behavior (no special estimate) -- Sat/Sun should have live data once the
+> marathon is running, and Mon/Tue is the stretch where the "newest" fetchable list is likely still
+> *last* week's already-aired one (no reliable way to detect that staleness without a posted-date
+> signal from the list page, so offering an estimate there risks being wrong rather than merely
+> imprecise -- a known, accepted limitation, not something this change attempts to solve).
+
+- [ ] **Step 1:** In `web/src/lineup/data.js`, rename and widen `isFridayBeforeNoonPacific` --
+      replace:
+
+```js
+// True only during the narrow window this heuristic exists for: the list is usually posted
+// mid-week and showtime is "about Noon PST" on Friday, so before Friday noon Pacific we have
+// no live anchor yet but CAN still make one coarse guess (the first film starts around then).
+function isFridayBeforeNoonPacific(now = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles', weekday: 'short', hour: 'numeric', hourCycle: 'h23',
+    }).formatToParts(now);
+    const weekday = parts.find(p => p.type === 'weekday').value;
+    const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
+    return weekday === 'Fri' && hour < 12;
+}
+```
+
+with:
+
+```js
+// True during the window the list exists but nothing live has started yet: the list is
+// typically posted Wednesday for the upcoming Fri-Sun marathon, and showtime is "about Noon
+// PST" on Friday. Wed/Thu/Fri-before-noon get one coarse "the first film starts around
+// then" guess; Sat/Sun (marathon likely live already) and Mon/Tue (the newest fetchable list
+// is probably still last week's already-aired one, with no way to tell from here) don't.
+function isBeforeFridayNoonPacific(now = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles', weekday: 'short', hour: 'numeric', hourCycle: 'h23',
+    }).formatToParts(now);
+    const weekday = parts.find(p => p.type === 'weekday').value;
+    const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
+    if (weekday === 'Wed' || weekday === 'Thu') return true;
+    if (weekday === 'Fri') return hour < 12;
+    return false;
+}
+```
+
+- [ ] **Step 2:** Update the one call site -- replace:
+
+```js
+        const fridayEstimate = isFridayBeforeNoonPacific();
+```
+
+with:
+
+```js
+        const fridayEstimate = isBeforeFridayNoonPacific();
+```
+
+  (the local variable name `fridayEstimate` and the `'≈ Fri 12:00 PM'` label text stay exactly as
+  they are -- only the function that decides *when* to set it changes.)
+
+- [ ] **Step 3:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 4:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 5:** Commit:
+
+```bash
+git add web/src/lineup/data.js app/src/main/assets/cytube_mobile.js
+git commit -m "feat: offer the cold-start estimate Wed-Fri-noon, not just Friday morning"
+```
