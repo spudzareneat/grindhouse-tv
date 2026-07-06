@@ -452,7 +452,7 @@ import { showLineupScreen } from './lineup/screen.js';
 
 ```bash
 git add web/src/posters.js app/src/main/assets/cytube_mobile.js
-git commit -m "feat: OK on a poster opens Tonight's Lineup (TV)"
+git commit -m "fix: TV toggle button opens Tonight's Lineup directly (skip small strip)"
 ```
 
 ### Task 6 (DEVICE, stage gate): Validate feel on the TV — STOP for explicit go-ahead
