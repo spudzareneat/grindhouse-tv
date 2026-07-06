@@ -14,7 +14,8 @@ function ensureScreenDom() {
     screen = document.createElement('div');
     screen.id = 'sc-lineup-screen';
     screen.innerHTML = `
-        <div id="sc-lineup-header">Tonight's Lineup</div>
+        <div id="sc-lineup-header"></div>
+        <div id="sc-lineup-subtitle">Titles/times may be subject to change.</div>
         <div id="sc-lineup-rail"></div>`;
     document.body.appendChild(screen);
     return screen;
@@ -26,6 +27,8 @@ function renderLoading(screen) {
 }
 
 function renderItems(screen, data) {
+    const header = screen.querySelector('#sc-lineup-header');
+    if (header) header.textContent = (data && data.listTitle) || 'Grindhouse Lineup';
     const rail = screen.querySelector('#sc-lineup-rail');
     const items = (data && data.items) || [];
     if (!items.length) {

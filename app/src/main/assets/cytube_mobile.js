@@ -1191,7 +1191,8 @@
     screen2 = document.createElement("div");
     screen2.id = "sc-lineup-screen";
     screen2.innerHTML = `
-        <div id="sc-lineup-header">Tonight's Lineup</div>
+        <div id="sc-lineup-header"></div>
+        <div id="sc-lineup-subtitle">Titles/times may be subject to change.</div>
         <div id="sc-lineup-rail"></div>`;
     document.body.appendChild(screen2);
     return screen2;
@@ -1200,6 +1201,8 @@
     screen2.querySelector("#sc-lineup-rail").innerHTML = `<div id="sc-lineup-loading">Fetching tonight's lineup…</div>`;
   }
   function renderItems(screen2, data) {
+    const header = screen2.querySelector("#sc-lineup-header");
+    if (header) header.textContent = data && data.listTitle || "Grindhouse Lineup";
     const rail = screen2.querySelector("#sc-lineup-rail");
     const items = data && data.items || [];
     if (!items.length) {
@@ -4780,10 +4783,15 @@
             }\r
             #sc-lineup-screen.sc-lineup-visible { display: flex !important; }\r
             #sc-lineup-header {\r
-                color: #fff !important; font-size: 15px !important; font-weight: 700 !important;\r
-                letter-spacing: 0.14em !important; text-transform: uppercase !important;\r
-                opacity: 0.6 !important; margin-bottom: 28px !important;\r
+                color: #fff !important; font-size: 20px !important; font-weight: 700 !important;\r
+                line-height: 1.25 !important; margin-bottom: 4px !important;\r
             }\r
+            #sc-lineup-subtitle {\r
+                color: rgba(255,255,255,0.45) !important; font-size: 12px !important;\r
+                margin-bottom: 24px !important;\r
+            }\r
+            body.sc-tv #sc-lineup-header { font-size: 26px !important; }\r
+            body.sc-tv #sc-lineup-subtitle { font-size: 15px !important; }\r
             #sc-lineup-rail {\r
                 display: flex !important; gap: 22px !important; width: 100% !important;\r
                 overflow-x: auto !important; overflow-y: hidden !important;\r
@@ -4811,7 +4819,7 @@
                 scroll-snap-align: start !important;\r
             }\r
             .sc-lineup-poster {\r
-                width: 220px !important; height: 308px !important; border-radius: 8px !important;\r
+                width: 220px !important; height: 330px !important; border-radius: 8px !important;\r
                 background-color: rgba(255,255,255,0.08) !important;\r
                 background-size: cover !important; background-position: center !important;\r
                 box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;\r
@@ -4831,7 +4839,7 @@
                 box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 10px 30px rgba(0,0,0,0.5) !important;\r
             }\r
             body.sc-tv .sc-lineup-item { flex-basis: 260px !important; }\r
-            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }\r
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 390px !important; }\r
             body.sc-tv .sc-lineup-title { font-size: 19px !important; }\r
             body.sc-tv .sc-lineup-eta { font-size: 16px !important; }\r
 \r

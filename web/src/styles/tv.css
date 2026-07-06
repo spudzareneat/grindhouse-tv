@@ -530,10 +530,15 @@
             }
             #sc-lineup-screen.sc-lineup-visible { display: flex !important; }
             #sc-lineup-header {
-                color: #fff !important; font-size: 15px !important; font-weight: 700 !important;
-                letter-spacing: 0.14em !important; text-transform: uppercase !important;
-                opacity: 0.6 !important; margin-bottom: 28px !important;
+                color: #fff !important; font-size: 20px !important; font-weight: 700 !important;
+                line-height: 1.25 !important; margin-bottom: 4px !important;
             }
+            #sc-lineup-subtitle {
+                color: rgba(255,255,255,0.45) !important; font-size: 12px !important;
+                margin-bottom: 24px !important;
+            }
+            body.sc-tv #sc-lineup-header { font-size: 26px !important; }
+            body.sc-tv #sc-lineup-subtitle { font-size: 15px !important; }
             #sc-lineup-rail {
                 display: flex !important; gap: 22px !important; width: 100% !important;
                 overflow-x: auto !important; overflow-y: hidden !important;
@@ -561,7 +566,7 @@
                 scroll-snap-align: start !important;
             }
             .sc-lineup-poster {
-                width: 220px !important; height: 308px !important; border-radius: 8px !important;
+                width: 220px !important; height: 330px !important; border-radius: 8px !important;
                 background-color: rgba(255,255,255,0.08) !important;
                 background-size: cover !important; background-position: center !important;
                 box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
@@ -581,7 +586,7 @@
                 box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 10px 30px rgba(0,0,0,0.5) !important;
             }
             body.sc-tv .sc-lineup-item { flex-basis: 260px !important; }
-            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 390px !important; }
             body.sc-tv .sc-lineup-title { font-size: 19px !important; }
             body.sc-tv .sc-lineup-eta { font-size: 16px !important; }
 
