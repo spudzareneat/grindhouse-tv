@@ -124,15 +124,26 @@ export function initTvNav() {
 
     // Topmost interactive overlay (poster strip excluded so its toggle stays reachable)
     const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card', 'sc-lineup-screen'];
+    const isOverlayOpen = (id, o) => !!(o && isVisible(o) &&
+        (id !== 'sc-np-card' || o.classList.contains('sc-np-visible')) &&
+        (id !== 'sc-trivia-card' || o.classList.contains('sc-show')) &&
+        (id !== 'sc-lineup-screen' || o.classList.contains('sc-lineup-visible')));
     const openOverlay = () => {
         for (const id of OVERLAY_IDS) {
             const o = document.getElementById(id);
-            if (o && isVisible(o) &&
-                (id !== 'sc-np-card' || o.classList.contains('sc-np-visible')) &&
-                (id !== 'sc-trivia-card' || o.classList.contains('sc-show')) &&
-                (id !== 'sc-lineup-screen' || o.classList.contains('sc-lineup-visible'))) return o;
+            if (isOverlayOpen(id, o)) return o;
         }
         return null;
+    };
+    // Count of simultaneously-open OVERLAY_IDS layers (0, 1, or 2+ when nested, e.g. the
+    // Now-Playing card opened from within the Lineup screen). Used by activate() to tell
+    // "a new overlay opened on top" (depth increased) apart from "the topmost overlay closed
+    // via its own click-to-dismiss, revealing one underneath" (depth decreased) — an identity
+    // comparison of openOverlay()'s single result can't distinguish these two cases.
+    const countOpenOverlays = () => {
+        let n = 0;
+        for (const id of OVERLAY_IDS) { if (isOverlayOpen(id, document.getElementById(id))) n++; }
+        return n;
     };
 
     // True while "free watch" is on. Seeking the movie (scrubber + Left/Right on
@@ -384,13 +395,21 @@ export function initTvNav() {
         // Remember what opened an overlay so Back can restore focus to it instead
         // of just clearing the ring (see restoreFocusAfterOverlayClose()).
         const opener = focusEl;
-        const openBefore = openOverlay();
+        const depthBefore = countOpenOverlays();
         focusEl.click();
-        const openAfter = openOverlay();
-        // Push whenever the topmost overlay actually changed — covers both "no overlay
-        // was open" (openBefore is null) and "a DIFFERENT overlay opened on top of one
-        // that was already open" (Now-Playing card opened from within the Lineup screen).
-        if (openAfter && openAfter !== openBefore) overlayFocusStack.push(opener);
+        const depthAfter = countOpenOverlays();
+        if (depthAfter > depthBefore) {
+            // A new overlay layer opened on top of whatever was open before (including
+            // "nothing was open") — remember what opened it so Back can restore focus here.
+            overlayFocusStack.push(opener);
+        } else if (depthAfter < depthBefore) {
+            // The click itself closed a layer (a click-to-dismiss overlay like the
+            // Now-Playing card or trivia card, closed by OK instead of Back) — restore
+            // focus exactly the way Back would, popping the entry paired with whatever
+            // just closed. Keeps the stack correctly paired regardless of dismiss method.
+            restoreFocusAfterOverlayClose();
+            return;
+        }
         if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) { clearFocus(); setFocus(ownerBtn); }
     }
 

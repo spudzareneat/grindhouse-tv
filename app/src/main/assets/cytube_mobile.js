@@ -1480,12 +1480,20 @@
       return cs.visibility !== "hidden" && cs.display !== "none";
     };
     const OVERLAY_IDS = ["sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card", "sc-lineup-screen"];
+    const isOverlayOpen = (id, o) => !!(o && isVisible(o) && (id !== "sc-np-card" || o.classList.contains("sc-np-visible")) && (id !== "sc-trivia-card" || o.classList.contains("sc-show")) && (id !== "sc-lineup-screen" || o.classList.contains("sc-lineup-visible")));
     const openOverlay = () => {
       for (const id of OVERLAY_IDS) {
         const o = document.getElementById(id);
-        if (o && isVisible(o) && (id !== "sc-np-card" || o.classList.contains("sc-np-visible")) && (id !== "sc-trivia-card" || o.classList.contains("sc-show")) && (id !== "sc-lineup-screen" || o.classList.contains("sc-lineup-visible"))) return o;
+        if (isOverlayOpen(id, o)) return o;
       }
       return null;
+    };
+    const countOpenOverlays = () => {
+      let n = 0;
+      for (const id of OVERLAY_IDS) {
+        if (isOverlayOpen(id, document.getElementById(id))) n++;
+      }
+      return n;
     };
     const isDesynced = () => {
       const b = document.getElementById("sc-desync-btn");
@@ -1695,10 +1703,15 @@
       const ownerWrap = focusEl.classList && focusEl.classList.contains("vjs-menu-item") && focusEl.closest(".vjs-menu-button");
       const ownerBtn = ownerWrap && ownerWrap.querySelector("button.vjs-menu-button");
       const opener = focusEl;
-      const openBefore = openOverlay();
+      const depthBefore = countOpenOverlays();
       focusEl.click();
-      const openAfter = openOverlay();
-      if (openAfter && openAfter !== openBefore) overlayFocusStack.push(opener);
+      const depthAfter = countOpenOverlays();
+      if (depthAfter > depthBefore) {
+        overlayFocusStack.push(opener);
+      } else if (depthAfter < depthBefore) {
+        restoreFocusAfterOverlayClose();
+        return;
+      }
       if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) {
         clearFocus();
         setFocus(ownerBtn);
