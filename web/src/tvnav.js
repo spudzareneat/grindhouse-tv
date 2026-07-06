@@ -361,6 +361,24 @@ export function initTvNav() {
             }
         }
 
+        // Tonight's Lineup rail: a horizontal reel like the Coming Attractions strip above —
+        // items scrolled past the rail's edge are off-viewport but still valid targets, so
+        // (like the poster strip) this list is NOT isVisible-filtered. Without this, the
+        // generic candidates() path below would strand navigation at whatever's currently
+        // on-screen, since isVisible() excludes anything scrolled out of view.
+        const lineupScreen = document.getElementById('sc-lineup-screen');
+        if (lineupScreen && lineupScreen.classList.contains('sc-lineup-visible') &&
+            (dir === 'left' || dir === 'right')) {
+            const rail = document.getElementById('sc-lineup-rail');
+            const items = rail ? [...rail.querySelectorAll('.sc-lineup-item')] : [];
+            if (items.length) {
+                const i = items.indexOf(focusEl);
+                const ni = dir === 'right' ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
+                setFocus(items[ni]);
+                return;
+            }
+        }
+
         const { scope, list } = candidates();
         if (!list.length) return;
         if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) { setFocus(list[0]); return; }

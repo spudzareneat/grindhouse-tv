@@ -1926,6 +1926,17 @@
           }
         }
       }
+      const lineupScreen = document.getElementById("sc-lineup-screen");
+      if (lineupScreen && lineupScreen.classList.contains("sc-lineup-visible") && (dir === "left" || dir === "right")) {
+        const rail = document.getElementById("sc-lineup-rail");
+        const items = rail ? [...rail.querySelectorAll(".sc-lineup-item")] : [];
+        if (items.length) {
+          const i = items.indexOf(focusEl);
+          const ni = dir === "right" ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
+          setFocus(items[ni]);
+          return;
+        }
+      }
       const { scope, list } = candidates();
       if (!list.length) return;
       if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) {
