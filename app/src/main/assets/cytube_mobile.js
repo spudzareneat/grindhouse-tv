@@ -1162,7 +1162,6 @@
       });
       const wrap = document.createElement("a");
       wrap.appendChild(thumb);
-      if (isTv) wrap.addEventListener("click", () => showLineupScreen());
       strip.appendChild(wrap);
     });
     document.body.appendChild(strip);
@@ -1181,6 +1180,10 @@
     toggleBtn.title = "Show/hide weekend lineup";
     toggleBtn.dataset.noTvCaption = "1";
     toggleBtn.addEventListener("click", () => {
+      if (isTv) {
+        showLineupScreen();
+        return;
+      }
       const visible = strip.classList.toggle("sc-poster-visible");
       toggleBtn.classList.toggle("sc-poster-toggle-active", visible);
       chromeState.topBarIsOpen = visible;

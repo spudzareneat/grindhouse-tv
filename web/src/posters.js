@@ -125,12 +125,6 @@ export function initPosterStrip() {
         // raw image URL on click/OK navigated the WebView and broke the app.
         const wrap = document.createElement('a');
         wrap.appendChild(thumb);
-        // TV only: OK opens the full Tonight's Lineup screen instead of just the
-        // hover-zoom preview (which tvnav.js's setPosterFocus already triggers on
-        // focus). The click event still bubbles to the document-level dismiss
-        // handler above, which collapses the zoom — harmless, since we're navigating
-        // to a full-screen overlay anyway.
-        if (isTv) wrap.addEventListener('click', () => showLineupScreen());
         strip.appendChild(wrap);
     });
     document.body.appendChild(strip);
@@ -155,6 +149,10 @@ export function initPosterStrip() {
     toggleBtn.title = 'Show/hide weekend lineup';
     toggleBtn.dataset.noTvCaption = '1'; // button text is self-explanatory; no remote caption
     toggleBtn.addEventListener('click', () => {
+        // TV: skip the small strip + hover-zoom entirely, open the full-screen Lineup
+        // rail directly — one press, no intermediate zoom step. Phone behavior (toggle
+        // the small strip) is completely unchanged.
+        if (isTv) { showLineupScreen(); return; }
         const visible = strip.classList.toggle('sc-poster-visible');
         toggleBtn.classList.toggle('sc-poster-toggle-active', visible);
         // Tell the top bar system whether strip is open
