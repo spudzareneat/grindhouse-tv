@@ -386,7 +386,18 @@ git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
 git commit -m "style: Tonight's Lineup full-screen rail"
 ```
 
-### Task 5: Entry point — OK on a poster opens the Lineup screen (TV only)
+### Task 5 (REVISED 2026-07-05 after device checkpoint): Entry point — toggle button opens the Lineup screen directly (TV only)
+
+> **Revision note:** the original Task 5 (OK on an individual poster inside the small strip
+> opens the Lineup screen) was implemented, reviewed, and device-tested. On the real TV it felt
+> janky — hover-zoom-into-the-small-strip, then OK-into-the-full-screen, then Back-Back-out was
+> too many steps stacked on top of each other. User feedback: skip the small strip navigation
+> entirely on TV — the "Coming Attractions" toggle button should open the full-screen Lineup
+> directly, one press, no intermediate zoom step. The small strip + hover-zoom stay completely
+> unchanged for phone (this was never TV-gated there). This only changes `posters.js` — Tasks
+> 2-4's screen/nav/CSS work is unaffected, because `sc-poster-toggle` was already reachable via
+> D-pad in `tvnav.js`'s `MAIN_IDS`, and Task 3's depth-based overlay-stack fix generically detects
+> "a new overlay opened" from *any* element's click, not specifically a poster's.
 
 **Files:**
 - Modify: `web/src/posters.js`
@@ -404,20 +415,35 @@ import { isTv } from './tvdetect.js';
 import { showLineupScreen } from './lineup/screen.js';
 ```
 
-- [ ] **Step 2:** In `initPosterStrip()`'s `imgs.forEach(...)` loop, add a click handler on the
-      wrapper anchor (right after it's created, before it's appended to the strip):
+- [ ] **Step 2:** Do NOT add any click handler to the individual poster `<a>` wrappers (the
+      original Task 5 approach) — revert that if present. Instead, modify the toggle button's
+      existing click handler (in `initPosterStrip()`, the `toggleBtn.addEventListener('click', ...)`
+      block) so that on TV it opens the Lineup screen directly instead of toggling the small
+      strip's visibility:
 
 ```js
-        const wrap = document.createElement('a');
-        wrap.appendChild(thumb);
-        // TV only: OK opens the full Tonight's Lineup screen instead of just the
-        // hover-zoom preview (which tvnav.js's setPosterFocus already triggers on
-        // focus). The click event still bubbles to the document-level dismiss
-        // handler above, which collapses the zoom — harmless, since we're navigating
-        // to a full-screen overlay anyway.
-        if (isTv) wrap.addEventListener('click', () => showLineupScreen());
-        strip.appendChild(wrap);
+    toggleBtn.addEventListener('click', () => {
+        // TV: skip the small strip + hover-zoom entirely, open the full-screen Lineup
+        // rail directly — one press, no intermediate zoom step. Phone behavior (toggle
+        // the small strip) is completely unchanged.
+        if (isTv) { showLineupScreen(); return; }
+        const visible = strip.classList.toggle('sc-poster-visible');
+        toggleBtn.classList.toggle('sc-poster-toggle-active', visible);
+        // Tell the top bar system whether strip is open
+        chromeState.topBarIsOpen = visible;
+        if (visible && chromeState.topBarWake) {
+            chromeState.topBarWake(); // wake and keep awake
+        }
+        // If closing, restart the idle timer via a mousemove wake
+        // (the next mousemove in the zone will restart it naturally)
+    });
 ```
+
+  This makes the small strip's `.sc-poster-visible` class permanently untoggled on TV, so
+  `tvnav.js`'s existing Coming-Attractions-reel D-pad special-casing in `move()` (entering the
+  strip, Left/Right paging posters, Up/Down exiting) becomes unreachable there — intentionally
+  left in place rather than removed, since it's still live and load-bearing for phone/tablet
+  touch navigation of the same strip, and this revision's scope is the TV entry point only.
 
 - [ ] **Step 3:** `cd web && npm run lint` — expect no errors.
 - [ ] **Step 4:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` — expect
