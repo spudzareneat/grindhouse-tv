@@ -1463,3 +1463,47 @@ git commit -m "feat: Lineup screen shows the real list title + disclaimer, fix p
       now-playing card does.
 - [ ] **Step 7: STOP.** Report results to the user and confirm Tonight's Lineup is complete, or
       note any follow-up.
+
+### Task 9d (found during controller's own device smoke test, before handing to user): posters get flex-shrunk shorter than their specified size
+
+**Files:**
+- Modify: `web/src/styles/tv.css`
+
+`.sc-lineup-poster` sits inside `.sc-lineup-item`, which is `display: flex; flex-direction:
+column` — making HEIGHT the flex main axis for the poster. A flex item's `flex-shrink` defaults to
+`1`, so on a screen where the item's available height is tight (verified live on a 960x540 test
+device), the poster compresses below its specified `height` even though `width` stays correct —
+silently reintroducing the aspect-ratio distortion Task 9c just fixed, just via a different
+mechanism (flex compression instead of `background-size: cover` cropping).
+
+- [ ] **Step 1:** In `web/src/styles/tv.css`, add `flex-shrink: 0` to `.sc-lineup-poster` — replace:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 330px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: cover !important; background-position: center !important;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
+```
+
+with:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 330px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: cover !important; background-position: center !important;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+                flex-shrink: 0 !important; /* keep the 2:3 box exact; the item column may
+                                              scroll/overflow before the poster compresses */
+            }
+```
+
+- [ ] **Step 2:** `cd web && npm run bundle` — confirm it succeeds.
+- [ ] **Step 3:** Commit:
+
+```bash
+git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "fix: prevent Lineup poster art from being flex-shrunk off its 2:3 ratio"
+```
