@@ -1507,3 +1507,63 @@ with:
 git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
 git commit -m "fix: prevent Lineup poster art from being flex-shrunk off its 2:3 ratio"
 ```
+
+### Task 9e (device feedback on Task 9c/9d): revert frame size, use `background-size: contain` instead
+
+**Files:**
+- Modify: `web/src/styles/tv.css`
+
+> **Feedback:** growing the frame to TMDB's exact 2:3 ratio (Task 9c/9d) fixed the cropping but
+> made the whole card too big -- the poster now dominates the tile, the leftmost item's edge
+> doesn't fit in the panel, and there's no longer room to read a title/eta line below it. The
+> actual fix should keep the ORIGINAL, liked frame size (220x308 base / 260x364 TV) and instead
+> switch `background-size` from `cover` (crops to fill the box, which is what caused the original
+> cropping complaint) to `contain` (scales the whole image to fit inside the box, preserving its
+> aspect ratio -- a small letterbox gap on the sides is a much smaller cost than either cropping or
+> blowing up the frame). `flex-shrink: 0` (Task 9d) stays -- still good practice regardless of size.
+
+- [ ] **Step 1:** Replace the poster rule -- change:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 330px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: cover !important; background-position: center !important;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+                flex-shrink: 0 !important; /* keep the 2:3 box exact; the item column may
+                                              scroll/overflow before the poster compresses */
+            }
+```
+
+to:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 308px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: contain !important; background-repeat: no-repeat !important;
+                background-position: center !important;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+                flex-shrink: 0 !important; /* keep the box exact regardless of available space */
+            }
+```
+
+- [ ] **Step 2:** Revert the TV-size override -- change:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 390px !important; }
+```
+
+to:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }
+```
+
+- [ ] **Step 3:** `cd web && npm run bundle` -- confirm it succeeds.
+- [ ] **Step 4:** Commit:
+
+```bash
+git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "fix: revert Lineup poster frame to original size, use background-size:contain to avoid cropping"
+```
