@@ -3,6 +3,7 @@ import { holdScrubber, wakeVideoControls } from './player/scrubber.js';
 import { chromeState } from './chrome/state.js';
 import { hideTriviaCard } from './cards/trivia.js';
 import { hideNowPlayingCard } from './cards/nowplaying.js';
+import { hideLineupScreen } from './lineup/screen.js';
 import { pickDirectional } from './tvnav/geometry.js';
 
 // Let other UI (settings modal) place the remote's focus ring on an element.
@@ -109,7 +110,7 @@ export function initLoginTvNav() {
 export function initTvNav() {
     if (!isTv) return;
     let focusEl = null;
-    let preOverlayFocusEl = null;
+    let overlayFocusStack = [];
 
     const isVisible = (el) => {
         if (!el || !el.getBoundingClientRect) return false;
@@ -122,13 +123,14 @@ export function initTvNav() {
     };
 
     // Topmost interactive overlay (poster strip excluded so its toggle stays reachable)
-    const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card'];
+    const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card', 'sc-lineup-screen'];
     const openOverlay = () => {
         for (const id of OVERLAY_IDS) {
             const o = document.getElementById(id);
             if (o && isVisible(o) &&
                 (id !== 'sc-np-card' || o.classList.contains('sc-np-visible')) &&
-                (id !== 'sc-trivia-card' || o.classList.contains('sc-show'))) return o;
+                (id !== 'sc-trivia-card' || o.classList.contains('sc-show')) &&
+                (id !== 'sc-lineup-screen' || o.classList.contains('sc-lineup-visible'))) return o;
         }
         return null;
     };
@@ -221,12 +223,12 @@ export function initTvNav() {
         focusEl = null;
     }
 
-    // Back-from-overlay restores focus to whatever opened it (settings gear,
-    // trivia button, ...) instead of leaving the ring cleared. Falls back to a
-    // plain clearFocus() if the opener is gone or hidden.
+    // Back-from-overlay restores focus to whatever opened it (settings gear, trivia
+    // button, the poster that opened the Lineup screen, ...). A stack so a nested
+    // overlay (Now-Playing card opened FROM the Lineup screen) unwinds one level at a
+    // time instead of jumping straight back to whatever opened the outermost one.
     function restoreFocusAfterOverlayClose() {
-        const restore = preOverlayFocusEl;
-        preOverlayFocusEl = null;
+        const restore = overlayFocusStack.pop() || null;
         clearFocus();
         if (restore && isVisible(restore)) setFocus(restore);
     }
@@ -382,9 +384,13 @@ export function initTvNav() {
         // Remember what opened an overlay so Back can restore focus to it instead
         // of just clearing the ring (see restoreFocusAfterOverlayClose()).
         const opener = focusEl;
-        const hadOverlay = !!openOverlay();
+        const openBefore = openOverlay();
         focusEl.click();
-        if (!hadOverlay && openOverlay()) preOverlayFocusEl = opener;
+        const openAfter = openOverlay();
+        // Push whenever the topmost overlay actually changed — covers both "no overlay
+        // was open" (openBefore is null) and "a DIFFERENT overlay opened on top of one
+        // that was already open" (Now-Playing card opened from within the Lineup screen).
+        if (openAfter && openAfter !== openBefore) overlayFocusStack.push(opener);
         if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) { clearFocus(); setFocus(ownerBtn); }
     }
 
@@ -417,6 +423,8 @@ export function initTvNav() {
         if (trivia && trivia.classList.contains('sc-show')) { hideTriviaCard(); restoreFocusAfterOverlayClose(); return true; }
         const np = document.getElementById('sc-np-card');
         if (np && np.classList.contains('sc-np-visible')) { hideNowPlayingCard(); restoreFocusAfterOverlayClose(); return true; }
+        const lineup = document.getElementById('sc-lineup-screen');
+        if (lineup && lineup.classList.contains('sc-lineup-visible')) { hideLineupScreen(); restoreFocusAfterOverlayClose(); return true; }
         for (const id of ['sc-users-panel', 'sc-poll-panel']) {
             const p = document.getElementById(id);
             if (p && isVisible(p)) { p.style.display = 'none'; restoreFocusAfterOverlayClose(); return true; }

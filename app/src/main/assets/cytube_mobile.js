@@ -1306,6 +1306,12 @@
     else showTriviaCard();
   }
 
+  // src/lineup/screen.js
+  function hideLineupScreen() {
+    const screen2 = document.getElementById("sc-lineup-screen");
+    if (screen2) screen2.classList.remove("sc-lineup-visible");
+  }
+
   // src/tvnav/geometry.js
   function pickDirectional(dir, curRect, rects) {
     const cx = curRect.left + curRect.width / 2, cy = curRect.top + curRect.height / 2;
@@ -1464,7 +1470,7 @@
   function initTvNav() {
     if (!isTv) return;
     let focusEl = null;
-    let preOverlayFocusEl = null;
+    let overlayFocusStack = [];
     const isVisible = (el) => {
       if (!el || !el.getBoundingClientRect) return false;
       const r = el.getBoundingClientRect();
@@ -1473,11 +1479,11 @@
       const cs = getComputedStyle(el);
       return cs.visibility !== "hidden" && cs.display !== "none";
     };
-    const OVERLAY_IDS = ["sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card"];
+    const OVERLAY_IDS = ["sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card", "sc-lineup-screen"];
     const openOverlay = () => {
       for (const id of OVERLAY_IDS) {
         const o = document.getElementById(id);
-        if (o && isVisible(o) && (id !== "sc-np-card" || o.classList.contains("sc-np-visible")) && (id !== "sc-trivia-card" || o.classList.contains("sc-show"))) return o;
+        if (o && isVisible(o) && (id !== "sc-np-card" || o.classList.contains("sc-np-visible")) && (id !== "sc-trivia-card" || o.classList.contains("sc-show")) && (id !== "sc-lineup-screen" || o.classList.contains("sc-lineup-visible"))) return o;
       }
       return null;
     };
@@ -1550,8 +1556,7 @@
       focusEl = null;
     }
     function restoreFocusAfterOverlayClose() {
-      const restore = preOverlayFocusEl;
-      preOverlayFocusEl = null;
+      const restore = overlayFocusStack.pop() || null;
       clearFocus();
       if (restore && isVisible(restore)) setFocus(restore);
     }
@@ -1690,9 +1695,10 @@
       const ownerWrap = focusEl.classList && focusEl.classList.contains("vjs-menu-item") && focusEl.closest(".vjs-menu-button");
       const ownerBtn = ownerWrap && ownerWrap.querySelector("button.vjs-menu-button");
       const opener = focusEl;
-      const hadOverlay = !!openOverlay();
+      const openBefore = openOverlay();
       focusEl.click();
-      if (!hadOverlay && openOverlay()) preOverlayFocusEl = opener;
+      const openAfter = openOverlay();
+      if (openAfter && openAfter !== openBefore) overlayFocusStack.push(opener);
       if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) {
         clearFocus();
         setFocus(ownerBtn);
@@ -1747,6 +1753,12 @@
       const np = document.getElementById("sc-np-card");
       if (np && np.classList.contains("sc-np-visible")) {
         hideNowPlayingCard();
+        restoreFocusAfterOverlayClose();
+        return true;
+      }
+      const lineup = document.getElementById("sc-lineup-screen");
+      if (lineup && lineup.classList.contains("sc-lineup-visible")) {
+        hideLineupScreen();
         restoreFocusAfterOverlayClose();
         return true;
       }
