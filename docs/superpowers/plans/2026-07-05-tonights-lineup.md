@@ -1567,3 +1567,178 @@ to:
 git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
 git commit -m "fix: revert Lineup poster frame to original size, use background-size:contain to avoid cropping"
 ```
+
+### Task 9f (device feedback: still clipped): shrink header/subtitle/poster to fit the actual viewport, add shadow clearance
+
+**Files:**
+- Modify: `web/src/styles/tv.css`
+
+> **Root cause traced on the actual test device (960x540):** the full vertical stack (screen
+> padding + header + subtitle + rail padding + poster + gap + title + gap + eta) sums to more than
+> the 540px viewport height once the header holds the REAL list title (a full sentence, e.g. 63
+> characters) at the size tuned for the old short static label -- at that font size the sentence
+> likely wraps to 2 lines, pushing the bottom of the tile (title/eta) off-screen. Separately, the
+> "left side clipped" look is the poster's box-shadow/focus-ring glow getting cut off by the rail's
+> own `overflow-x: auto` boundary, since the rail's left padding (4px) isn't enough clearance for a
+> 30px shadow blur + focus outline on the leftmost item (nothing to scroll into on that side to
+> reveal the rest of the effect). Fix: shrink header/subtitle text and margins (it's holding a
+> sentence now, not a short label), reduce screen padding, trim the poster a bit further, reduce
+> shadow blur radius (needs less clearance), widen the rail's side padding for shadow/focus
+> clearance, and add `overflow-y: auto` on the screen itself as a safety net for even tighter
+> screens.
+
+- [ ] **Step 1:** Replace the screen padding -- change:
+
+```css
+            #sc-lineup-screen {
+                position: fixed !important; inset: 0 !important;
+                z-index: 20500 !important; /* below #sc-np-card (21000) so OK on a film covers this */
+                background: rgba(6,4,9,0.97) !important;
+                display: none !important; flex-direction: column !important;
+                align-items: flex-start !important; justify-content: center !important;
+                font-family: 'Inter','Roboto',system-ui,sans-serif !important;
+                padding: 5vh 4vw !important; box-sizing: border-box !important;
+            }
+```
+
+to:
+
+```css
+            #sc-lineup-screen {
+                position: fixed !important; inset: 0 !important;
+                z-index: 20500 !important; /* below #sc-np-card (21000) so OK on a film covers this */
+                background: rgba(6,4,9,0.97) !important;
+                display: none !important; flex-direction: column !important;
+                align-items: flex-start !important; justify-content: center !important;
+                font-family: 'Inter','Roboto',system-ui,sans-serif !important;
+                padding: 2vh 4vw !important; box-sizing: border-box !important;
+                overflow-y: auto !important; /* safety net: never let content become unreachable
+                                                 on an especially short screen */
+            }
+```
+
+- [ ] **Step 2:** Shrink the header/subtitle (it now holds a full sentence-length real list title,
+      not a short static label) -- change:
+
+```css
+            #sc-lineup-header {
+                color: #fff !important; font-size: 20px !important; font-weight: 700 !important;
+                line-height: 1.25 !important; margin-bottom: 4px !important;
+            }
+            #sc-lineup-subtitle {
+                color: rgba(255,255,255,0.45) !important; font-size: 12px !important;
+                margin-bottom: 24px !important;
+            }
+            body.sc-tv #sc-lineup-header { font-size: 26px !important; }
+            body.sc-tv #sc-lineup-subtitle { font-size: 15px !important; }
+```
+
+to:
+
+```css
+            #sc-lineup-header {
+                color: #fff !important; font-size: 14px !important; font-weight: 700 !important;
+                line-height: 1.25 !important; margin-bottom: 4px !important;
+            }
+            #sc-lineup-subtitle {
+                color: rgba(255,255,255,0.45) !important; font-size: 11px !important;
+                margin-bottom: 12px !important;
+            }
+            body.sc-tv #sc-lineup-header { font-size: 15px !important; }
+            body.sc-tv #sc-lineup-subtitle { font-size: 12px !important; }
+```
+
+- [ ] **Step 3:** Widen the rail's side padding so the poster's shadow/focus-ring has clearance
+      instead of being clipped by the scroll container's own edge -- change:
+
+```css
+            #sc-lineup-rail {
+                display: flex !important; gap: 22px !important; width: 100% !important;
+                overflow-x: auto !important; overflow-y: hidden !important;
+                padding: 8px 4px 16px !important;
+```
+
+to:
+
+```css
+            #sc-lineup-rail {
+                display: flex !important; gap: 22px !important; width: 100% !important;
+                overflow-x: auto !important; overflow-y: hidden !important;
+                padding: 8px 24px 14px !important;
+```
+
+- [ ] **Step 4:** Reduce the poster's shadow blur (needs less clearance, and reads lighter) and
+      trim the TV poster size a bit further for safety margin on short screens -- change:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 308px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: contain !important; background-repeat: no-repeat !important;
+                background-position: center !important;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+                flex-shrink: 0 !important; /* keep the box exact regardless of available space */
+            }
+            .sc-lineup-item-current .sc-lineup-poster {
+                box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
+```
+
+to:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 308px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: contain !important; background-repeat: no-repeat !important;
+                background-position: center !important;
+                box-shadow: 0 6px 14px rgba(0,0,0,0.45) !important;
+                flex-shrink: 0 !important; /* keep the box exact regardless of available space */
+            }
+            .sc-lineup-item-current .sc-lineup-poster {
+                box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 6px 14px rgba(0,0,0,0.45) !important;
+            }
+```
+
+- [ ] **Step 5:** Match the reduced shadow blur in the focus-ring rule -- change:
+
+```css
+            body.sc-tv .sc-lineup-item.sc-tv-focus .sc-lineup-poster {
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
+```
+
+to:
+
+```css
+            body.sc-tv .sc-lineup-item.sc-tv-focus .sc-lineup-poster {
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 6px 14px rgba(0,0,0,0.45) !important;
+            }
+```
+
+- [ ] **Step 6:** Trim the TV poster/title/eta sizes for extra safety margin on short screens --
+      change:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }
+            body.sc-tv .sc-lineup-title { font-size: 19px !important; }
+            body.sc-tv .sc-lineup-eta { font-size: 16px !important; }
+```
+
+to:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 340px !important; }
+            body.sc-tv .sc-lineup-title { font-size: 16px !important; }
+            body.sc-tv .sc-lineup-eta { font-size: 14px !important; }
+```
+
+- [ ] **Step 7:** `cd web && npm run bundle` -- confirm it succeeds.
+- [ ] **Step 8:** Commit:
+
+```bash
+git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "fix: shrink Lineup header/subtitle/poster to fit short screens, add shadow clearance"
+```
