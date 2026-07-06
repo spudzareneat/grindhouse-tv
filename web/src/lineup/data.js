@@ -5,20 +5,27 @@ import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.
 import { formatEta, medianGapSeconds } from './timing.js';
 
 /* ==========================================================
-   TONIGHT'S LINEUP — data interface consumed by lineup/screen.js.
+   TONIGHT'S LINEUP -- data interface consumed by lineup/screen.js.
    Fetches + caches the Letterboxd schedule once per session, locates "now" in
-   it via the live current title, and projects each future item's ETA from
-   TMDB runtimes plus a learned median bumper-gap. Falls back to a
+   it via the live current title, and projects each of the next 4 upcoming
+   films' ETA from TMDB runtimes plus a learned median bumper-gap (beyond that,
+   compounding uncertainty isn't worth displaying as a time). Falls back to a
    Now/Next-only view (built purely from live changeMedia data) if the
    Letterboxd fetch fails, or to running-order-only (no times) if "now" can't
-   be placed on the list (e.g. a bumper is currently playing).
+   be placed on the list -- except the one case where a coarse anchor still
+   exists without a live match: Friday before the marathon's usual noon-Pacific
+   start, where the first film gets a single "starts around then" estimate.
 ========================================================== */
 
-let _scheduleCache = null;   // [{title, year}] for the whole night, or null before first fetch
+let _scheduleCache = null;   // [{title, year}] for the whole weekend, or null before first fetch
+let _listTitle = null;       // the real Letterboxd list's own title, shown as the screen header
 let _fetchFailed = false;    // sticky for the session once Letterboxd is unreachable
 let _lastChangeMedia = null; // most recent changeMedia payload (title), for the fallback
 let _observedGapSeconds = []; // durations (s) of changeMedia items that didn't match the schedule
 let _lastUnmatchedStart = null; // Date.now() when the current unmatched (bumper) item started
+
+const FALLBACK_LIST_TITLE = 'Now / Next';
+const MAX_ESTIMATED_AHEAD = 4; // only the next N upcoming films get any time estimate at all
 
 // Learn bumper-gap duration live: a changeMedia title that doesn't match anything in
 // tonight's schedule is a bumper; the time between it starting and the next
@@ -39,7 +46,9 @@ onSocket('changeMedia', (d) => {
 async function ensureSchedule() {
     if (_scheduleCache || _fetchFailed) return;
     try {
-        _scheduleCache = await fetchTonightsSchedule();
+        const result = await fetchTonightsSchedule();
+        _scheduleCache = result.items;
+        _listTitle = result.listTitle;
     } catch (e) {
         _fetchFailed = true;
     }
@@ -65,27 +74,57 @@ function fallbackItems() {
     return items;
 }
 
+// True only during the narrow window this heuristic exists for: the list is usually posted
+// mid-week and showtime is "about Noon PST" on Friday, so before Friday noon Pacific we have
+// no live anchor yet but CAN still make one coarse guess (the first film starts around then).
+function isFridayBeforeNoonPacific(now = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles', weekday: 'short', hour: 'numeric', hourCycle: 'h23',
+    }).formatToParts(now);
+    const weekday = parts.find(p => p.type === 'weekday').value;
+    const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
+    return weekday === 'Fri' && hour < 12;
+}
+
+// Every item's TMDB/IMDb-enriched fields, shared by both the matched and unmatched branches
+// below -- including parentalGuide/killCount/imdbId/rating/genres, which lookupMovie() already
+// fetches but earlier code dropped when building each item (browsing a film from the rail
+// showed none of the parent-guide chips the real now-playing card shows).
+function buildBase(info, title, year) {
+    return {
+        cleanTitle: info.cleanTitle || title,
+        cleanYear: info.cleanYear || year,
+        poster: info.poster || null,
+        backdrop: info.backdrop || null,
+        overview: info.overview || '',
+        rating: info.rating ?? null,
+        genres: info.genres || [],
+        parentalGuide: info.parentalGuide || null,
+        killCount: info.killCount ?? null,
+        imdbId: info.imdbId || null,
+    };
+}
+
 export async function getTonightsLineup() {
     await ensureSchedule();
-    if (!_scheduleCache) return { items: fallbackItems() };
+    if (!_scheduleCache) return { listTitle: FALLBACK_LIST_TITLE, items: fallbackItems() };
 
     const infos = await Promise.all(_scheduleCache.map(({ title, year }) => lookupMovie(title, year)));
     const currentIndex = _scheduleCache.findIndex(s =>
         movieState.lastMovieTitle && s.title.toLowerCase() === movieState.lastMovieTitle.toLowerCase());
 
     if (currentIndex === -1) {
-        // Can't place "now" on the list (e.g. a bumper is playing right now, or the
-        // current title didn't match) — running order only, no times, per the vision
-        // doc's "never display precision the data can't support."
+        // Can't place "now" on the list (a bumper is playing, an off-schedule item is airing,
+        // or the marathon hasn't started this week) -- running order only, no times, per the
+        // vision doc's "never display precision the data can't support" -- except the single
+        // Friday-before-noon case, where the first film gets one coarse estimate.
+        const fridayEstimate = isFridayBeforeNoonPacific();
         return {
+            listTitle: _listTitle || FALLBACK_LIST_TITLE,
             items: _scheduleCache.map(({ title, year }, i) => ({
-                cleanTitle: infos[i].cleanTitle || title,
-                cleanYear: infos[i].cleanYear || year,
-                poster: infos[i].poster || null,
-                backdrop: infos[i].backdrop || null,
-                overview: infos[i].overview || '',
+                ...buildBase(infos[i], title, year),
                 isNowPlaying: false,
-                etaLabel: 'LATE',
+                etaLabel: (fridayEstimate && i === 0) ? '≈ Fri 12:00 PM' : 'LATE',
             })),
         };
     }
@@ -96,21 +135,19 @@ export async function getTonightsLineup() {
     for (let i = currentIndex; i < _scheduleCache.length; i++) {
         const { title, year } = _scheduleCache[i];
         const info = infos[i];
-        const base = {
-            cleanTitle: info.cleanTitle || title,
-            cleanYear: info.cleanYear || year,
-            poster: info.poster || null,
-            backdrop: info.backdrop || null,
-            overview: info.overview || '',
-        };
+        const base = buildBase(info, title, year);
         const offset = i - currentIndex;
         if (offset === 0) { items.push({ ...base, isNowPlaying: true, etaLabel: '' }); continue; }
 
         cumulative += learnedGap; // a bumper precedes this feature
-        const precision = offset === 1 ? 'exact' : offset <= 3 ? 'approx' : 'late';
-        const eta = new Date(Date.now() + cumulative * 1000);
-        items.push({ ...base, isNowPlaying: false, etaLabel: formatEta(eta.getHours(), eta.getMinutes(), precision) });
+        if (offset > MAX_ESTIMATED_AHEAD) {
+            items.push({ ...base, isNowPlaying: false, etaLabel: 'LATE' });
+        } else {
+            const precision = offset === 1 ? 'exact' : 'approx';
+            const eta = new Date(Date.now() + cumulative * 1000);
+            items.push({ ...base, isNowPlaying: false, etaLabel: formatEta(eta.getHours(), eta.getMinutes(), precision) });
+        }
         cumulative += info.runtime ? info.runtime * 60 : 0; // then this feature's own runtime
     }
-    return { items };
+    return { listTitle: _listTitle || FALLBACK_LIST_TITLE, items };
 }

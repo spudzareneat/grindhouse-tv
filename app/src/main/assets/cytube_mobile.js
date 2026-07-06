@@ -550,6 +550,10 @@
   function decodeHtmlEntities(s) {
     return s.replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10))).replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">");
   }
+  function parseListTitle(listPageHtml) {
+    const m = listPageHtml.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']*)["']/i);
+    return m ? decodeHtmlEntities(m[1]).trim() : null;
+  }
   function parseListTitles(listPageHtml) {
     const re = /data-item-name="([^"]*)"/g;
     const items = [];
@@ -569,9 +573,9 @@
     if (!listUrl) throw new Error("no current-week schedule list found");
     const listRes = await nativeHttpGet2(listUrl, BROWSER_HEADERS);
     if (!listRes || listRes.status !== 200) throw new Error("Letterboxd list HTTP " + (listRes && listRes.status));
-    const titles = parseListTitles(listRes.body);
-    if (!titles.length) throw new Error("no titles parsed from schedule list");
-    return titles;
+    const items = parseListTitles(listRes.body);
+    if (!items.length) throw new Error("no titles parsed from schedule list");
+    return { listTitle: parseListTitle(listRes.body), items };
   }
 
   // src/metadata/tmdb.js
@@ -816,10 +820,13 @@
 
   // src/lineup/data.js
   var _scheduleCache = null;
+  var _listTitle = null;
   var _fetchFailed = false;
   var _lastChangeMedia = null;
   var _observedGapSeconds = [];
   var _lastUnmatchedStart = null;
+  var FALLBACK_LIST_TITLE = "Now / Next";
+  var MAX_ESTIMATED_AHEAD = 4;
   onSocket("changeMedia", (d) => {
     const title = d && d.title;
     const matchesSchedule = !!(title && _scheduleCache && _scheduleCache.some((s) => s.title.toLowerCase() === title.toLowerCase()));
@@ -834,7 +841,9 @@
   async function ensureSchedule() {
     if (_scheduleCache || _fetchFailed) return;
     try {
-      _scheduleCache = await fetchTonightsSchedule();
+      const result = await fetchTonightsSchedule();
+      _scheduleCache = result.items;
+      _listTitle = result.listTitle;
     } catch (e) {
       _fetchFailed = true;
     }
@@ -865,22 +874,46 @@
     }
     return items;
   }
+  function isFridayBeforeNoonPacific(now = /* @__PURE__ */ new Date()) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      weekday: "short",
+      hour: "numeric",
+      hourCycle: "h23"
+    }).formatToParts(now);
+    const weekday = parts.find((p) => p.type === "weekday").value;
+    const hour = parseInt(parts.find((p) => p.type === "hour").value, 10);
+    return weekday === "Fri" && hour < 12;
+  }
+  function buildBase(info, title, year) {
+    var _a, _b;
+    return {
+      cleanTitle: info.cleanTitle || title,
+      cleanYear: info.cleanYear || year,
+      poster: info.poster || null,
+      backdrop: info.backdrop || null,
+      overview: info.overview || "",
+      rating: (_a = info.rating) != null ? _a : null,
+      genres: info.genres || [],
+      parentalGuide: info.parentalGuide || null,
+      killCount: (_b = info.killCount) != null ? _b : null,
+      imdbId: info.imdbId || null
+    };
+  }
   async function getTonightsLineup() {
     var _a;
     await ensureSchedule();
-    if (!_scheduleCache) return { items: fallbackItems() };
+    if (!_scheduleCache) return { listTitle: FALLBACK_LIST_TITLE, items: fallbackItems() };
     const infos = await Promise.all(_scheduleCache.map(({ title, year }) => lookupMovie(title, year)));
     const currentIndex = _scheduleCache.findIndex((s) => movieState.lastMovieTitle && s.title.toLowerCase() === movieState.lastMovieTitle.toLowerCase());
     if (currentIndex === -1) {
+      const fridayEstimate = isFridayBeforeNoonPacific();
       return {
+        listTitle: _listTitle || FALLBACK_LIST_TITLE,
         items: _scheduleCache.map(({ title, year }, i) => ({
-          cleanTitle: infos[i].cleanTitle || title,
-          cleanYear: infos[i].cleanYear || year,
-          poster: infos[i].poster || null,
-          backdrop: infos[i].backdrop || null,
-          overview: infos[i].overview || "",
+          ...buildBase(infos[i], title, year),
           isNowPlaying: false,
-          etaLabel: "LATE"
+          etaLabel: fridayEstimate && i === 0 ? "≈ Fri 12:00 PM" : "LATE"
         }))
       };
     }
@@ -890,25 +923,23 @@
     for (let i = currentIndex; i < _scheduleCache.length; i++) {
       const { title, year } = _scheduleCache[i];
       const info = infos[i];
-      const base = {
-        cleanTitle: info.cleanTitle || title,
-        cleanYear: info.cleanYear || year,
-        poster: info.poster || null,
-        backdrop: info.backdrop || null,
-        overview: info.overview || ""
-      };
+      const base = buildBase(info, title, year);
       const offset = i - currentIndex;
       if (offset === 0) {
         items.push({ ...base, isNowPlaying: true, etaLabel: "" });
         continue;
       }
       cumulative += learnedGap;
-      const precision = offset === 1 ? "exact" : offset <= 3 ? "approx" : "late";
-      const eta = new Date(Date.now() + cumulative * 1e3);
-      items.push({ ...base, isNowPlaying: false, etaLabel: formatEta(eta.getHours(), eta.getMinutes(), precision) });
+      if (offset > MAX_ESTIMATED_AHEAD) {
+        items.push({ ...base, isNowPlaying: false, etaLabel: "LATE" });
+      } else {
+        const precision = offset === 1 ? "exact" : "approx";
+        const eta = new Date(Date.now() + cumulative * 1e3);
+        items.push({ ...base, isNowPlaying: false, etaLabel: formatEta(eta.getHours(), eta.getMinutes(), precision) });
+      }
       cumulative += info.runtime ? info.runtime * 60 : 0;
     }
-    return { items };
+    return { listTitle: _listTitle || FALLBACK_LIST_TITLE, items };
   }
 
   // src/cards/trivia.js
