@@ -4842,8 +4842,8 @@
                 outline: 3px solid #e0701a !important; outline-offset: 2px !important;\r
                 box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 6px 14px rgba(0,0,0,0.45) !important;\r
             }\r
-            body.sc-tv .sc-lineup-item { flex-basis: 260px !important; }\r
-            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 340px !important; }\r
+            body.sc-tv .sc-lineup-item { flex-basis: 226px !important; }\r
+            body.sc-tv .sc-lineup-poster { width: 226px !important; height: 339px !important; }\r
             body.sc-tv .sc-lineup-title { font-size: 16px !important; }\r
             body.sc-tv .sc-lineup-eta { font-size: 14px !important; }\r
 \r
