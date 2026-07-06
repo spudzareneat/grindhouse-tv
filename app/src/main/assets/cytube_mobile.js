@@ -974,9 +974,15 @@
     }
     chips.innerHTML = chipHtml.join("");
     card.classList.add("sc-np-visible");
-    _renderNpProgress();
-    clearInterval(_npProgTimer);
-    _npProgTimer = setInterval(_renderNpProgress, 500);
+    const progWrap = card.querySelector("#sc-np-progress");
+    if (opts.showProgress !== false) {
+      _renderNpProgress();
+      clearInterval(_npProgTimer);
+      _npProgTimer = setInterval(_renderNpProgress, 500);
+    } else {
+      clearInterval(_npProgTimer);
+      if (progWrap) progWrap.style.display = "none";
+    }
     const revealMs = _autoScrollOverview();
     clearTimeout(_npHideTimer);
     if (opts.autoHide) {
@@ -1058,7 +1064,7 @@
             <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ""}"></div>
             <div class="sc-lineup-title">${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ""}</div>
             <div class="sc-lineup-eta">${item.isNowPlaying ? "NOW PLAYING" : item.etaLabel || ""}</div>`;
-      btn.addEventListener("click", () => showNowPlayingCard(item, { autoHide: false }));
+      btn.addEventListener("click", () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
       rail.appendChild(btn);
     });
   }
