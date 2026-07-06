@@ -455,6 +455,171 @@ git add web/src/posters.js app/src/main/assets/cytube_mobile.js
 git commit -m "fix: TV toggle button opens Tonight's Lineup directly (skip small strip)"
 ```
 
+### Task 5e (added after 2nd round of device feedback): Now-Playing card progress bar only for the item actually playing
+
+> **Feedback:** browsing a non-current film from the Lineup rail showed the Now-Playing card's
+> elapsed/total/remaining progress bar — but that bar always reflects whatever's *actually*
+> playing right now, so on a browsed (non-current) item it's misleading. Keep it only when the
+> browsed item IS the one actually playing.
+
+**Files:**
+- Modify: `web/src/cards/nowplaying.js`
+- Modify: `web/src/lineup/screen.js`
+
+**Interfaces:**
+- `showNowPlayingCard(data, opts)` gains `opts.showProgress` (default `true` — every existing
+  call site keeps showing progress unchanged; only the Lineup rail's new call site passes `false`
+  for non-current items).
+
+- [ ] **Step 1:** In `web/src/cards/nowplaying.js`'s `showNowPlayingCard`, replace:
+
+```js
+    card.classList.add('sc-np-visible');
+
+    // Live elapsed / total / remaining bar — refreshes while the card is up.
+    // This is the remote-friendly stand-in for hovering a scrubber: summon the
+    // card (title button / 'i') and the progress updates in place.
+    _renderNpProgress();
+    clearInterval(_npProgTimer);
+    _npProgTimer = setInterval(_renderNpProgress, 500);
+```
+
+with:
+
+```js
+    card.classList.add('sc-np-visible');
+
+    // Live elapsed / total / remaining bar — only meaningful for the item that's actually
+    // playing right now (this is the remote-friendly stand-in for hovering a scrubber).
+    // Browsing a different item from Tonight's Lineup passes showProgress: false so it
+    // doesn't show the real now-playing item's progress mislabeled under this title.
+    const progWrap = card.querySelector('#sc-np-progress');
+    if (opts.showProgress !== false) {
+        _renderNpProgress();
+        clearInterval(_npProgTimer);
+        _npProgTimer = setInterval(_renderNpProgress, 500);
+    } else {
+        clearInterval(_npProgTimer);
+        if (progWrap) progWrap.style.display = 'none';
+    }
+```
+
+- [ ] **Step 2:** In `web/src/lineup/screen.js`'s `renderItems`, change the click handler:
+
+```js
+        btn.addEventListener('click', () => showNowPlayingCard(item, { autoHide: false }));
+```
+
+to:
+
+```js
+        btn.addEventListener('click', () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
+```
+
+- [ ] **Step 3:** `cd web && npm run lint` — expect no errors.
+- [ ] **Step 4:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` — expect
+      `bundled OK` and exit 0.
+- [ ] **Step 5:** Commit:
+
+```bash
+git add web/src/cards/nowplaying.js web/src/lineup/screen.js app/src/main/assets/cytube_mobile.js
+git commit -m "fix: Now-Playing card only shows progress for the item actually playing"
+```
+
+### Task 4c (added after 2nd round of device feedback): Lineup rail CSS polish
+
+> **Feedback:** (1) the D-pad focus ring outlines the whole tile (poster + title + eta stacked),
+> which looks strange — should highlight just the poster art, matching how the "now playing"
+> marker is already scoped. (2) scrolling to a later page and back can leave a poster's left edge
+> chopped (a `scrollIntoView({inline:'nearest'})` quirk with flex + gap). (3) the rail's scrollbar
+> is hidden entirely — should be visible so the total count/position is legible.
+
+**Files:**
+- Modify: `web/src/styles/tv.css`
+
+- [ ] **Step 1:** Replace the entire Lineup CSS block (from the `/* ── TONIGHT'S LINEUP
+      (full-screen TV schedule rail) ─────────────── */` comment through the last
+      `body.sc-tv .sc-lineup-eta { font-size: 16px !important; }` line — i.e. everything Task 4
+      added) with:
+
+```css
+            /* ── TONIGHT'S LINEUP (full-screen TV schedule rail) ─────────────── */
+            #sc-lineup-screen {
+                position: fixed !important; inset: 0 !important;
+                z-index: 20500 !important; /* below #sc-np-card (21000) so OK on a film covers this */
+                background: rgba(6,4,9,0.97) !important;
+                display: none !important; flex-direction: column !important;
+                align-items: flex-start !important; justify-content: center !important;
+                font-family: 'Inter','Roboto',system-ui,sans-serif !important;
+                padding: 5vh 4vw !important; box-sizing: border-box !important;
+            }
+            #sc-lineup-screen.sc-lineup-visible { display: flex !important; }
+            #sc-lineup-header {
+                color: #fff !important; font-size: 15px !important; font-weight: 700 !important;
+                letter-spacing: 0.14em !important; text-transform: uppercase !important;
+                opacity: 0.6 !important; margin-bottom: 28px !important;
+            }
+            #sc-lineup-rail {
+                display: flex !important; gap: 22px !important; width: 100% !important;
+                overflow-x: auto !important; overflow-y: hidden !important;
+                padding: 8px 4px 16px !important;
+                /* Snap fully to each item so paging Left/Right (and scrolling back) always
+                   settles on a whole poster — without this, scrollIntoView({inline:'nearest'})
+                   can leave a partially-scrolled position that chops a poster's edge. */
+                scroll-snap-type: x mandatory !important;
+                scrollbar-width: thin !important;
+                scrollbar-color: rgba(255,255,255,0.28) transparent !important;
+            }
+            #sc-lineup-rail::-webkit-scrollbar { height: 8px !important; }
+            #sc-lineup-rail::-webkit-scrollbar-track { background: rgba(255,255,255,0.05) !important; border-radius: 10px !important; }
+            #sc-lineup-rail::-webkit-scrollbar-thumb {
+                background: rgba(255,255,255,0.28) !important; border-radius: 10px !important;
+                border: 2px solid transparent !important; background-clip: padding-box !important;
+            }
+            #sc-lineup-rail::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.45) !important; background-clip: padding-box !important; }
+            body.sc-tv #sc-lineup-rail::-webkit-scrollbar { height: 10px !important; }
+            #sc-lineup-loading { color: rgba(255,255,255,0.6) !important; font-size: 18px !important; }
+            .sc-lineup-item {
+                flex: 0 0 220px !important; background: transparent !important; border: none !important;
+                color: #fff !important; cursor: pointer !important; text-align: left !important;
+                padding: 0 !important; display: flex !important; flex-direction: column !important; gap: 10px !important;
+                scroll-snap-align: start !important;
+            }
+            .sc-lineup-poster {
+                width: 220px !important; height: 308px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: cover !important; background-position: center !important;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
+            .sc-lineup-item-current .sc-lineup-poster {
+                box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
+            .sc-lineup-title { font-size: 15px !important; font-weight: 600 !important; line-height: 1.3 !important; }
+            .sc-lineup-eta { font-size: 13px !important; color: rgba(255,255,255,0.6) !important; }
+            .sc-lineup-item-current .sc-lineup-eta { color: var(--np-accent, #ff5b73) !important; font-weight: 700 !important; }
+            /* D-pad focus ring highlights just the poster art (not the whole tile — title/eta
+               stay plain), matching how the "now playing" marker above is scoped. Overrides
+               the generic body.sc-tv .sc-tv-focus rule via higher selector specificity. */
+            body.sc-tv .sc-lineup-item.sc-tv-focus { outline: none !important; box-shadow: none !important; }
+            body.sc-tv .sc-lineup-item.sc-tv-focus .sc-lineup-poster {
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
+            body.sc-tv .sc-lineup-item { flex-basis: 260px !important; }
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }
+            body.sc-tv .sc-lineup-title { font-size: 19px !important; }
+            body.sc-tv .sc-lineup-eta { font-size: 16px !important; }
+```
+
+- [ ] **Step 2:** `cd web && npm run bundle` — confirm it succeeds; grep the generated bundle for
+      `scroll-snap-type` to confirm the new CSS made it in.
+- [ ] **Step 3:** Commit:
+
+```bash
+git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "style: Lineup rail poster-only focus ring, scroll-snap, visible scrollbar"
+```
+
 ### Task 6 (DEVICE, stage gate): Validate feel on the TV — STOP for explicit go-ahead
 
 This is the checkpoint the whole staged approach exists for. Do not start Stage 1 without an
