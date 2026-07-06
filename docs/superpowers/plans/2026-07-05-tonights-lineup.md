@@ -1742,3 +1742,51 @@ to:
 git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
 git commit -m "fix: shrink Lineup header/subtitle/poster to fit short screens, add shadow clearance"
 ```
+
+### Task 9g (device feedback: visible side borders): make the TV poster frame an exact 2:3 ratio
+
+**Files:**
+- Modify: `web/src/styles/tv.css`
+
+> **Feedback:** posters now fit and aren't cropped, but there are visible empty bars on the left
+> and right of the art. Cause: `background-size: contain` only avoids cropping — it doesn't
+> eliminate letterboxing/pillarboxing if the FRAME's own ratio doesn't match the image's ratio. The
+> current TV frame (260x340) isn't exactly 2:3 (TMDB posters are always 2:3), so `contain` adds
+> side bars to preserve the image's real proportions inside a frame that's proportionally too wide.
+> Fix: narrow the width to exactly 2:3 at the height already confirmed to fit vertically (340px,
+> verified via the Task 9f device pass) -- 226x339 is an exact 2:3 pair (226*3 = 339*2 = 678) and
+> keeps the same vertical footprint, so no further viewport-fit re-verification should be needed.
+
+- [ ] **Step 1:** Change the TV poster size to an exact 2:3 ratio -- replace:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 340px !important; }
+```
+
+with:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 226px !important; height: 339px !important; }
+```
+
+- [ ] **Step 2:** The item's flex-basis (which sets the column's overall width, currently matching
+      the old 260px poster width) should shrink to match, so the tile's own box isn't wider than
+      its poster -- replace:
+
+```css
+            body.sc-tv .sc-lineup-item { flex-basis: 260px !important; }
+```
+
+with:
+
+```css
+            body.sc-tv .sc-lineup-item { flex-basis: 226px !important; }
+```
+
+- [ ] **Step 3:** `cd web && npm run bundle` -- confirm it succeeds.
+- [ ] **Step 4:** Commit:
+
+```bash
+git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "fix: make the Lineup TV poster frame an exact 2:3 ratio, eliminating side letterboxing"
+```
