@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { findCurrentWeekListUrl, parseListTitle, parseListTitles } from '../src/lineup/letterboxd.js';
+import { findCurrentWeekListUrl, parseListPublishedDate, parseListTitle, parseListTitles } from '../src/lineup/letterboxd.js';
 
 const LISTS_PAGE_FIXTURE = `
 <div class="list-set">
@@ -47,4 +47,13 @@ test('parseListTitle extracts the lists own title from og:title', () => {
 });
 test('parseListTitle returns null when og:title is missing', () => {
     assert.strictEqual(parseListTitle('<html><head></head><body></body></html>'), null);
+});
+
+const PUBLISHED_FIXTURE = '<p class="list-date"> <span class="published">Published <time datetime="2026-07-01T16:00:37.212Z" class="timeago -longform timeago-pending">2026-07-01T16:00:37.212Z</time></span> </p>';
+
+test('parseListPublishedDate extracts the ISO timestamp from the Published span', () => {
+    assert.strictEqual(parseListPublishedDate(PUBLISHED_FIXTURE), '2026-07-01T16:00:37.212Z');
+});
+test('parseListPublishedDate returns null when there is no Published span', () => {
+    assert.strictEqual(parseListPublishedDate('<p>no date here</p>'), null);
 });

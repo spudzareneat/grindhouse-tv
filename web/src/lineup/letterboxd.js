@@ -33,6 +33,13 @@ export function parseListTitle(listPageHtml) {
     return m ? decodeHtmlEntities(m[1]).trim() : null;
 }
 
+// The list page's "Published <time datetime="...">" gives the list's own creation timestamp --
+// used (Task 9k) to tell a genuinely current list apart from a stale one left from a prior week.
+export function parseListPublishedDate(listPageHtml) {
+    const m = listPageHtml.match(/<span class="published">[^<]*<time datetime="([^"]*)"/i);
+    return m ? m[1] : null;
+}
+
 // Every poster on the list page carries data-item-name="Title (Year)", in schedule order —
 // this is the complete, ordered list (unlike the meta description's ~5-title sample).
 export function parseListTitles(listPageHtml) {
@@ -60,5 +67,9 @@ export async function fetchTonightsSchedule() {
     if (!listRes || listRes.status !== 200) throw new Error('Letterboxd list HTTP ' + (listRes && listRes.status));
     const items = parseListTitles(listRes.body);
     if (!items.length) throw new Error('no titles parsed from schedule list');
-    return { listTitle: parseListTitle(listRes.body), items };
+    return {
+        listTitle: parseListTitle(listRes.body),
+        publishedAt: parseListPublishedDate(listRes.body),
+        items,
+    };
 }
