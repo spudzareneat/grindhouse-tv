@@ -4823,6 +4823,8 @@
                 background-color: rgba(255,255,255,0.08) !important;\r
                 background-size: cover !important; background-position: center !important;\r
                 box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;\r
+                flex-shrink: 0 !important; /* keep the 2:3 box exact; the item column may\r
+                                              scroll/overflow before the poster compresses */\r
             }\r
             .sc-lineup-item-current .sc-lineup-poster {\r
                 box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 10px 30px rgba(0,0,0,0.5) !important;\r
