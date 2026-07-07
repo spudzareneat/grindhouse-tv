@@ -1265,7 +1265,9 @@
             <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ""}"></div>
             <div class="sc-lineup-title">${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ""}</div>
             <div class="sc-lineup-eta">${item.isNowPlaying ? "NOW PLAYING" : item.etaLabel || ""}</div>`;
-      btn.addEventListener("click", () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
+      if (item.clickable !== false) {
+        btn.addEventListener("click", () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
+      }
       rail.appendChild(btn);
     });
   }
