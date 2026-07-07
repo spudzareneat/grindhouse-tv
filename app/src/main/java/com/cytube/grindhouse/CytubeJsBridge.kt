@@ -71,6 +71,20 @@ class CytubeJsBridge(
     @JavascriptInterface
     fun gdProxyBase(): String = activity.gdProxyBase()
 
+    /** Start phone-keyboard pairing; returns the URL to render as a QR code (or "" on failure). */
+    @JavascriptInterface
+    fun phoneKeyboardUrl(): String = activity.phoneKeyboardUrl() ?: ""
+
+    /** Whether a paired phone has been active in the last few seconds. */
+    @JavascriptInterface
+    fun isKeyboardConnected(): Boolean = activity.isKeyboardConnected()
+
+    /** Tell native which field (label + whether it's a password) currently has D-pad focus. */
+    @JavascriptInterface
+    fun setKeyboardFieldLabel(label: String, masked: Boolean) {
+        activity.setKeyboardFieldLabel(label, masked)
+    }
+
     /** Open the system Cast device chooser (the in-page mobile cast button). */
     @JavascriptInterface
     fun startCasting() {

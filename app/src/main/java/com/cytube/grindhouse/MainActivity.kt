@@ -163,7 +163,20 @@ class MainActivity : AppCompatActivity() {
 
         setupWebView()
         // Start the localhost Drive media proxy (setupWebView has populated webViewUa by now).
-        mediaProxy = LocalMediaProxy(webViewUa).also { it.start() }
+        mediaProxy = LocalMediaProxy(webViewUa).also { proxy ->
+            proxy.start()
+            // Push each phone keystroke straight into the page — no polling loop on the TV
+            // side, same pattern as __scTvKey (D-pad) and __scSetCastMode (cast).
+            proxy.onKeyboardInput = { text, commit ->
+                runOnUiThread {
+                    webView.evaluateJavascript(
+                        "window.__scPhoneKeyboard && window.__scPhoneKeyboard(" +
+                            "${JSONObject.quote(text)}, $commit)",
+                        null
+                    )
+                }
+            }
+        }
         webView.loadUrl("https://cytu.be/r/420Grindhouse")
 
         // Phone/tablet only: offer the Cast button (a TV is the cast target, not a sender).
@@ -214,6 +227,25 @@ class MainActivity : AppCompatActivity() {
 
     /** Base URL of the localhost Drive media proxy; the injected JS rewrites stream URLs onto it. */
     fun gdProxyBase(): String = "http://127.0.0.1:${mediaProxy?.port ?: 0}/gd?u="
+
+    /**
+     * Start (or restart) phone-keyboard pairing and return the URL to encode as a QR code.
+     * Starting a new pairing invalidates whatever phone was paired before.
+     */
+    fun phoneKeyboardUrl(): String? {
+        val proxy = mediaProxy ?: return null
+        val ip = lanIpAddress() ?: return null
+        val token = proxy.startKeyboardPairing()
+        return "http://$ip:${proxy.port}/type?t=$token"
+    }
+
+    /** True once the paired phone has made a request in the last few seconds. */
+    fun isKeyboardConnected(): Boolean = mediaProxy?.isKeyboardConnected() ?: false
+
+    /** Called by the page whenever D-pad focus moves to a different editable field. */
+    fun setKeyboardFieldLabel(label: String, masked: Boolean) {
+        mediaProxy?.noteFieldChanged(label, masked)
+    }
 
     // ----------------------------------------------------------------------------------------
     // Casting (phone → TV). Video-only: only the movie goes to the TV; the room (chat, overlays,
