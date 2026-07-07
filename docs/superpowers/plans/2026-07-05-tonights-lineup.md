@@ -2569,3 +2569,291 @@ to:
 git add web/src/lineup/screen.js app/src/main/assets/cytube_mobile.js
 git commit -m "fix: display-only Lineup items (fallback posters) don't respond to OK"
 ```
+
+### Task 9p (bug found via live device testing, not user-reported): normalize the current-title match, blank the fallback poster's placeholder title
+
+**Files:**
+- Modify: `web/src/lineup/data.js`
+
+> **Root cause, verified live 2026-07-06:** `movieState.lastMovieTitle` (set in `titleinject.js`)
+> starts as the raw queue title, but gets OVERWRITTEN with the TMDB-cleaned `"Title (Year)"`
+> string shortly after each `changeMedia` (the header's own text is rewritten once the async TMDB
+> lookup resolves, and a later re-trigger of `injectMovieLinks` re-reads that rewritten text back
+> into `movieState.lastMovieTitle`). Confirmed live: with "Toy Soldiers (1991)" genuinely playing,
+> `movieState.lastMovieTitle` held exactly that string -- year included -- and every place in this
+> file that used it directly (the schedule-title match, and the Task 9n fallback's TMDB lookup)
+> broke as a result: the lookup for the literal string `"Toy Soldiers (1991)"` found no confident
+> TMDB match, so Task 9n's short/bumper heuristic wrongly treated a real movie as a bumper and
+> skipped it entirely. The SAME issue would prevent the main matched-live pipeline from ever
+> finding `currentIndex` once a title has "settled" into this format, since schedule titles from
+> Letterboxd are bare (no year) and a direct string comparison against a year-suffixed title never
+> matches. Fix: run `movieState.lastMovieTitle` (and the `changeMedia` payload's own `title`, used
+> by the bumper-gap-learning listener) through the EXISTING `parseMovieFilename` utility (already
+> used elsewhere in this codebase for exactly this "Title (Year)" extraction) before using it for
+> any match or lookup.
+>
+> Also folds in a small follow-up to Task 9n's own fallback-poster change: the placeholder text
+> `'Coming Attraction'` shown when a MOTD image has no `title`/`alt` should be blank instead, per
+> the same "don't say anything when we don't know" principle already applied to times.
+
+- [ ] **Step 1:** Add the import -- change:
+
+```js
+import { fetchTonightsSchedule } from './letterboxd.js';
+import { lookupMovie, movieState } from '../metadata/tmdb.js';
+import { onSocket } from '../socket.js';
+import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+import { getMotdPosterImages } from '../motd.js';
+import { hasKey, LS_TMDB } from '../store.js';
+```
+
+to:
+
+```js
+import { fetchTonightsSchedule } from './letterboxd.js';
+import { lookupMovie, movieState } from '../metadata/tmdb.js';
+import { onSocket } from '../socket.js';
+import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+import { getMotdPosterImages } from '../motd.js';
+import { hasKey, LS_TMDB } from '../store.js';
+import { parseMovieFilename } from '../parse.js';
+```
+
+- [ ] **Step 2:** Normalize the `changeMedia` payload's title before matching it against the
+      schedule (used by the bumper-gap-learning listener) -- change:
+
+```js
+onSocket('changeMedia', (d) => {
+    const title = d && d.title;
+    const matchesSchedule = !!(title && _scheduleCache &&
+        _scheduleCache.some(s => s.title.toLowerCase() === title.toLowerCase()));
+    if (title && !matchesSchedule && _scheduleCache) {
+        _lastUnmatchedStart = Date.now();
+    } else if (_lastUnmatchedStart) {
+        _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1000);
+        _lastUnmatchedStart = null;
+    }
+    _lastChangeMedia = d || null;
+});
+```
+
+to:
+
+```js
+onSocket('changeMedia', (d) => {
+    const rawTitle = d && d.title;
+    const title = rawTitle ? parseMovieFilename(rawTitle).title : null;
+    const matchesSchedule = !!(title && _scheduleCache &&
+        _scheduleCache.some(s => s.title.toLowerCase() === title.toLowerCase()));
+    if (rawTitle && !matchesSchedule && _scheduleCache) {
+        _lastUnmatchedStart = Date.now();
+    } else if (_lastUnmatchedStart) {
+        _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1000);
+        _lastUnmatchedStart = null;
+    }
+    _lastChangeMedia = d || null;
+});
+```
+
+- [ ] **Step 3:** Normalize `movieState.lastMovieTitle` before the fallback's TMDB lookup, and blank
+      the MOTD placeholder title -- replace:
+
+```js
+async function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+        const info = await lookupMovie(movieState.lastMovieTitle, null);
+        // Skip likely bumpers/shorts: if TMDB is configured and confidently found nothing for
+        // this exact title, it's probably not a real feature. Without a TMDB key at all there's
+        // no way to tell, so default to showing it.
+        if (!hasKey(LS_TMDB) || info.cleanTitle) {
+            items.push({ ...buildBase(info, movieState.lastMovieTitle, null), isNowPlaying: true, etaLabel: '' });
+        }
+    }
+    getMotdPosterImages().forEach((img) => {
+        items.push({
+            cleanTitle: img.title || img.alt || 'Coming Attraction', cleanYear: null,
+            poster: img.src, backdrop: null, overview: '',
+            isNowPlaying: false, etaLabel: '', clickable: false,
+        });
+    });
+    return items;
+}
+```
+
+with:
+
+```js
+async function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+        const { title, year } = parseMovieFilename(movieState.lastMovieTitle);
+        const info = await lookupMovie(title, year);
+        // Skip likely bumpers/shorts: if TMDB is configured and confidently found nothing for
+        // this exact title, it's probably not a real feature. Without a TMDB key at all there's
+        // no way to tell, so default to showing it.
+        if (!hasKey(LS_TMDB) || info.cleanTitle) {
+            items.push({ ...buildBase(info, title, year), isNowPlaying: true, etaLabel: '' });
+        }
+    }
+    getMotdPosterImages().forEach((img) => {
+        items.push({
+            cleanTitle: img.title || img.alt || '', cleanYear: null,
+            poster: img.src, backdrop: null, overview: '',
+            isNowPlaying: false, etaLabel: '', clickable: false,
+        });
+    });
+    return items;
+}
+```
+
+- [ ] **Step 4:** Normalize `movieState.lastMovieTitle` before the main `currentIndex` match --
+      replace:
+
+```js
+    const infos = await Promise.all(_scheduleCache.map(({ title, year }) => lookupMovie(title, year)));
+    const currentIndex = _scheduleCache.findIndex(s =>
+        movieState.lastMovieTitle && s.title.toLowerCase() === movieState.lastMovieTitle.toLowerCase());
+```
+
+with:
+
+```js
+    const infos = await Promise.all(_scheduleCache.map(({ title, year }) => lookupMovie(title, year)));
+    const currentTitle = movieState.lastMovieTitle ? parseMovieFilename(movieState.lastMovieTitle).title : '';
+    const currentIndex = _scheduleCache.findIndex(s =>
+        currentTitle && s.title.toLowerCase() === currentTitle.toLowerCase());
+```
+
+- [ ] **Step 5:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 6:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 7 (DEVICE, quick check):** with a real, non-year-suffixed genuine match no longer
+      needed -- reopen the Lineup screen while a real feature is playing and confirm it now shows
+      up as "NOW PLAYING" with a real poster (not skipped).
+- [ ] **Step 8:** Commit:
+
+```bash
+git add web/src/lineup/data.js app/src/main/assets/cytube_mobile.js
+git commit -m "fix: strip the year suffix before matching/looking up the current title"
+```
+
+### Task 9q (device feedback): gray focus ring for display-only (fallback) items
+
+**Files:**
+- Modify: `web/src/lineup/screen.js`
+- Modify: `web/src/styles/tv.css`
+
+> The orange D-pad focus ring is meant to signal "this is selectable" -- for the static Coming
+> Attractions fallback posters (`clickable: false`, Task 9n/9o), landing focus on one should look
+> visually different (gray, not orange) to signal there's nothing to select here.
+
+- [ ] **Step 1:** In `web/src/lineup/screen.js`'s `renderItems()`, add a class for display-only
+      items -- change:
+
+```js
+        btn.className = 'sc-lineup-item' + (item.isNowPlaying ? ' sc-lineup-item-current' : '');
+```
+
+to:
+
+```js
+        btn.className = 'sc-lineup-item'
+            + (item.isNowPlaying ? ' sc-lineup-item-current' : '')
+            + (item.clickable === false ? ' sc-lineup-item-static' : '');
+```
+
+- [ ] **Step 2:** In `web/src/styles/tv.css`, add a gray focus-ring override right after the
+      existing orange one -- find:
+
+```css
+            body.sc-tv .sc-lineup-item.sc-tv-focus { outline: none !important; box-shadow: none !important; }
+            body.sc-tv .sc-lineup-item.sc-tv-focus .sc-lineup-poster {
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 6px 14px rgba(0,0,0,0.45) !important;
+            }
+```
+
+and add immediately after it:
+
+```css
+            /* Display-only fallback items (Coming Attractions art with no real title/time data)
+               get a gray focus ring instead of orange, signaling there's nothing to select. */
+            body.sc-tv .sc-lineup-item-static.sc-tv-focus .sc-lineup-poster {
+                outline: 3px solid #888 !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(136,136,136,0.32), 0 6px 14px rgba(0,0,0,0.45) !important;
+            }
+```
+
+- [ ] **Step 3:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 4:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 5:** Commit:
+
+```bash
+git add web/src/lineup/screen.js web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "feat: gray D-pad focus ring for display-only Lineup items"
+```
+
+### Task 9r (device feedback, root cause traced live): fix the persistent left-edge clipping via scroll-snap
+
+**Files:**
+- Modify: `web/src/styles/tv.css`
+
+> **Root cause, verified live 2026-07-06 via CDP:** the rail's left padding (`24px`, from Task 9f)
+> IS present in the layout (`item.offsetLeft` correctly reflects it), but `scroll-snap-type: x
+> mandatory` (Task 9f) forces the initial scroll position to skip past it -- setting
+> `rail.scrollLeft = 0` directly gets immediately overridden back to `24` by the browser's snap
+> enforcement. This is a real, known CSS gap: `scroll-snap-align: start` snaps to the *scrollport*,
+> which by default does NOT include the container's own `padding` unless a matching
+> `scroll-padding` is also set. Without it, mandatory snapping treats the padding as scrollable
+> slack to skip past rather than reserved space, so the first item always ends up flush with the
+> unpadded scrollport edge -- reproducing the exact "left side clipped" look, regardless of how
+> much `padding` is added (this is why Task 9f's padding widen alone didn't fully fix it).
+
+- [ ] **Step 1:** In `web/src/styles/tv.css`, add `scroll-padding` matching the rail's own
+      `padding` -- change:
+
+```css
+            #sc-lineup-rail {
+                display: flex !important; gap: 22px !important; width: 100% !important;
+                overflow-x: auto !important; overflow-y: hidden !important;
+                padding: 8px 24px 14px !important;
+                /* Snap fully to each item so paging Left/Right (and scrolling back) always
+                   settles on a whole poster — without this, scrollIntoView({inline:'nearest'})
+                   can leave a partially-scrolled position that chops a poster's edge. */
+                scroll-snap-type: x mandatory !important;
+                scrollbar-width: thin !important;
+                scrollbar-color: rgba(255,255,255,0.28) transparent !important;
+            }
+```
+
+to:
+
+```css
+            #sc-lineup-rail {
+                display: flex !important; gap: 22px !important; width: 100% !important;
+                overflow-x: auto !important; overflow-y: hidden !important;
+                padding: 8px 24px 14px !important;
+                /* Snap fully to each item so paging Left/Right (and scrolling back) always
+                   settles on a whole poster — without this, scrollIntoView({inline:'nearest'})
+                   can leave a partially-scrolled position that chops a poster's edge. */
+                scroll-snap-type: x mandatory !important;
+                /* Mandatory snap otherwise ignores the container's own padding as reserved
+                   space and skips past it — this keeps the first/last item's snap position
+                   inside the padding instead of flush with the unpadded scrollport edge. */
+                scroll-padding: 8px 24px 14px !important;
+                scrollbar-width: thin !important;
+                scrollbar-color: rgba(255,255,255,0.28) transparent !important;
+            }
+```
+
+- [ ] **Step 2:** `cd web && npm run bundle` -- confirm it succeeds.
+- [ ] **Step 3:** Commit:
+
+```bash
+git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "fix: scroll-padding keeps the Lineup rail's own padding out of scroll-snap's reach"
+```
