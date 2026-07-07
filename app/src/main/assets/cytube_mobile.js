@@ -876,6 +876,126 @@
     });
   }
 
+  // src/parse.js
+  function parseMovieFilename(raw) {
+    let s = raw.replace(/\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|divx|xvid|ogv)$/i, "");
+    let year = null;
+    const yearMatch = s.match(/[\[(](\d{4})[\])]/);
+    if (yearMatch) {
+      year = yearMatch[1];
+      s = s.slice(0, yearMatch.index);
+    }
+    s = s.replace(/[._]+/g, " ");
+    s = s.replace(/[\[(][^\])]*/g, "").replace(/[\])]/, "");
+    s = s.replace(/\s+/g, " ").trim();
+    return { title: s, year };
+  }
+  var YT_NOISE = [
+    "full movie",
+    "full length movie",
+    "full length feature",
+    "full length film",
+    "full length",
+    "complete movie",
+    "complete film",
+    "the complete movie",
+    "entire movie",
+    "free movie",
+    "free film",
+    "free online",
+    "free to watch",
+    "watch online",
+    "watch free",
+    "watch now",
+    "online free",
+    "free with ads",
+    "with ads",
+    "no ads",
+    "ad free",
+    "official movie",
+    "official film",
+    "official",
+    "exclusive",
+    "premiere",
+    "world premiere",
+    "remastered",
+    "restored",
+    "colou?ri[sz]ed",
+    "subtitle[sd]?",
+    "subbed",
+    "dubbed",
+    "eng sub",
+    "hd",
+    "fhd",
+    "uhd",
+    "4k",
+    "2k",
+    "1080p",
+    "720p",
+    "480p",
+    "high definition",
+    "blu-?ray",
+    "dvd",
+    "web-?dl",
+    "uncut",
+    "extended",
+    "director.?s cut",
+    "special edition",
+    "classic movie",
+    "classic film",
+    "cult classic",
+    "b-?movie",
+    "feature film",
+    "feature",
+    "cinema",
+    "blockbuster",
+    "must watch",
+    "in english",
+    "english movie"
+  ];
+  var YT_GENRES = [
+    "action",
+    "thriller",
+    "horror",
+    "comedy",
+    "drama",
+    "sci-?fi",
+    "science fiction",
+    "western",
+    "romance",
+    "crime",
+    "mystery",
+    "adventure",
+    "fantasy",
+    "war",
+    "noir",
+    "slasher",
+    "martial arts",
+    "kung fu",
+    "documentary",
+    "family",
+    "musical",
+    "animation"
+  ];
+  function parseYouTubeTitle(raw) {
+    let s = " " + raw + " ";
+    let year = null;
+    const ym = s.match(/\b(19\d{2}|20\d{2})\b/);
+    if (ym) year = ym[1];
+    s = s.replace(/[\[({][^\])}]*[\])}]/g, " ");
+    if (year) s = s.replace(new RegExp("\\b" + year + "\\b", "g"), " ");
+    [...YT_NOISE, ...YT_GENRES].forEach((n) => {
+      s = s.replace(new RegExp("\\b" + n + "\\b", "gi"), " ");
+    });
+    s = s.replace(/[^\w\s&':!.,-]/g, " ");
+    const segs = s.split(/\s[|–—•:_-]+\s/).map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length >= 2);
+    let title = segs.sort(
+      (a, b) => (b.match(/[a-z]/gi) || []).length - (a.match(/[a-z]/gi) || []).length
+    )[0] || s;
+    title = title.replace(/\s+/g, " ").replace(/^[\s'":.,-]+|[\s'":.,-]+$/g, "").trim();
+    return { title, year };
+  }
+
   // src/lineup/data.js
   var _scheduleCache = null;
   var _listTitle = null;
@@ -886,9 +1006,10 @@
   var FALLBACK_LIST_TITLE = "Coming Attractions";
   var MAX_ESTIMATED_AHEAD = 4;
   onSocket("changeMedia", (d) => {
-    const title = d && d.title;
+    const rawTitle = d && d.title;
+    const title = rawTitle ? parseMovieFilename(rawTitle).title : null;
     const matchesSchedule = !!(title && _scheduleCache && _scheduleCache.some((s) => s.title.toLowerCase() === title.toLowerCase()));
-    if (title && !matchesSchedule && _scheduleCache) {
+    if (rawTitle && !matchesSchedule && _scheduleCache) {
       _lastUnmatchedStart = Date.now();
     } else if (_lastUnmatchedStart) {
       _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1e3);
@@ -913,14 +1034,15 @@
   async function fallbackItems() {
     const items = [];
     if (movieState.lastMovieTitle) {
-      const info = await lookupMovie(movieState.lastMovieTitle, null);
+      const { title, year } = parseMovieFilename(movieState.lastMovieTitle);
+      const info = await lookupMovie(title, year);
       if (!hasKey(LS_TMDB) || info.cleanTitle) {
-        items.push({ ...buildBase(info, movieState.lastMovieTitle, null), isNowPlaying: true, etaLabel: "" });
+        items.push({ ...buildBase(info, title, year), isNowPlaying: true, etaLabel: "" });
       }
     }
     getMotdPosterImages().forEach((img) => {
       items.push({
-        cleanTitle: img.title || img.alt || "Coming Attraction",
+        cleanTitle: img.title || img.alt || "",
         cleanYear: null,
         poster: img.src,
         backdrop: null,
@@ -952,7 +1074,8 @@
     await ensureSchedule();
     if (!_scheduleCache) return { listTitle: FALLBACK_LIST_TITLE, items: await fallbackItems() };
     const infos = await Promise.all(_scheduleCache.map(({ title, year }) => lookupMovie(title, year)));
-    const currentIndex = _scheduleCache.findIndex((s) => movieState.lastMovieTitle && s.title.toLowerCase() === movieState.lastMovieTitle.toLowerCase());
+    const currentTitle = movieState.lastMovieTitle ? parseMovieFilename(movieState.lastMovieTitle).title : "";
+    const currentIndex = _scheduleCache.findIndex((s) => currentTitle && s.title.toLowerCase() === currentTitle.toLowerCase());
     if (currentIndex === -1) {
       const fridayEstimate = isBeforeFridayNoonPacific();
       return {
@@ -2643,126 +2766,6 @@
       checkForUpdate(false).catch(() => {
       });
     }, 4e3);
-  }
-
-  // src/parse.js
-  function parseMovieFilename(raw) {
-    let s = raw.replace(/\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|divx|xvid|ogv)$/i, "");
-    let year = null;
-    const yearMatch = s.match(/[\[(](\d{4})[\])]/);
-    if (yearMatch) {
-      year = yearMatch[1];
-      s = s.slice(0, yearMatch.index);
-    }
-    s = s.replace(/[._]+/g, " ");
-    s = s.replace(/[\[(][^\])]*/g, "").replace(/[\])]/, "");
-    s = s.replace(/\s+/g, " ").trim();
-    return { title: s, year };
-  }
-  var YT_NOISE = [
-    "full movie",
-    "full length movie",
-    "full length feature",
-    "full length film",
-    "full length",
-    "complete movie",
-    "complete film",
-    "the complete movie",
-    "entire movie",
-    "free movie",
-    "free film",
-    "free online",
-    "free to watch",
-    "watch online",
-    "watch free",
-    "watch now",
-    "online free",
-    "free with ads",
-    "with ads",
-    "no ads",
-    "ad free",
-    "official movie",
-    "official film",
-    "official",
-    "exclusive",
-    "premiere",
-    "world premiere",
-    "remastered",
-    "restored",
-    "colou?ri[sz]ed",
-    "subtitle[sd]?",
-    "subbed",
-    "dubbed",
-    "eng sub",
-    "hd",
-    "fhd",
-    "uhd",
-    "4k",
-    "2k",
-    "1080p",
-    "720p",
-    "480p",
-    "high definition",
-    "blu-?ray",
-    "dvd",
-    "web-?dl",
-    "uncut",
-    "extended",
-    "director.?s cut",
-    "special edition",
-    "classic movie",
-    "classic film",
-    "cult classic",
-    "b-?movie",
-    "feature film",
-    "feature",
-    "cinema",
-    "blockbuster",
-    "must watch",
-    "in english",
-    "english movie"
-  ];
-  var YT_GENRES = [
-    "action",
-    "thriller",
-    "horror",
-    "comedy",
-    "drama",
-    "sci-?fi",
-    "science fiction",
-    "western",
-    "romance",
-    "crime",
-    "mystery",
-    "adventure",
-    "fantasy",
-    "war",
-    "noir",
-    "slasher",
-    "martial arts",
-    "kung fu",
-    "documentary",
-    "family",
-    "musical",
-    "animation"
-  ];
-  function parseYouTubeTitle(raw) {
-    let s = " " + raw + " ";
-    let year = null;
-    const ym = s.match(/\b(19\d{2}|20\d{2})\b/);
-    if (ym) year = ym[1];
-    s = s.replace(/[\[({][^\])}]*[\])}]/g, " ");
-    if (year) s = s.replace(new RegExp("\\b" + year + "\\b", "g"), " ");
-    [...YT_NOISE, ...YT_GENRES].forEach((n) => {
-      s = s.replace(new RegExp("\\b" + n + "\\b", "gi"), " ");
-    });
-    s = s.replace(/[^\w\s&':!.,-]/g, " ");
-    const segs = s.split(/\s[|–—•:_-]+\s/).map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length >= 2);
-    let title = segs.sort(
-      (a, b) => (b.match(/[a-z]/gi) || []).length - (a.match(/[a-z]/gi) || []).length
-    )[0] || s;
-    title = title.replace(/\s+/g, " ").replace(/^[\s'":.,-]+|[\s'":.,-]+$/g, "").trim();
-    return { title, year };
   }
 
   // src/titleinject.js

@@ -5,6 +5,7 @@ import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.
 import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
 import { getMotdPosterImages } from '../motd.js';
 import { hasKey, LS_TMDB } from '../store.js';
+import { parseMovieFilename } from '../parse.js';
 
 /* ==========================================================
    TONIGHT'S LINEUP -- data interface consumed by lineup/screen.js.
@@ -33,10 +34,11 @@ const MAX_ESTIMATED_AHEAD = 4; // only the next N upcoming films get any time es
 // tonight's schedule is a bumper; the time between it starting and the next
 // (matched-or-not) changeMedia is one observed gap sample.
 onSocket('changeMedia', (d) => {
-    const title = d && d.title;
+    const rawTitle = d && d.title;
+    const title = rawTitle ? parseMovieFilename(rawTitle).title : null;
     const matchesSchedule = !!(title && _scheduleCache &&
         _scheduleCache.some(s => s.title.toLowerCase() === title.toLowerCase()));
-    if (title && !matchesSchedule && _scheduleCache) {
+    if (rawTitle && !matchesSchedule && _scheduleCache) {
         _lastUnmatchedStart = Date.now();
     } else if (_lastUnmatchedStart) {
         _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1000);
@@ -72,17 +74,18 @@ async function ensureSchedule() {
 async function fallbackItems() {
     const items = [];
     if (movieState.lastMovieTitle) {
-        const info = await lookupMovie(movieState.lastMovieTitle, null);
+        const { title, year } = parseMovieFilename(movieState.lastMovieTitle);
+        const info = await lookupMovie(title, year);
         // Skip likely bumpers/shorts: if TMDB is configured and confidently found nothing for
         // this exact title, it's probably not a real feature. Without a TMDB key at all there's
         // no way to tell, so default to showing it.
         if (!hasKey(LS_TMDB) || info.cleanTitle) {
-            items.push({ ...buildBase(info, movieState.lastMovieTitle, null), isNowPlaying: true, etaLabel: '' });
+            items.push({ ...buildBase(info, title, year), isNowPlaying: true, etaLabel: '' });
         }
     }
     getMotdPosterImages().forEach((img) => {
         items.push({
-            cleanTitle: img.title || img.alt || 'Coming Attraction', cleanYear: null,
+            cleanTitle: img.title || img.alt || '', cleanYear: null,
             poster: img.src, backdrop: null, overview: '',
             isNowPlaying: false, etaLabel: '', clickable: false,
         });
@@ -114,8 +117,9 @@ export async function getTonightsLineup() {
     if (!_scheduleCache) return { listTitle: FALLBACK_LIST_TITLE, items: await fallbackItems() };
 
     const infos = await Promise.all(_scheduleCache.map(({ title, year }) => lookupMovie(title, year)));
+    const currentTitle = movieState.lastMovieTitle ? parseMovieFilename(movieState.lastMovieTitle).title : '';
     const currentIndex = _scheduleCache.findIndex(s =>
-        movieState.lastMovieTitle && s.title.toLowerCase() === movieState.lastMovieTitle.toLowerCase());
+        currentTitle && s.title.toLowerCase() === currentTitle.toLowerCase());
 
     if (currentIndex === -1) {
         // Can't place "now" on the list (a bumper is playing, an off-schedule item is airing,
