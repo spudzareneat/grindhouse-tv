@@ -2383,3 +2383,189 @@ function fallbackItems() {
 git add web/src/lineup/data.js app/src/main/assets/cytube_mobile.js
 git commit -m "fix: Lineup fallback shows the static Coming Attractions art, not a thin Now/Next view"
 ```
+
+### Task 9n (device feedback): blank instead of "LATE", real poster for fallback now-playing, skip likely shorts/bumpers
+
+**Files:**
+- Modify: `web/src/lineup/data.js`
+
+> **Feedback, four items:**
+> 1. When there's no time estimate at all, show nothing rather than the literal word "LATE".
+> 2. The fallback's "now playing" item never got a real poster -- it was hardcoded
+>    `poster: null` instead of being looked up via TMDB like every other item.
+> 3. If what's "now playing" is actually a short/bumper (not a real feature), it shouldn't be
+>    shown as "now playing" at all in the fallback. Heuristic: if TMDB is configured and a lookup
+>    for the exact title confidently finds nothing (`info.cleanTitle` is falsy), treat it as
+>    probably not a real feature and skip it. Without a TMDB key configured at all there's no way
+>    to tell, so default to showing it (better to show something than wrongly hide every title).
+> 4. The static Coming Attractions fallback posters are "for display only" -- OK on them
+>    shouldn't do anything (they have no real title/overview to show in a card).
+
+**Interfaces:**
+- Every item gains an implicit `clickable` field (`undefined`/`true` = clickable, `false` = display
+  only). `web/src/lineup/screen.js` (Task 9o) reads this to decide whether to attach a click
+  handler.
+
+- [ ] **Step 1:** Add the new imports -- change:
+
+```js
+import { fetchTonightsSchedule } from './letterboxd.js';
+import { lookupMovie, movieState } from '../metadata/tmdb.js';
+import { onSocket } from '../socket.js';
+import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+import { getMotdPosterImages } from '../motd.js';
+```
+
+to:
+
+```js
+import { fetchTonightsSchedule } from './letterboxd.js';
+import { lookupMovie, movieState } from '../metadata/tmdb.js';
+import { onSocket } from '../socket.js';
+import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+import { getMotdPosterImages } from '../motd.js';
+import { hasKey, LS_TMDB } from '../store.js';
+```
+
+- [ ] **Step 2:** Rewrite `fallbackItems()` -- replace:
+
+```js
+// Fallback when Letterboxd is unreachable or this week's list hasn't posted yet: the current
+// item (if known) plus the same admin-curated "Coming Attractions" art the small poster strip
+// shows -- no real title/time data for those, but still something real to look at instead of
+// an empty or thin live-only view.
+function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+        items.push({
+            cleanTitle: movieState.lastMovieTitle, cleanYear: null,
+            poster: null, backdrop: null, overview: '',
+            isNowPlaying: true, etaLabel: '',
+        });
+    }
+    getMotdPosterImages().forEach((img) => {
+        items.push({
+            cleanTitle: img.title || img.alt || 'Coming Attraction', cleanYear: null,
+            poster: img.src, backdrop: null, overview: '',
+            isNowPlaying: false, etaLabel: 'LATE',
+        });
+    });
+    return items;
+}
+```
+
+with:
+
+```js
+// Fallback when Letterboxd is unreachable or this week's list hasn't posted yet: the current
+// item (if known and it looks like a real feature, not a short/bumper) plus the same
+// admin-curated "Coming Attractions" art the small poster strip shows (display-only -- no real
+// title/overview to show for those, so OK does nothing) -- still something real to look at
+// instead of an empty or thin live-only view.
+async function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+        const info = await lookupMovie(movieState.lastMovieTitle, null);
+        // Skip likely bumpers/shorts: if TMDB is configured and confidently found nothing for
+        // this exact title, it's probably not a real feature. Without a TMDB key at all there's
+        // no way to tell, so default to showing it.
+        if (!hasKey(LS_TMDB) || info.cleanTitle) {
+            items.push({ ...buildBase(info, movieState.lastMovieTitle, null), isNowPlaying: true, etaLabel: '' });
+        }
+    }
+    getMotdPosterImages().forEach((img) => {
+        items.push({
+            cleanTitle: img.title || img.alt || 'Coming Attraction', cleanYear: null,
+            poster: img.src, backdrop: null, overview: '',
+            isNowPlaying: false, etaLabel: '', clickable: false,
+        });
+    });
+    return items;
+}
+```
+
+- [ ] **Step 3:** `fallbackItems()` is now `async` -- update its one call site to await it. Change:
+
+```js
+    if (!_scheduleCache) return { listTitle: FALLBACK_LIST_TITLE, items: fallbackItems() };
+```
+
+to:
+
+```js
+    if (!_scheduleCache) return { listTitle: FALLBACK_LIST_TITLE, items: await fallbackItems() };
+```
+
+- [ ] **Step 4:** Replace "LATE" with a blank label in the `currentIndex === -1` branch -- change:
+
+```js
+                etaLabel: (fridayEstimate && i === 0) ? '≈ Fri 12:00 PM' : 'LATE',
+```
+
+to:
+
+```js
+                etaLabel: (fridayEstimate && i === 0) ? '≈ Fri 12:00 PM' : '',
+```
+
+- [ ] **Step 5:** Replace "LATE" with a blank label in the main projection loop -- change:
+
+```js
+        if (offset > MAX_ESTIMATED_AHEAD) {
+            items.push({ ...base, isNowPlaying: false, etaLabel: 'LATE' });
+        } else {
+```
+
+to:
+
+```js
+        if (offset > MAX_ESTIMATED_AHEAD) {
+            items.push({ ...base, isNowPlaying: false, etaLabel: '' });
+        } else {
+```
+
+- [ ] **Step 6:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 7:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 8:** Commit:
+
+```bash
+git add web/src/lineup/data.js app/src/main/assets/cytube_mobile.js
+git commit -m "fix: blank (not LATE) for unknown times, real poster + short/bumper filter for fallback now-playing"
+```
+
+### Task 9o (device feedback): fallback posters are display-only -- OK should do nothing
+
+**Files:**
+- Modify: `web/src/lineup/screen.js`
+
+**Interfaces:**
+- Consumes: `item.clickable` (Task 9n) -- `false` means don't attach a click handler.
+
+- [ ] **Step 1:** In `renderItems()`, gate the click handler on `item.clickable` -- change:
+
+```js
+        btn.addEventListener('click', () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
+```
+
+to:
+
+```js
+        // Static Coming Attractions fallback posters are display-only (item.clickable === false)
+        // -- they have no real title/overview to show, so OK does nothing for them.
+        if (item.clickable !== false) {
+            btn.addEventListener('click', () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
+        }
+```
+
+- [ ] **Step 2:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 3:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 4:** Commit:
+
+```bash
+git add web/src/lineup/screen.js app/src/main/assets/cytube_mobile.js
+git commit -m "fix: display-only Lineup items (fallback posters) don't respond to OK"
+```
