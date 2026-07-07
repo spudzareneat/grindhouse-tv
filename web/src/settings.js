@@ -15,6 +15,7 @@ import {
 import { initDesyncButton, addFloatingButtons, addCastButton } from './chrome/buttons.js';
 import { usernameToColor } from './usercolors.js';
 import { nativeHttpGet } from './native.js';
+import { initPhoneKeyboard } from './chat/keyboard.js';
 import { _appVersion, checkForUpdate, initUpdateCheck, _updateInfo, GH_RELEASES_PAGE } from './update.js';
 import {
     LS_TMDB, LS_ONBOARDED, LS_SPELLCHECK, LS_CHAT_FONT, LS_MOVIE_LINKS, LS_COUCH, LS_WATCHALONG, LS_CAST_MUTE,
@@ -122,8 +123,10 @@ import tvCss from './styles/tv.css';
         const v = getKey(LS_NOKEYBOARD);
         if (v === 'on')  return true;
         if (v === 'off') return false;
-        // Default: suppress the on-screen keyboard only when a hardware keyboard
-        // is actually connected (so remote-only TVs keep the on-screen keyboard).
+        // Default: suppress the on-screen keyboard when a phone is actively paired (it's
+        // driving text entry instead), or when a hardware keyboard is connected (so
+        // remote-only TVs with neither keep the on-screen keyboard).
+        try { if (window.CytubeNative && CytubeNative.isKeyboardConnected && CytubeNative.isKeyboardConnected()) return true; } catch (e) {}
         try { if (window.CytubeNative && CytubeNative.hasHardwareKeyboard) return !!CytubeNative.hasHardwareKeyboard(); } catch (e) {}
         return false;
     }
@@ -929,6 +932,12 @@ import tvCss from './styles/tv.css';
     // D-pad navigation to reach the username/password fields and the Login button —
     // there's no pointer. Install a minimal, self-contained spatial nav, then stop.
     if (window.location.pathname.startsWith('/login')) {
+        initPhoneKeyboard(isTv, () => {
+            try {
+                const connected = window.CytubeNative && CytubeNative.isKeyboardConnected && CytubeNative.isKeyboardConnected();
+                if (window.CytubeNative && CytubeNative.setSuppressKeyboard) CytubeNative.setSuppressKeyboard(!!connected);
+            } catch (e) {}
+        });
         initLoginTvNav();
         return;
     }
@@ -1141,6 +1150,7 @@ import tvCss from './styles/tv.css';
        highlight between interactive elements and activate / close on OK / Back.
     ========================================================== */
     initTvNav();
+    initPhoneKeyboard(isTv, applySoftKeyboard);
 
     // Hide the native loading overlay (the Grindhouse splash).
     function _scSignalReady() {

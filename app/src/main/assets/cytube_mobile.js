@@ -2222,6 +2222,51 @@
     document.body.appendChild(btn);
   }
 
+  // src/chat/keyboard.js
+  function isEditable(el) {
+    return !!el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT");
+  }
+  function labelFor(el) {
+    if (!el) return "Text field";
+    if (el.id === "sc-chat-textarea") return "Chat message";
+    if (el.type === "password") return "Password";
+    if (el.id === "sc-input-tmdb") return "TMDB API key";
+    if (el.id === "username" || el.name === "username") return "Username";
+    return "Text field";
+  }
+  function reportFocusedField() {
+    const el = document.activeElement;
+    if (!isEditable(el)) return;
+    try {
+      if (window.CytubeNative && CytubeNative.setKeyboardFieldLabel) {
+        CytubeNative.setKeyboardFieldLabel(labelFor(el), el.type === "password");
+      }
+    } catch (e) {
+    }
+  }
+  function applyPhoneInput(text, commit) {
+    const el = document.activeElement;
+    if (!isEditable(el)) return;
+    el.value = text;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    if (commit) {
+      ["keydown", "keyup"].forEach((type) => {
+        el.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", bubbles: true }));
+      });
+    }
+  }
+  function initPhoneKeyboard(isTvDevice, recheckSoftKeyboard) {
+    if (!isTvDevice) return;
+    document.addEventListener("focusin", reportFocusedField);
+    window.__scPhoneKeyboard = applyPhoneInput;
+    setInterval(() => {
+      try {
+        recheckSoftKeyboard();
+      } catch (e) {
+      }
+    }, 1e3);
+  }
+
   // src/update.js
   var LS_UPDATE_CACHE = "sc_update_cache";
   var GH_RELEASES_API = "https://api.github.com/repos/spudzareneat/grindhouse-tv/releases/latest";
@@ -4954,6 +4999,10 @@
       if (v === "on") return true;
       if (v === "off") return false;
       try {
+        if (window.CytubeNative && CytubeNative.isKeyboardConnected && CytubeNative.isKeyboardConnected()) return true;
+      } catch (e) {
+      }
+      try {
         if (window.CytubeNative && CytubeNative.hasHardwareKeyboard) return !!CytubeNative.hasHardwareKeyboard();
       } catch (e) {
       }
@@ -5576,6 +5625,13 @@
       bootObserver.observe(document.body, { childList: true, subtree: true });
     };
     if (window.location.pathname.startsWith("/login")) {
+      initPhoneKeyboard(isTv, () => {
+        try {
+          const connected = window.CytubeNative && CytubeNative.isKeyboardConnected && CytubeNative.isKeyboardConnected();
+          if (window.CytubeNative && CytubeNative.setSuppressKeyboard) CytubeNative.setSuppressKeyboard(!!connected);
+        } catch (e) {
+        }
+      });
       initLoginTvNav();
       return;
     }
@@ -5759,6 +5815,7 @@
     if (document.readyState === "complete") initCinematicChat();
     else window.addEventListener("load", initCinematicChat);
     initTvNav();
+    initPhoneKeyboard(isTv, applySoftKeyboard);
     function _scSignalReady() {
       try {
         if (window.CytubeNative && CytubeNative.onReady) CytubeNative.onReady();
