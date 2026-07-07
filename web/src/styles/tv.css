@@ -549,6 +549,10 @@
                    settles on a whole poster — without this, scrollIntoView({inline:'nearest'})
                    can leave a partially-scrolled position that chops a poster's edge. */
                 scroll-snap-type: x mandatory !important;
+                /* Mandatory snap otherwise ignores the container's own padding as reserved
+                   space and skips past it — this keeps the first/last item's snap position
+                   inside the padding instead of flush with the unpadded scrollport edge. */
+                scroll-padding: 8px 24px 14px !important;
                 scrollbar-width: thin !important;
                 scrollbar-color: rgba(255,255,255,0.28) transparent !important;
             }
