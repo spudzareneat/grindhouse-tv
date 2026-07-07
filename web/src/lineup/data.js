@@ -12,8 +12,8 @@ import { parseMovieFilename } from '../parse.js';
    Fetches + caches the Letterboxd schedule once per session, locates "now" in
    it via the live current title, and projects each of the next 4 upcoming
    films' ETA from TMDB runtimes plus a learned median bumper-gap (beyond that,
-   compounding uncertainty isn't worth displaying as a time). Falls back to a
-   Now/Next-only view (built purely from live changeMedia data) if the
+   compounding uncertainty isn't worth displaying as a time). Falls back to the
+   current title plus the static admin-curated Coming Attractions art if the
    Letterboxd fetch fails, or to running-order-only (no times) if "now" can't
    be placed on the list -- except the one case where a coarse anchor still
    exists without a live match: Friday before the marathon's usual noon-Pacific
@@ -23,7 +23,6 @@ import { parseMovieFilename } from '../parse.js';
 let _scheduleCache = null;   // [{title, year}] for the whole weekend, or null before first fetch
 let _listTitle = null;       // the real Letterboxd list's own title, shown as the screen header
 let _fetchFailed = false;    // sticky for the session once Letterboxd is unreachable
-let _lastChangeMedia = null; // most recent changeMedia payload (title), for the fallback
 let _observedGapSeconds = []; // durations (s) of changeMedia items that didn't match the schedule
 let _lastUnmatchedStart = null; // Date.now() when the current unmatched (bumper) item started
 
@@ -44,7 +43,6 @@ onSocket('changeMedia', (d) => {
         _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1000);
         _lastUnmatchedStart = null;
     }
-    _lastChangeMedia = d || null;
 });
 
 async function ensureSchedule() {
@@ -104,6 +102,7 @@ function buildBase(info, title, year) {
         poster: info.poster || null,
         backdrop: info.backdrop || null,
         overview: info.overview || '',
+        runtime: info.runtime ?? null,
         rating: info.rating ?? null,
         genres: info.genres || [],
         parentalGuide: info.parentalGuide || null,

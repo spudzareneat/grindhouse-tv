@@ -1000,7 +1000,6 @@
   var _scheduleCache = null;
   var _listTitle = null;
   var _fetchFailed = false;
-  var _lastChangeMedia = null;
   var _observedGapSeconds = [];
   var _lastUnmatchedStart = null;
   var FALLBACK_LIST_TITLE = "Coming Attractions";
@@ -1015,7 +1014,6 @@
       _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1e3);
       _lastUnmatchedStart = null;
     }
-    _lastChangeMedia = d || null;
   });
   async function ensureSchedule() {
     if (_scheduleCache || _fetchFailed) return;
@@ -1055,17 +1053,18 @@
     return items;
   }
   function buildBase(info, title, year) {
-    var _a, _b;
+    var _a, _b, _c;
     return {
       cleanTitle: info.cleanTitle || title,
       cleanYear: info.cleanYear || year,
       poster: info.poster || null,
       backdrop: info.backdrop || null,
       overview: info.overview || "",
-      rating: (_a = info.rating) != null ? _a : null,
+      runtime: (_a = info.runtime) != null ? _a : null,
+      rating: (_b = info.rating) != null ? _b : null,
       genres: info.genres || [],
       parentalGuide: info.parentalGuide || null,
-      killCount: (_b = info.killCount) != null ? _b : null,
+      killCount: (_c = info.killCount) != null ? _c : null,
       imdbId: info.imdbId || null
     };
   }
