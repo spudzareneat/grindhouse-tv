@@ -910,18 +910,13 @@
       _fetchFailed = true;
     }
   }
-  function fallbackItems() {
+  async function fallbackItems() {
     const items = [];
     if (movieState.lastMovieTitle) {
-      items.push({
-        cleanTitle: movieState.lastMovieTitle,
-        cleanYear: null,
-        poster: null,
-        backdrop: null,
-        overview: "",
-        isNowPlaying: true,
-        etaLabel: ""
-      });
+      const info = await lookupMovie(movieState.lastMovieTitle, null);
+      if (!hasKey(LS_TMDB) || info.cleanTitle) {
+        items.push({ ...buildBase(info, movieState.lastMovieTitle, null), isNowPlaying: true, etaLabel: "" });
+      }
     }
     getMotdPosterImages().forEach((img) => {
       items.push({
@@ -931,7 +926,8 @@
         backdrop: null,
         overview: "",
         isNowPlaying: false,
-        etaLabel: "LATE"
+        etaLabel: "",
+        clickable: false
       });
     });
     return items;
@@ -954,7 +950,7 @@
   async function getTonightsLineup() {
     var _a;
     await ensureSchedule();
-    if (!_scheduleCache) return { listTitle: FALLBACK_LIST_TITLE, items: fallbackItems() };
+    if (!_scheduleCache) return { listTitle: FALLBACK_LIST_TITLE, items: await fallbackItems() };
     const infos = await Promise.all(_scheduleCache.map(({ title, year }) => lookupMovie(title, year)));
     const currentIndex = _scheduleCache.findIndex((s) => movieState.lastMovieTitle && s.title.toLowerCase() === movieState.lastMovieTitle.toLowerCase());
     if (currentIndex === -1) {
@@ -964,7 +960,7 @@
         items: _scheduleCache.map(({ title, year }, i) => ({
           ...buildBase(infos[i], title, year),
           isNowPlaying: false,
-          etaLabel: fridayEstimate && i === 0 ? "≈ Fri 12:00 PM" : "LATE"
+          etaLabel: fridayEstimate && i === 0 ? "≈ Fri 12:00 PM" : ""
         }))
       };
     }
@@ -982,7 +978,7 @@
       }
       cumulative += learnedGap;
       if (offset > MAX_ESTIMATED_AHEAD) {
-        items.push({ ...base, isNowPlaying: false, etaLabel: "LATE" });
+        items.push({ ...base, isNowPlaying: false, etaLabel: "" });
       } else {
         const precision = offset === 1 ? "exact" : "approx";
         const eta = new Date(Date.now() + cumulative * 1e3);

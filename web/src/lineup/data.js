@@ -4,6 +4,7 @@ import { onSocket } from '../socket.js';
 import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
 import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
 import { getMotdPosterImages } from '../motd.js';
+import { hasKey, LS_TMDB } from '../store.js';
 
 /* ==========================================================
    TONIGHT'S LINEUP -- data interface consumed by lineup/screen.js.
@@ -64,23 +65,26 @@ async function ensureSchedule() {
 }
 
 // Fallback when Letterboxd is unreachable or this week's list hasn't posted yet: the current
-// item (if known) plus the same admin-curated "Coming Attractions" art the small poster strip
-// shows -- no real title/time data for those, but still something real to look at instead of
-// an empty or thin live-only view.
-function fallbackItems() {
+// item (if known and it looks like a real feature, not a short/bumper) plus the same
+// admin-curated "Coming Attractions" art the small poster strip shows (display-only -- no real
+// title/overview to show for those, so OK does nothing) -- still something real to look at
+// instead of an empty or thin live-only view.
+async function fallbackItems() {
     const items = [];
     if (movieState.lastMovieTitle) {
-        items.push({
-            cleanTitle: movieState.lastMovieTitle, cleanYear: null,
-            poster: null, backdrop: null, overview: '',
-            isNowPlaying: true, etaLabel: '',
-        });
+        const info = await lookupMovie(movieState.lastMovieTitle, null);
+        // Skip likely bumpers/shorts: if TMDB is configured and confidently found nothing for
+        // this exact title, it's probably not a real feature. Without a TMDB key at all there's
+        // no way to tell, so default to showing it.
+        if (!hasKey(LS_TMDB) || info.cleanTitle) {
+            items.push({ ...buildBase(info, movieState.lastMovieTitle, null), isNowPlaying: true, etaLabel: '' });
+        }
     }
     getMotdPosterImages().forEach((img) => {
         items.push({
             cleanTitle: img.title || img.alt || 'Coming Attraction', cleanYear: null,
             poster: img.src, backdrop: null, overview: '',
-            isNowPlaying: false, etaLabel: 'LATE',
+            isNowPlaying: false, etaLabel: '', clickable: false,
         });
     });
     return items;
@@ -107,7 +111,7 @@ function buildBase(info, title, year) {
 
 export async function getTonightsLineup() {
     await ensureSchedule();
-    if (!_scheduleCache) return { listTitle: FALLBACK_LIST_TITLE, items: fallbackItems() };
+    if (!_scheduleCache) return { listTitle: FALLBACK_LIST_TITLE, items: await fallbackItems() };
 
     const infos = await Promise.all(_scheduleCache.map(({ title, year }) => lookupMovie(title, year)));
     const currentIndex = _scheduleCache.findIndex(s =>
@@ -124,7 +128,7 @@ export async function getTonightsLineup() {
             items: _scheduleCache.map(({ title, year }, i) => ({
                 ...buildBase(infos[i], title, year),
                 isNowPlaying: false,
-                etaLabel: (fridayEstimate && i === 0) ? '≈ Fri 12:00 PM' : 'LATE',
+                etaLabel: (fridayEstimate && i === 0) ? '≈ Fri 12:00 PM' : '',
             })),
         };
     }
@@ -141,7 +145,7 @@ export async function getTonightsLineup() {
 
         cumulative += learnedGap; // a bumper precedes this feature
         if (offset > MAX_ESTIMATED_AHEAD) {
-            items.push({ ...base, isNowPlaying: false, etaLabel: 'LATE' });
+            items.push({ ...base, isNowPlaying: false, etaLabel: '' });
         } else {
             const precision = offset === 1 ? 'exact' : 'approx';
             const eta = new Date(Date.now() + cumulative * 1000);
