@@ -865,6 +865,17 @@
     return false;
   }
 
+  // src/motd.js
+  function getMotdPosterImages() {
+    const motd = document.getElementById("motdrow");
+    if (!motd) return [];
+    return [...motd.querySelectorAll("img")].filter((img) => {
+      const w = parseInt(img.getAttribute("width") || "0", 10);
+      const h = parseInt(img.getAttribute("height") || "0", 10);
+      return h >= 100 && w <= 200;
+    });
+  }
+
   // src/lineup/data.js
   var _scheduleCache = null;
   var _listTitle = null;
@@ -872,7 +883,7 @@
   var _lastChangeMedia = null;
   var _observedGapSeconds = [];
   var _lastUnmatchedStart = null;
-  var FALLBACK_LIST_TITLE = "Now / Next";
+  var FALLBACK_LIST_TITLE = "Coming Attractions";
   var MAX_ESTIMATED_AHEAD = 4;
   onSocket("changeMedia", (d) => {
     const title = d && d.title;
@@ -912,17 +923,17 @@
         etaLabel: ""
       });
     }
-    if (_lastChangeMedia && _lastChangeMedia.title && _lastChangeMedia.title !== movieState.lastMovieTitle) {
+    getMotdPosterImages().forEach((img) => {
       items.push({
-        cleanTitle: _lastChangeMedia.title,
+        cleanTitle: img.title || img.alt || "Coming Attraction",
         cleanYear: null,
-        poster: null,
+        poster: img.src,
         backdrop: null,
         overview: "",
         isNowPlaying: false,
         etaLabel: "LATE"
       });
-    }
+    });
     return items;
   }
   function buildBase(info, title, year) {
@@ -1273,17 +1284,6 @@
   function hideLineupScreen() {
     const screen2 = document.getElementById("sc-lineup-screen");
     if (screen2) screen2.classList.remove("sc-lineup-visible");
-  }
-
-  // src/motd.js
-  function getMotdPosterImages() {
-    const motd = document.getElementById("motdrow");
-    if (!motd) return [];
-    return [...motd.querySelectorAll("img")].filter((img) => {
-      const w = parseInt(img.getAttribute("width") || "0", 10);
-      const h = parseInt(img.getAttribute("height") || "0", 10);
-      return h >= 100 && w <= 200;
-    });
   }
 
   // src/posters.js

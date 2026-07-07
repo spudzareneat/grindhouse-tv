@@ -3,6 +3,7 @@ import { lookupMovie, movieState } from '../metadata/tmdb.js';
 import { onSocket } from '../socket.js';
 import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
 import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+import { getMotdPosterImages } from '../motd.js';
 
 /* ==========================================================
    TONIGHT'S LINEUP -- data interface consumed by lineup/screen.js.
@@ -24,7 +25,7 @@ let _lastChangeMedia = null; // most recent changeMedia payload (title), for the
 let _observedGapSeconds = []; // durations (s) of changeMedia items that didn't match the schedule
 let _lastUnmatchedStart = null; // Date.now() when the current unmatched (bumper) item started
 
-const FALLBACK_LIST_TITLE = 'Now / Next';
+const FALLBACK_LIST_TITLE = 'Coming Attractions';
 const MAX_ESTIMATED_AHEAD = 4; // only the next N upcoming films get any time estimate at all
 
 // Learn bumper-gap duration live: a changeMedia title that doesn't match anything in
@@ -62,7 +63,10 @@ async function ensureSchedule() {
     }
 }
 
-// Now/Next-only fallback: only what a plain viewer can see live, no future lineup.
+// Fallback when Letterboxd is unreachable or this week's list hasn't posted yet: the current
+// item (if known) plus the same admin-curated "Coming Attractions" art the small poster strip
+// shows -- no real title/time data for those, but still something real to look at instead of
+// an empty or thin live-only view.
 function fallbackItems() {
     const items = [];
     if (movieState.lastMovieTitle) {
@@ -72,13 +76,13 @@ function fallbackItems() {
             isNowPlaying: true, etaLabel: '',
         });
     }
-    if (_lastChangeMedia && _lastChangeMedia.title && _lastChangeMedia.title !== movieState.lastMovieTitle) {
+    getMotdPosterImages().forEach((img) => {
         items.push({
-            cleanTitle: _lastChangeMedia.title, cleanYear: null,
-            poster: null, backdrop: null, overview: '',
+            cleanTitle: img.title || img.alt || 'Coming Attraction', cleanYear: null,
+            poster: img.src, backdrop: null, overview: '',
             isNowPlaying: false, etaLabel: 'LATE',
         });
-    }
+    });
     return items;
 }
 
