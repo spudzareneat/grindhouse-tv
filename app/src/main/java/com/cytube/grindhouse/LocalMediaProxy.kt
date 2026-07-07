@@ -49,7 +49,7 @@ class LocalMediaProxy(private val userAgent: String) {
     @Volatile private var keyboardFieldMasked: Boolean = false
     @Volatile private var keyboardRevision: Int = 0
     @Volatile private var keyboardLastSeenMs: Long = 0L
-    var onKeyboardInput: ((text: String, commit: Boolean) -> Unit)? = null
+    @Volatile var onKeyboardInput: ((text: String, commit: Boolean) -> Unit)? = null
 
     fun start() {
         if (server != null) return
