@@ -39,7 +39,9 @@ function renderItems(screen, data) {
     items.forEach((item) => {
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'sc-lineup-item' + (item.isNowPlaying ? ' sc-lineup-item-current' : '');
+        btn.className = 'sc-lineup-item'
+            + (item.isNowPlaying ? ' sc-lineup-item-current' : '')
+            + (item.clickable === false ? ' sc-lineup-item-static' : '');
         btn.innerHTML = `
             <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ''}"></div>
             <div class="sc-lineup-title">${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ''}</div>

@@ -589,6 +589,12 @@
                 outline: 3px solid #e0701a !important; outline-offset: 2px !important;
                 box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 6px 14px rgba(0,0,0,0.45) !important;
             }
+            /* Display-only fallback items (Coming Attractions art with no real title/time data)
+               get a gray focus ring instead of orange, signaling there's nothing to select. */
+            body.sc-tv .sc-lineup-item-static.sc-tv-focus .sc-lineup-poster {
+                outline: 3px solid #888 !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(136,136,136,0.32), 0 6px 14px rgba(0,0,0,0.45) !important;
+            }
             body.sc-tv .sc-lineup-item { flex-basis: 226px !important; }
             body.sc-tv .sc-lineup-poster { width: 226px !important; height: 339px !important; }
             body.sc-tv .sc-lineup-title { font-size: 16px !important; }

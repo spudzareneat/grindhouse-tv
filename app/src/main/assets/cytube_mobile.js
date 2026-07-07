@@ -1383,7 +1383,7 @@
     items.forEach((item) => {
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.className = "sc-lineup-item" + (item.isNowPlaying ? " sc-lineup-item-current" : "");
+      btn.className = "sc-lineup-item" + (item.isNowPlaying ? " sc-lineup-item-current" : "") + (item.clickable === false ? " sc-lineup-item-static" : "");
       btn.innerHTML = `
             <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ""}"></div>
             <div class="sc-lineup-title">${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ""}</div>
@@ -4898,6 +4898,12 @@
             body.sc-tv .sc-lineup-item.sc-tv-focus .sc-lineup-poster {\r
                 outline: 3px solid #e0701a !important; outline-offset: 2px !important;\r
                 box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 6px 14px rgba(0,0,0,0.45) !important;\r
+            }\r
+            /* Display-only fallback items (Coming Attractions art with no real title/time data)\r
+               get a gray focus ring instead of orange, signaling there's nothing to select. */\r
+            body.sc-tv .sc-lineup-item-static.sc-tv-focus .sc-lineup-poster {\r
+                outline: 3px solid #888 !important; outline-offset: 2px !important;\r
+                box-shadow: 0 0 0 5px rgba(136,136,136,0.32), 0 6px 14px rgba(0,0,0,0.45) !important;\r
             }\r
             body.sc-tv .sc-lineup-item { flex-basis: 226px !important; }\r
             body.sc-tv .sc-lineup-poster { width: 226px !important; height: 339px !important; }\r
