@@ -16,6 +16,7 @@ import { initDesyncButton, addFloatingButtons, addCastButton } from './chrome/bu
 import { usernameToColor } from './usercolors.js';
 import { nativeHttpGet } from './native.js';
 import { initPhoneKeyboard } from './chat/keyboard.js';
+import { renderQrToCanvas } from './vendor/qr.js';
 import { _appVersion, checkForUpdate, initUpdateCheck, _updateInfo, GH_RELEASES_PAGE } from './update.js';
 import {
     LS_TMDB, LS_ONBOARDED, LS_SPELLCHECK, LS_CHAT_FONT, LS_MOVIE_LINKS, LS_COUCH, LS_WATCHALONG, LS_CAST_MUTE,
@@ -453,6 +454,7 @@ import tvCss from './styles/tv.css';
         // The key is always optional; we only use this to show the intro copy once.
         const firstRun = !localStorage.getItem(LS_ONBOARDED);
         try { localStorage.setItem(LS_ONBOARDED, '1'); } catch (e) {}
+        let phoneKbStatusTimer = null;
 
         const overlay = document.createElement('div');
         overlay.id = 'sc-settings-overlay';
@@ -543,6 +545,17 @@ import tvCss from './styles/tv.css';
                             <span class="sc-settings-note">For physical keyboard users — tapping a text field won't pop up the Android keyboard</span>
                         </label>
                     </div>
+                    ${isTv ? `
+                    <div class="sc-settings-group sc-settings-divider">
+                        <label class="sc-settings-label">Phone Keyboard
+                            <span class="sc-settings-note">Pair a phone on the same Wi-Fi to type into any field here — chat, login, even this key field</span>
+                        </label>
+                        <div class="sc-settings-input-row">
+                            <button id="sc-pair-phone-btn" class="sc-settings-btn-wide" type="button">Pair a phone</button>
+                        </div>
+                        <canvas id="sc-phone-qr" class="sc-hidden"></canvas>
+                        <div id="sc-phone-qr-status" class="sc-settings-note"></div>
+                    </div>` : ''}
                 </div>
 
                 <div class="sc-settings-pane" data-pane="chat">
@@ -600,6 +613,10 @@ import tvCss from './styles/tv.css';
 
         document.body.appendChild(overlay);
 
+        // Every path that closes the modal must also stop the phone-keyboard status poll,
+        // or it keeps ticking (and leaking) after the modal is gone.
+        const closeSettings = () => { clearInterval(phoneKbStatusTimer); overlay.remove(); };
+
         // ── Tab switching. First-run always lands on Account (the default/first tab). ──
         const tabs  = [...overlay.querySelectorAll('.sc-settings-tab')];
         const panes = [...overlay.querySelectorAll('.sc-settings-pane')];
@@ -612,9 +629,9 @@ import tvCss from './styles/tv.css';
 
         // The TMDB key is optional — always allow closing (backdrop tap or Cancel/Skip).
         overlay.addEventListener('click', e => {
-            if (e.target === overlay) overlay.remove();
+            if (e.target === overlay) closeSettings();
         });
-        document.getElementById('sc-settings-cancel').addEventListener('click', () => overlay.remove());
+        document.getElementById('sc-settings-cancel').addEventListener('click', () => closeSettings());
 
         // Reveal/hide the TMDB key fields with the enable checkbox
         const tmdbEnable = document.getElementById('sc-input-tmdb-enable');
@@ -650,7 +667,7 @@ import tvCss from './styles/tv.css';
             persistSettings();
             const status = document.getElementById('sc-settings-status');
             status.textContent = '✓ Saved';
-            setTimeout(() => overlay.remove(), 800);
+            setTimeout(closeSettings, 800);
         });
 
         document.getElementById('sc-login-btn').addEventListener('click', () => {
@@ -696,6 +713,27 @@ import tvCss from './styles/tv.css';
             setKey(LS_NOKEYBOARD, nokb.checked ? 'on' : 'off');
             applySoftKeyboard();
         });
+
+        // ── Phone Keyboard pairing (TV only) ──────────────────────────────────
+        const pairBtn = document.getElementById('sc-pair-phone-btn');
+        if (pairBtn) {
+            const qrCanvas = document.getElementById('sc-phone-qr');
+            const qrStatus = document.getElementById('sc-phone-qr-status');
+            pairBtn.addEventListener('click', () => {
+                let url = '';
+                try { if (window.CytubeNative && CytubeNative.phoneKeyboardUrl) url = CytubeNative.phoneKeyboardUrl(); } catch (e) {}
+                if (!url) { qrStatus.textContent = 'Could not start pairing.'; return; }
+                renderQrToCanvas(qrCanvas, url);
+                qrCanvas.classList.remove('sc-hidden');
+                qrStatus.textContent = 'Waiting for phone…';
+                clearInterval(phoneKbStatusTimer);
+                phoneKbStatusTimer = setInterval(() => {
+                    let connected = false;
+                    try { connected = !!(window.CytubeNative && CytubeNative.isKeyboardConnected && CytubeNative.isKeyboardConnected()); } catch (e) {}
+                    qrStatus.textContent = connected ? 'Phone connected ✓' : 'Waiting for phone…';
+                }, 1000);
+            });
+        }
 
         // ── Couch Mode toggle (applies immediately) ──────────────────────────
         const couch = document.getElementById('sc-input-couch');
