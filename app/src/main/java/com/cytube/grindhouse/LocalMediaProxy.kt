@@ -326,11 +326,26 @@ class LocalMediaProxy(private val userAgent: String) {
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Grindhouse Keyboard</title>
 <style>
-  body { margin:0; font-family:sans-serif; background:#111; color:#eee; display:flex; flex-direction:column; height:100vh; padding:16px; box-sizing:border-box; }
-  #label { font-size:14px; opacity:0.7; margin-bottom:8px; }
-  #field { flex:1; font-size:20px; padding:12px; border-radius:8px; border:none; width:100%; box-sizing:border-box; }
-  #send { margin-top:12px; padding:14px; font-size:18px; border-radius:8px; border:none; background:#e63946; color:#fff; }
-  #status { margin-top:8px; font-size:12px; opacity:0.6; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; padding:0; }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:#15111c; color:#eee; min-height:100vh;
+    display:flex; flex-direction:column; justify-content:center;
+    padding:28px 22px; gap:14px;
+  }
+  #label { font-size:14px; opacity:0.75; text-align:center; }
+  #field {
+    font-size:22px; padding:16px 18px; border-radius:14px; border:1px solid rgba(0,0,0,0.08);
+    width:100%; background:#fff; color:#1a1424; box-shadow:0 3px 14px rgba(0,0,0,0.3);
+  }
+  #field:focus { outline:2px solid #c0b0ff; outline-offset:2px; }
+  #send {
+    padding:16px; font-size:18px; font-weight:600; border-radius:14px; border:none;
+    background:#c0b0ff; color:#1a1424;
+  }
+  #send:active { background:#a894f0; }
+  #status { font-size:12px; opacity:0.6; text-align:center; min-height:14px; }
 </style></head>
 <body>
   <div id="label">Connecting&hellip;</div>

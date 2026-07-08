@@ -5535,8 +5535,10 @@
             }
             .sc-settings-btn-wide:hover { background: rgba(192,176,255,0.32) !important; }
             #sc-phone-qr {
-                display: block !important; margin: 10px auto 4px !important;
-                background: #fff !important; padding: 8px !important; border-radius: 8px !important;
+                display: block !important; margin: 14px auto !important;
+                background: #fff !important; padding: 14px !important; border-radius: 14px !important;
+                width: min(100%, 320px) !important; height: auto !important;
+                image-rendering: pixelated !important; image-rendering: crisp-edges !important;
             }
             #sc-phone-qr.sc-hidden { display: none !important; }
             /* App-update section + the settings-gear "update available" highlight */
@@ -6888,6 +6890,7 @@
                     <button type="button" class="sc-settings-tab" data-tab="appearance">Appearance</button>
                     <button type="button" class="sc-settings-tab" data-tab="playback">Playback</button>
                     <button type="button" class="sc-settings-tab" data-tab="chat">Chat</button>
+                    ${isTv ? '<button type="button" class="sc-settings-tab" data-tab="keyboard">Phone Keyboard</button>' : ""}
                     <button type="button" class="sc-settings-tab" data-tab="updates">Updates</button>
                 </nav>
 
@@ -6965,8 +6968,11 @@
                             <span class="sc-settings-note">For physical keyboard users — tapping a text field won't pop up the Android keyboard</span>
                         </label>
                     </div>
-                    ${isTv ? `
-                    <div class="sc-settings-group sc-settings-divider">
+                </div>
+
+                ${isTv ? `
+                <div class="sc-settings-pane" data-pane="keyboard">
+                    <div class="sc-settings-group">
                         <label class="sc-settings-label">Phone Keyboard
                             <span class="sc-settings-note">Pair a phone on the same Wi-Fi to type into any field here — chat, login, even this key field</span>
                         </label>
@@ -6975,8 +6981,8 @@
                         </div>
                         <canvas id="sc-phone-qr" class="sc-hidden"></canvas>
                         <div id="sc-phone-qr-status" class="sc-settings-note"></div>
-                    </div>` : ""}
-                </div>
+                    </div>
+                </div>` : ""}
 
                 <div class="sc-settings-pane" data-pane="chat">
                     <div class="sc-settings-group">

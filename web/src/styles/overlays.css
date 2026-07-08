@@ -269,8 +269,10 @@
             }
             .sc-settings-btn-wide:hover { background: rgba(192,176,255,0.32) !important; }
             #sc-phone-qr {
-                display: block !important; margin: 10px auto 4px !important;
-                background: #fff !important; padding: 8px !important; border-radius: 8px !important;
+                display: block !important; margin: 14px auto !important;
+                background: #fff !important; padding: 14px !important; border-radius: 14px !important;
+                width: min(100%, 320px) !important; height: auto !important;
+                image-rendering: pixelated !important; image-rendering: crisp-edges !important;
             }
             #sc-phone-qr.sc-hidden { display: none !important; }
             /* App-update section + the settings-gear "update available" highlight */

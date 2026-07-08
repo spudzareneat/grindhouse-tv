@@ -468,6 +468,7 @@ import tvCss from './styles/tv.css';
                     <button type="button" class="sc-settings-tab" data-tab="appearance">Appearance</button>
                     <button type="button" class="sc-settings-tab" data-tab="playback">Playback</button>
                     <button type="button" class="sc-settings-tab" data-tab="chat">Chat</button>
+                    ${isTv ? '<button type="button" class="sc-settings-tab" data-tab="keyboard">Phone Keyboard</button>' : ''}
                     <button type="button" class="sc-settings-tab" data-tab="updates">Updates</button>
                 </nav>
 
@@ -545,8 +546,11 @@ import tvCss from './styles/tv.css';
                             <span class="sc-settings-note">For physical keyboard users — tapping a text field won't pop up the Android keyboard</span>
                         </label>
                     </div>
-                    ${isTv ? `
-                    <div class="sc-settings-group sc-settings-divider">
+                </div>
+
+                ${isTv ? `
+                <div class="sc-settings-pane" data-pane="keyboard">
+                    <div class="sc-settings-group">
                         <label class="sc-settings-label">Phone Keyboard
                             <span class="sc-settings-note">Pair a phone on the same Wi-Fi to type into any field here — chat, login, even this key field</span>
                         </label>
@@ -555,8 +559,8 @@ import tvCss from './styles/tv.css';
                         </div>
                         <canvas id="sc-phone-qr" class="sc-hidden"></canvas>
                         <div id="sc-phone-qr-status" class="sc-settings-note"></div>
-                    </div>` : ''}
-                </div>
+                    </div>
+                </div>` : ''}
 
                 <div class="sc-settings-pane" data-pane="chat">
                     <div class="sc-settings-group">
