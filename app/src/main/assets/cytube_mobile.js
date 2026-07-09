@@ -1445,13 +1445,39 @@
     new MutationObserver(bindTitle).observe(document.body, { childList: true, subtree: true });
   }
 
+  // src/lineup/sectionThemes.js
+  var THEMES = {
+    "funky-cheese-friday": { font: "Boogaloo", color: "#e0a92a", wash: "#2b210a" },
+    "friday-grindhouse-a-go-go": { font: "Chewy", color: "#ec4899", wash: "#2a0e1c" },
+    "friday-night-freak-show": { font: "Creepster", color: "#52c41a", wash: "#0f2109" },
+    "psychedelic-saturday": { font: "'Rubik Wet Paint'", color: "#a855f7", wash: "#200c2b" },
+    "saturday-prime-time-drive-in": { font: "Monoton", color: "#22d3ee", wash: "#06232a" },
+    "red-light-saturday-night": { font: "'Vast Shadow'", color: "#ef4444", wash: "#2b0a0a" },
+    "the-sunday-classics": { font: "Cinzel", color: "#9f2b4a", wash: "#200810" },
+    "sunday-slop-o-rama": { font: "Eater", color: "#a3b125", wash: "#1c1f08" },
+    "last-call-sunday-night": { font: "'Bungee Shade'", color: "#6366f1", wash: "#12102b" }
+  };
+  var DEFAULT_THEME = { font: null, color: "#9aa0a8", wash: "#14141a" };
+  function getSectionTheme(slug) {
+    return THEMES[slug] || DEFAULT_THEME;
+  }
+  var FONT_FAMILIES = ["Boogaloo", "Chewy", "Creepster", "Rubik+Wet+Paint", "Monoton", "Vast+Shadow", "Cinzel", "Eater", "Bungee+Shade"];
+  var FONTS_LINK_ID = "sc-lineup-theme-fonts";
+  function ensureThemeFontsLoaded() {
+    if (document.getElementById(FONTS_LINK_ID)) return;
+    const link = document.createElement("link");
+    link.id = FONTS_LINK_ID;
+    link.rel = "stylesheet";
+    link.href = `https://fonts.googleapis.com/css2?${FONT_FAMILIES.map((f) => `family=${f}`).join("&")}&display=swap`;
+    document.head.appendChild(link);
+  }
+
   // src/lineup/screen.js
-  var ASSET_BASE = "file:///android_asset/lineup-sections/";
-  var DEFAULT_ART = ASSET_BASE + "_default.jpg";
   var _lastData = null;
   var _activeDay = null;
   var _activeSectionIndex = 0;
   function ensureScreenDom() {
+    ensureThemeFontsLoaded();
     let screen2 = document.getElementById("sc-lineup-screen");
     if (screen2) return screen2;
     screen2 = document.createElement("div");
@@ -1487,16 +1513,13 @@
   function sectionEl(section, index, total) {
     const el = document.createElement("div");
     el.className = "sc-lineup-section";
-    const art = section.slug ? `${ASSET_BASE}${section.slug}.jpg` : DEFAULT_ART;
-    el.style.backgroundImage = `url('${art}')`;
-    const probe = new Image();
-    probe.onerror = () => {
-      el.style.backgroundImage = `url('${DEFAULT_ART}')`;
-    };
-    probe.src = art;
+    const theme = getSectionTheme(section.slug);
+    el.style.setProperty("--sc-lineup-wash", theme.wash);
     if (section.name) {
       const name = document.createElement("div");
       name.className = "sc-lineup-section-name";
+      name.style.setProperty("color", theme.color, "important");
+      if (theme.font) name.style.setProperty("font-family", `${theme.font}, cursive`, "important");
       name.innerHTML = `${section.name}${total > 1 ? `<span class="sc-lineup-section-count">${index + 1} / ${total}</span>` : ""}`;
       el.appendChild(name);
     }
@@ -5090,36 +5113,38 @@
             }
 
             /* The one currently-shown section: fills #sc-lineup-body's full height (not just its
-               content's natural size), full-bleed background art (a bundled Android asset, same
-               9 names every week) behind its rail of posters, content vertically centered within
-               whatever space is available so it reads as "this grouping fits the screen" rather
-               than pinned to one edge. */
+               content's natural size), a background gradient washed with that section's own
+               theme color (see sectionThemes.js -- --sc-lineup-wash is set per-instance in
+               screen.js) tying its header and its row of posters together, content vertically
+               centered within whatever space is available so it reads as "this grouping fits
+               the screen" rather than pinned to one edge. */
             .sc-lineup-section {
                 position: relative !important; width: 100% !important; height: 100% !important;
                 border-radius: 10px !important; overflow: hidden !important;
-                background-size: cover !important; background-position: center !important;
-                background-color: rgba(255,255,255,0.04) !important;
+                background: linear-gradient(160deg, var(--sc-lineup-wash, #14141a) 0%, #0a080d 78%) !important;
                 display: flex !important; flex-direction: column !important; justify-content: center !important;
                 padding: 14px 0 16px !important; box-sizing: border-box !important;
             }
-            .sc-lineup-section::before {
-                content: '' !important; position: absolute !important; inset: 0 !important;
-                background: linear-gradient(180deg, rgba(6,4,9,0.55) 0%, rgba(6,4,9,0.82) 100%) !important;
-            }
             .sc-lineup-section-fallback { background: none !important; padding: 0 !important; }
-            .sc-lineup-section-fallback::before { content: none !important; }
             .sc-lineup-section-name {
-                position: relative !important; color: #fff !important; font-weight: 700 !important;
-                font-size: 13px !important; letter-spacing: 0.1em !important; text-transform: uppercase !important;
-                padding: 0 24px 10px !important; text-shadow: 0 2px 6px rgba(0,0,0,0.6) !important;
+                font-weight: 700 !important; font-size: 24px !important;
+                padding: 0 24px 14px !important; text-shadow: 0 2px 10px rgba(0,0,0,0.55) !important;
+                /* color/font-family are set per-instance in screen.js (each section's theme) --
+                   these are just safety defaults for before that runs. letter-spacing/uppercase
+                   deliberately omitted: these are expressive display fonts (Creepster, Monoton,
+                   Vast Shadow, ...), forcing tracking/case on them fights their own design. */
+                color: #fff !important;
             }
-            body.sc-tv .sc-lineup-section-name { font-size: 15px !important; }
+            body.sc-tv .sc-lineup-section-name { font-size: 30px !important; }
             /* Position within the day's groupings (e.g. "2 / 3") -- the only orientation cue
-               now that sections page instead of stacking where the next one could peek into view. */
+               now that sections page instead of stacking where the next one could peek into view.
+               Deliberately NOT the decorative theme font/color -- a plain utility label. */
             .sc-lineup-section-count {
-                margin-left: 10px !important; font-weight: 600 !important; letter-spacing: 0.04em !important;
-                color: rgba(255,255,255,0.55) !important; text-transform: none !important;
+                margin-left: 12px !important; font-weight: 600 !important; letter-spacing: 0.04em !important;
+                font-family: 'Inter','Roboto',system-ui,sans-serif !important;
+                font-size: 13px !important; color: rgba(255,255,255,0.55) !important;
             }
+            body.sc-tv .sc-lineup-section-count { font-size: 15px !important; }
 
             .sc-lineup-rail {
                 position: relative !important;

@@ -53,7 +53,7 @@ test('parseSchedule: groups sections and films under the correct day, in documen
     assert.strictEqual(days[0].sections[0].items.length, 3);
     assert.deepStrictEqual(days[0].sections[0].items[0], { title: 'The Legend of Gator Face', year: '1996', display: 'The Legend of Gator Face (1996)' });
 });
-test('parseSchedule: each section carries a slugified name for the bundled art lookup', () => {
+test('parseSchedule: each section carries a slugified name for the font/color theme lookup', () => {
     const entry = parseFirstEntry(FEED_FIXTURE);
     const days = parseSchedule(entry.contentHtml);
     assert.strictEqual(days[0].sections[1].slug, 'friday-grindhouse-a-go-go');

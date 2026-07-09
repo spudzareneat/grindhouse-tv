@@ -1,5 +1,6 @@
 import { getTonightsLineup } from './data.js';
 import { showNowPlayingCard } from '../cards/nowplaying.js';
+import { getSectionTheme, ensureThemeFontsLoaded } from './sectionThemes.js';
 
 /* ==========================================================
    TONIGHT'S LINEUP — full-screen TV schedule, opened from the Coming
@@ -12,14 +13,12 @@ import { showNowPlayingCard } from '../cards/nowplaying.js';
    (see that file), which also drives section paging via stepLineupSection().
 ========================================================== */
 
-const ASSET_BASE = 'file:///android_asset/lineup-sections/';
-const DEFAULT_ART = ASSET_BASE + '_default.jpg';
-
 let _lastData = null;          // most recent getTonightsLineup() result, so paging doesn't refetch
 let _activeDay = null;         // currently selected day name
 let _activeSectionIndex = 0;   // currently shown section within _activeDay
 
 function ensureScreenDom() {
+    ensureThemeFontsLoaded();
     let screen = document.getElementById('sc-lineup-screen');
     if (screen) return screen;
     screen = document.createElement('div');
@@ -65,20 +64,19 @@ function itemButton(item) {
 
 // One section's grouping, sized to fill the screen on its own -- position among the day's
 // other sections is shown as a small counter since only one grouping is visible at a time.
+// Named theme sections repeat every week (a slow-changing, closed set), so each gets its own
+// Google Font + accent color (see sectionThemes.js) tying its header and background together,
+// rather than per-section art.
 function sectionEl(section, index, total) {
     const el = document.createElement('div');
     el.className = 'sc-lineup-section';
-    const art = section.slug ? `${ASSET_BASE}${section.slug}.jpg` : DEFAULT_ART;
-    el.style.backgroundImage = `url('${art}')`;
-    // Named theme sections repeat every week (same 9 names), so their art is a
-    // bundled Android asset (app/src/main/assets/lineup-sections/), not fetched --
-    // any not-yet-added or unrecognized section name falls back to _default.jpg.
-    const probe = new Image();
-    probe.onerror = () => { el.style.backgroundImage = `url('${DEFAULT_ART}')`; };
-    probe.src = art;
+    const theme = getSectionTheme(section.slug);
+    el.style.setProperty('--sc-lineup-wash', theme.wash);
     if (section.name) {
         const name = document.createElement('div');
         name.className = 'sc-lineup-section-name';
+        name.style.setProperty('color', theme.color, 'important');
+        if (theme.font) name.style.setProperty('font-family', `${theme.font}, cursive`, 'important');
         name.innerHTML = `${section.name}${total > 1 ? `<span class="sc-lineup-section-count">${index + 1} / ${total}</span>` : ''}`;
         el.appendChild(name);
     }

@@ -113,8 +113,8 @@ export function parseSchedule(contentHtml) {
         } else if (currentDay && pendingSectionName) {
             const items = parseListItems(m[2]);
             // Section names repeat verbatim every week (a closed, slow-changing set) --
-            // slugified here so screen.js can look up each section's bundled background art
-            // by a stable filename (see lineup-sections/ assets) without re-deriving it.
+            // slugified here so screen.js can look up each section's font/color theme (see
+            // sectionThemes.js) by a stable key without re-deriving it.
             if (items.length) currentDay.sections.push({ name: pendingSectionName, slug: slugify(pendingSectionName), items });
             pendingSectionName = null;
         }
