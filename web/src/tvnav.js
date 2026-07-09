@@ -361,17 +361,20 @@ export function initTvNav() {
             }
         }
 
-        // Tonight's Lineup rail: a horizontal reel like the Coming Attractions strip above —
-        // items scrolled past the rail's edge are off-viewport but still valid targets, so
-        // (like the poster strip) this list is NOT isVisible-filtered. Without this, the
-        // generic candidates() path below would strand navigation at whatever's currently
-        // on-screen, since isVisible() excludes anything scrolled out of view.
+        // Tonight's Lineup: one horizontal reel per themed section (day tabs stack several
+        // sections vertically), each a reel like the Coming Attractions strip above — items
+        // scrolled past a rail's edge are off-viewport but still valid targets, so (like the
+        // poster strip) this list is NOT isVisible-filtered. Scoped to focusEl's OWN rail
+        // (closest('.sc-lineup-rail')) so Left/Right can't walk across section boundaries, and
+        // so it only fires when focus is actually inside a rail — Left/Right on the day-tab row
+        // falls through to the generic geometric scorer below, same as it does in Settings' tab
+        // row (there's no need to special-case a plain 3-button horizontal row).
         const lineupScreen = document.getElementById('sc-lineup-screen');
         if (lineupScreen && lineupScreen.classList.contains('sc-lineup-visible') &&
             (dir === 'left' || dir === 'right')) {
-            const rail = document.getElementById('sc-lineup-rail');
-            const items = rail ? [...rail.querySelectorAll('.sc-lineup-item')] : [];
-            if (items.length) {
+            const rail = focusEl && focusEl.closest('.sc-lineup-rail');
+            if (rail) {
+                const items = [...rail.querySelectorAll('.sc-lineup-item')];
                 const i = items.indexOf(focusEl);
                 const ni = dir === 'right' ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
                 setFocus(items[ni]);

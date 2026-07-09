@@ -518,13 +518,13 @@
             body.sc-tv #sc-trivia-close { width: 44px !important; height: 44px !important; font-size: 20px !important; }
             body.sc-tv .sc-trivia-item { font-size: 20px !important; padding: 16px 0 !important; }
 
-            /* ── TONIGHT'S LINEUP (full-screen TV schedule rail) ─────────────── */
+            /* ── TONIGHT'S LINEUP (full-screen TV schedule, day tabs + sections) ─── */
             #sc-lineup-screen {
                 position: fixed !important; inset: 0 !important;
                 z-index: 20500 !important; /* below #sc-np-card (21000) so OK on a film covers this */
                 background: rgba(6,4,9,0.97) !important;
                 display: none !important; flex-direction: column !important;
-                align-items: flex-start !important; justify-content: center !important;
+                align-items: flex-start !important; justify-content: flex-start !important;
                 font-family: 'Inter','Roboto',system-ui,sans-serif !important;
                 padding: 2vh 4vw !important; box-sizing: border-box !important;
                 overflow-y: auto !important; /* safety net: never let content become unreachable
@@ -541,7 +541,49 @@
             }
             body.sc-tv #sc-lineup-header { font-size: 15px !important; }
             body.sc-tv #sc-lineup-subtitle { font-size: 12px !important; }
-            #sc-lineup-rail {
+            #sc-lineup-body { width: 100% !important; display: flex !important; flex-direction: column !important; gap: 22px !important; }
+
+            /* Day tabs — plain button row, same shape as settings.js's tab pattern; the whole-
+               page geometric scorer handles Left/Right across tabs and Up/Down into the first
+               section on its own (no special-case nav code needed, see tvnav.js). */
+            #sc-lineup-daytabs {
+                display: flex !important; gap: 10px !important; margin-bottom: 6px !important;
+            }
+            .sc-lineup-daytab {
+                background: rgba(255,255,255,0.08) !important; border: none !important;
+                color: rgba(255,255,255,0.65) !important; font-weight: 700 !important;
+                font-size: 13px !important; letter-spacing: 0.06em !important;
+                padding: 8px 18px !important; border-radius: 999px !important; cursor: pointer !important;
+            }
+            .sc-lineup-daytab-active { background: var(--np-accent, #ff5b73) !important; color: #fff !important; }
+            body.sc-tv .sc-lineup-daytab { font-size: 15px !important; padding: 10px 22px !important; }
+            body.sc-tv .sc-lineup-daytab.sc-tv-focus {
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+            }
+
+            /* One themed section per row: full-bleed background art (a bundled Android asset,
+               same 9 names every week) behind the section's rail of posters. */
+            .sc-lineup-section {
+                position: relative !important; width: 100% !important; border-radius: 10px !important;
+                overflow: hidden !important; background-size: cover !important; background-position: center !important;
+                background-color: rgba(255,255,255,0.04) !important;
+                padding: 14px 0 16px !important;
+            }
+            .sc-lineup-section::before {
+                content: '' !important; position: absolute !important; inset: 0 !important;
+                background: linear-gradient(180deg, rgba(6,4,9,0.55) 0%, rgba(6,4,9,0.82) 100%) !important;
+            }
+            .sc-lineup-section-fallback { background: none !important; padding: 0 !important; }
+            .sc-lineup-section-fallback::before { content: none !important; }
+            .sc-lineup-section-name {
+                position: relative !important; color: #fff !important; font-weight: 700 !important;
+                font-size: 13px !important; letter-spacing: 0.1em !important; text-transform: uppercase !important;
+                padding: 0 24px 10px !important; text-shadow: 0 2px 6px rgba(0,0,0,0.6) !important;
+            }
+            body.sc-tv .sc-lineup-section-name { font-size: 15px !important; }
+
+            .sc-lineup-rail {
+                position: relative !important;
                 display: flex !important; gap: 22px !important; width: 100% !important;
                 overflow-x: auto !important; overflow-y: hidden !important;
                 padding: 8px 24px 14px !important;
@@ -556,14 +598,14 @@
                 scrollbar-width: thin !important;
                 scrollbar-color: rgba(255,255,255,0.28) transparent !important;
             }
-            #sc-lineup-rail::-webkit-scrollbar { height: 8px !important; }
-            #sc-lineup-rail::-webkit-scrollbar-track { background: rgba(255,255,255,0.05) !important; border-radius: 10px !important; }
-            #sc-lineup-rail::-webkit-scrollbar-thumb {
+            .sc-lineup-rail::-webkit-scrollbar { height: 8px !important; }
+            .sc-lineup-rail::-webkit-scrollbar-track { background: rgba(255,255,255,0.05) !important; border-radius: 10px !important; }
+            .sc-lineup-rail::-webkit-scrollbar-thumb {
                 background: rgba(255,255,255,0.28) !important; border-radius: 10px !important;
                 border: 2px solid transparent !important; background-clip: padding-box !important;
             }
-            #sc-lineup-rail::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.45) !important; background-clip: padding-box !important; }
-            body.sc-tv #sc-lineup-rail::-webkit-scrollbar { height: 10px !important; }
+            .sc-lineup-rail::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.45) !important; background-clip: padding-box !important; }
+            body.sc-tv .sc-lineup-rail::-webkit-scrollbar { height: 10px !important; }
             #sc-lineup-loading { color: rgba(255,255,255,0.6) !important; font-size: 18px !important; }
             .sc-lineup-item {
                 flex: 0 0 220px !important; background: transparent !important; border: none !important;
