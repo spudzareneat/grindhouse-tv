@@ -1,11 +1,65 @@
 /* GENERATED FILE — do not edit. Source: web/src/**. Rebuild: cd web && npm run bundle */
 (() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __esm = (fn, res) => function __init() {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  };
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+
+  // src/native.js
+  var native_exports = {};
+  __export(native_exports, {
+    nativeHttpGet: () => nativeHttpGet
+  });
+  function nativeHttpGet(url, headers = {}) {
+    return new Promise((resolve, reject) => {
+      if (!(window.CytubeNative && typeof CytubeNative.httpGet === "function")) {
+        reject(new Error("native http unavailable"));
+        return;
+      }
+      const id = "h" + Math.random().toString(36).slice(2);
+      _scHttpCbs[id] = (res) => {
+        if (res && res.error) reject(new Error(res.error));
+        else resolve(res);
+      };
+      try {
+        CytubeNative.httpGet(id, url, JSON.stringify(headers));
+      } catch (e) {
+        delete _scHttpCbs[id];
+        reject(e);
+      }
+      setTimeout(() => {
+        if (_scHttpCbs[id]) {
+          delete _scHttpCbs[id];
+          reject(new Error("timeout"));
+        }
+      }, 1e4);
+    });
+  }
+  var _scHttpCbs;
+  var init_native = __esm({
+    "src/native.js"() {
+      _scHttpCbs = {};
+      window.__scHttpResolve = function(id, res) {
+        const cb = _scHttpCbs[id];
+        if (cb) {
+          delete _scHttpCbs[id];
+          cb(res);
+        }
+      };
+    }
+  });
+
   // src/chat/usernames.js
   function getChatUsernames() {
     const names = /* @__PURE__ */ new Set();
-    document.querySelectorAll("#userlist .userlist_item").forEach((item2) => {
+    document.querySelectorAll("#userlist .userlist_item").forEach((item) => {
       var _a;
-      const spans = item2.querySelectorAll("span");
+      const spans = item.querySelectorAll("span");
       const nameSpan = spans.length >= 2 ? spans[1] : spans[0];
       const n = (_a = nameSpan == null ? void 0 : nameSpan.textContent) == null ? void 0 : _a.trim();
       if (n) names.add(n);
@@ -484,171 +538,108 @@
     return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
   }();
 
-  // src/lineup/data.js
+  // src/lineup/reddit.js
+  var FEED_URL = "https://www.reddit.com/r/420Grindhouse/.rss";
+  var BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+  };
+  var DAY_NAMES = ["Friday", "Saturday", "Sunday"];
   function slugify(name) {
     return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   }
-  function item(cleanTitle, cleanYear, opts = {}) {
-    var _a;
+  function decodeHtmlEntities(s) {
+    return s.replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16))).replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10))).replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  }
+  function parseFirstEntry(feedXml) {
+    const start = feedXml.indexOf("<entry>");
+    if (start === -1) return null;
+    const end = feedXml.indexOf("</entry>", start);
+    if (end === -1) return null;
+    const entry = feedXml.slice(start, end + "</entry>".length);
+    const idM = entry.match(/<id>([^<]+)<\/id>/);
+    const titleM = entry.match(/<title>([^<]+)<\/title>/);
+    const contentM = entry.match(/<content type="html">([\s\S]*?)<\/content>/);
+    if (!idM || !titleM || !contentM) return null;
+    const pubM = entry.match(/<published>([^<]+)<\/published>/);
     return {
-      cleanTitle,
-      cleanYear,
-      poster: null,
-      backdrop: null,
-      overview: opts.overview || "",
-      runtime: (_a = opts.runtime) != null ? _a : null,
-      isNowPlaying: !!opts.isNowPlaying,
-      etaLabel: opts.etaLabel || "",
-      clickable: opts.clickable !== false
+      postId: idM[1],
+      title: decodeHtmlEntities(titleM[1]),
+      publishedAt: pubM ? pubM[1] : null,
+      contentHtml: decodeHtmlEntities(contentM[1])
     };
   }
-  function section(name, items) {
-    return { name, slug: slugify(name), items };
+  function parseDateRange(title, publishedAt) {
+    const m = title && title.match(/Fri\D*(\d{1,2})\/(\d{1,2})/i);
+    if (!m || !publishedAt) return null;
+    const pub = new Date(publishedAt);
+    if (isNaN(pub.getTime())) return null;
+    const friMonth = parseInt(m[1], 10), friDay = parseInt(m[2], 10);
+    const pubMonth = pub.getMonth() + 1;
+    const year = pubMonth === 12 && friMonth === 1 ? pub.getFullYear() + 1 : pub.getFullYear();
+    const fri = Date.UTC(year, friMonth - 1, friDay);
+    const toStr = (ms) => new Date(ms).toISOString().slice(0, 10);
+    return { fri: toStr(fri), sat: toStr(fri + 864e5), sun: toStr(fri + 2 * 864e5) };
   }
-  var FIXTURE_DAYS = [
-    {
-      day: "Friday",
-      date: "2026-07-10",
-      isToday: true,
-      sections: [
-        section("Funky Cheese Friday", [
-          item("The Legend of Gator Face", "1996"),
-          item("White Ghost", "1988"),
-          item("Frankenstein Island", "1981", {
-            isNowPlaying: true,
-            overview: "Four female astronauts crash-land on an island run by a mad scientist and his sister, the reincarnation of a 400-year-old witch."
-          })
-        ]),
-        section("Friday Grindhouse-A-Go-Go", [
-          item("Gator Bait", "1978", { etaLabel: "≈ 9:20 PM" }),
-          item("Swamp Thing", "1982", { etaLabel: "~ 11:00 PM" }),
-          item("Swamphead", "2011")
-        ]),
-        section("Friday Night Freak Show", [
-          item("Popeye the Slayer Man", "2025"),
-          item("The Chosen One: Legend of the Raven", "1998"),
-          item("Treasure of the Living Dead", "1982")
-        ])
-      ]
-    },
-    {
-      day: "Saturday",
-      date: "2026-07-11",
-      isToday: false,
-      sections: [
-        section("Psychedelic Saturday", [
-          item("Thunder of Gigantic Serpent", "1988"),
-          item("Unmasking the Idol", "1986"),
-          item("Computer Beach Party", "1987")
-        ]),
-        section("Saturday Prime Time Drive-In", [
-          item("Killing American Style", "1988"),
-          item("Sleepover Slaughter", "2026"),
-          item("Criminally Insane", "1975"),
-          item("Black Demons", "1991")
-        ]),
-        section("Red Light Saturday Night", [
-          item("Angel of Destruction", "1994"),
-          item("Bikini Bloodbath", "2006"),
-          item("Dead Sexy", "2001")
-        ])
-      ]
-    },
-    {
-      day: "Sunday",
-      date: "2026-07-12",
-      isToday: false,
-      sections: [
-        section("The Sunday Classics", [
-          item("Kill Them All and Come Back Alone", "1968"),
-          item("Sting of Death", "1966"),
-          item("The Last Shark", "1981")
-        ]),
-        section("Sunday Slop-O-Rama", [
-          item("Repo! The Genetic Opera", "2008"),
-          item("I Saw What You Did", "1988"),
-          item("The Doorway", "2000")
-        ]),
-        section("Last Call Sunday Night", [
-          item("Night Children", "1989"),
-          item("DNA", "1996"),
-          item("A Day of Judgment", "1981")
-        ])
-      ]
+  function parseListItems(ulInnerHtml) {
+    const items = [];
+    const liRe = /<li>([\s\S]*?)<\/li>/g;
+    let lm;
+    while (lm = liRe.exec(ulInnerHtml)) {
+      const display = lm[1].replace(/<strong>[^<]*<\/strong>\s*/, "").replace(/<[^>]+>/g, "").trim();
+      const withoutAka = display.replace(/\s+aka\s+.+$/i, "");
+      const ym = withoutAka.match(/^(.*)\s\((\d{4})\)$/);
+      if (ym) items.push({ title: ym[1].trim(), year: ym[2], display });
     }
-  ];
-  async function getTonightsLineup() {
-    return {
-      listTitle: "Weekend Grindhouse Schedule — Fri 7/10 – Sun 7/12",
-      fallback: false,
-      days: FIXTURE_DAYS
-    };
+    return items;
   }
-
-  // src/mediatime.js
-  var mediaState = {
-    currentMediaSeconds: 0,
-    currentMediaType: "",
-    currentPlaybackTime: 0
-  };
-  function parseTimeToSeconds(t) {
-    const parts = String(t).trim().split(":").map(Number);
-    if (!parts.length || parts.some(isNaN)) return 0;
-    return parts.reduce((acc, v) => acc * 60 + v, 0);
-  }
-  function getCurrentMediaSeconds() {
-    if (mediaState.currentMediaSeconds > 0) return mediaState.currentMediaSeconds;
-    const el = document.querySelector("#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time");
-    return el ? parseTimeToSeconds(el.textContent) : 0;
-  }
-  function getCurrentPlaybackSeconds() {
-    const v = document.querySelector("#videowrap video");
-    if (v && isFinite(v.currentTime) && v.currentTime > 0) return v.currentTime;
-    return mediaState.currentPlaybackTime;
-  }
-  function formatHMS(s) {
-    s = Math.max(0, Math.floor(s || 0));
-    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
-    const pad = (n) => String(n).padStart(2, "0");
-    return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
-  }
-
-  // src/native.js
-  var _scHttpCbs = {};
-  window.__scHttpResolve = function(id, res) {
-    const cb = _scHttpCbs[id];
-    if (cb) {
-      delete _scHttpCbs[id];
-      cb(res);
-    }
-  };
-  function nativeHttpGet(url, headers = {}) {
-    return new Promise((resolve, reject) => {
-      if (!(window.CytubeNative && typeof CytubeNative.httpGet === "function")) {
-        reject(new Error("native http unavailable"));
-        return;
-      }
-      const id = "h" + Math.random().toString(36).slice(2);
-      _scHttpCbs[id] = (res) => {
-        if (res && res.error) reject(new Error(res.error));
-        else resolve(res);
-      };
-      try {
-        CytubeNative.httpGet(id, url, JSON.stringify(headers));
-      } catch (e) {
-        delete _scHttpCbs[id];
-        reject(e);
-      }
-      setTimeout(() => {
-        if (_scHttpCbs[id]) {
-          delete _scHttpCbs[id];
-          reject(new Error("timeout"));
+  function parseSchedule(contentHtml) {
+    const days = [];
+    let currentDay = null;
+    let pendingSectionName = null;
+    const re = /<strong>([^<]*)<\/strong>|<ul>([\s\S]*?)<\/ul>/g;
+    let m;
+    while (m = re.exec(contentHtml)) {
+      if (m[1] !== void 0) {
+        const text = m[1].trim();
+        if (DAY_NAMES.includes(text)) {
+          currentDay = { day: text, sections: [] };
+          days.push(currentDay);
+          pendingSectionName = null;
+        } else {
+          pendingSectionName = text;
         }
-      }, 1e4);
-    });
+      } else if (currentDay && pendingSectionName) {
+        const items = parseListItems(m[2]);
+        if (items.length) currentDay.sections.push({ name: pendingSectionName, slug: slugify(pendingSectionName), items });
+        pendingSectionName = null;
+      }
+    }
+    return days;
   }
+  async function fetchTonightsSchedule() {
+    const { nativeHttpGet: nativeHttpGet2 } = await Promise.resolve().then(() => (init_native(), native_exports));
+    const res = await nativeHttpGet2(FEED_URL, BROWSER_HEADERS);
+    if (!res || res.status !== 200) throw new Error("Reddit feed HTTP " + (res && res.status));
+    const entry = parseFirstEntry(res.body);
+    if (!entry) throw new Error("no entries found in feed");
+    const dateRange = parseDateRange(entry.title, entry.publishedAt);
+    if (!dateRange) throw new Error("could not parse weekend date range from title: " + entry.title);
+    const days = parseSchedule(entry.contentHtml);
+    if (!days.length) throw new Error("no days parsed from schedule post");
+    const dateByDay = { Friday: dateRange.fri, Saturday: dateRange.sat, Sunday: dateRange.sun };
+    return {
+      postId: entry.postId,
+      title: entry.title,
+      publishedAt: entry.publishedAt,
+      days: days.map((d) => ({ ...d, date: dateByDay[d.day] || null }))
+    };
+  }
+
+  // src/metadata/tmdb.js
+  init_native();
 
   // src/metadata/imdb.js
+  init_native();
   var IMDB_GQL = "https://caching.graphql.imdb.com/";
   var IMDB_HEADERS = {
     "Accept": "application/graphql+json, application/json",
@@ -837,6 +828,379 @@
     };
     movieState.movieLinkCache[cacheKey] = result;
     return result;
+  }
+
+  // src/mediatime.js
+  var mediaState = {
+    currentMediaSeconds: 0,
+    currentMediaType: "",
+    currentPlaybackTime: 0
+  };
+  function parseTimeToSeconds(t) {
+    const parts = String(t).trim().split(":").map(Number);
+    if (!parts.length || parts.some(isNaN)) return 0;
+    return parts.reduce((acc, v) => acc * 60 + v, 0);
+  }
+  function getCurrentMediaSeconds() {
+    if (mediaState.currentMediaSeconds > 0) return mediaState.currentMediaSeconds;
+    const el = document.querySelector("#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time");
+    return el ? parseTimeToSeconds(el.textContent) : 0;
+  }
+  function getCurrentPlaybackSeconds() {
+    const v = document.querySelector("#videowrap video");
+    if (v && isFinite(v.currentTime) && v.currentTime > 0) return v.currentTime;
+    return mediaState.currentPlaybackTime;
+  }
+  function formatHMS(s) {
+    s = Math.max(0, Math.floor(s || 0));
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+    const pad = (n) => String(n).padStart(2, "0");
+    return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+  }
+
+  // src/lineup/timing.js
+  function formatEta(hour24, minute, precision) {
+    if (precision === "late") return "LATE";
+    const period = hour24 >= 12 ? "PM" : "AM";
+    let h = hour24 % 12;
+    if (h === 0) h = 12;
+    const mm = String(minute).padStart(2, "0");
+    const prefix = precision === "approx" ? "~" : "≈";
+    return `${prefix} ${h}:${mm} ${period}`;
+  }
+  function medianGapSeconds(observedGaps) {
+    if (!observedGaps.length) return null;
+    const sorted = [...observedGaps].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+  function pacificOffsetMinutes(d) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    }).formatToParts(d);
+    const get = (t) => parts.find((p) => p.type === t).value;
+    const hour = parseInt(get("hour"), 10) % 24;
+    const asUTC = Date.UTC(+get("year"), +get("month") - 1, +get("day"), hour, +get("minute"), +get("second"));
+    return (asUTC - d.getTime()) / 6e4;
+  }
+  function dayAnchorPacific(dateStr) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const guess = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+    const offsetMinutes = pacificOffsetMinutes(guess);
+    return new Date(guess.getTime() - offsetMinutes * 6e4);
+  }
+  function pacificDateString(now = /* @__PURE__ */ new Date()) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(now);
+    const get = (t) => parts.find((p) => p.type === t).value;
+    return `${get("year")}-${get("month")}-${get("day")}`;
+  }
+
+  // src/motd.js
+  function getMotdPosterImages() {
+    const motd = document.getElementById("motdrow");
+    if (!motd) return [];
+    return [...motd.querySelectorAll("img")].filter((img) => {
+      const w = parseInt(img.getAttribute("width") || "0", 10);
+      const h = parseInt(img.getAttribute("height") || "0", 10);
+      return h >= 100 && w <= 200;
+    });
+  }
+
+  // src/parse.js
+  function parseMovieFilename(raw) {
+    let s = raw.replace(/\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|divx|xvid|ogv)$/i, "");
+    let year = null;
+    const yearMatch = s.match(/[\[(](\d{4})[\])]/);
+    if (yearMatch) {
+      year = yearMatch[1];
+      s = s.slice(0, yearMatch.index);
+    }
+    s = s.replace(/[._]+/g, " ");
+    s = s.replace(/[\[(][^\])]*/g, "").replace(/[\])]/, "");
+    s = s.replace(/\s+/g, " ").trim();
+    return { title: s, year };
+  }
+  var YT_NOISE = [
+    "full movie",
+    "full length movie",
+    "full length feature",
+    "full length film",
+    "full length",
+    "complete movie",
+    "complete film",
+    "the complete movie",
+    "entire movie",
+    "free movie",
+    "free film",
+    "free online",
+    "free to watch",
+    "watch online",
+    "watch free",
+    "watch now",
+    "online free",
+    "free with ads",
+    "with ads",
+    "no ads",
+    "ad free",
+    "official movie",
+    "official film",
+    "official",
+    "exclusive",
+    "premiere",
+    "world premiere",
+    "remastered",
+    "restored",
+    "colou?ri[sz]ed",
+    "subtitle[sd]?",
+    "subbed",
+    "dubbed",
+    "eng sub",
+    "hd",
+    "fhd",
+    "uhd",
+    "4k",
+    "2k",
+    "1080p",
+    "720p",
+    "480p",
+    "high definition",
+    "blu-?ray",
+    "dvd",
+    "web-?dl",
+    "uncut",
+    "extended",
+    "director.?s cut",
+    "special edition",
+    "classic movie",
+    "classic film",
+    "cult classic",
+    "b-?movie",
+    "feature film",
+    "feature",
+    "cinema",
+    "blockbuster",
+    "must watch",
+    "in english",
+    "english movie"
+  ];
+  var YT_GENRES = [
+    "action",
+    "thriller",
+    "horror",
+    "comedy",
+    "drama",
+    "sci-?fi",
+    "science fiction",
+    "western",
+    "romance",
+    "crime",
+    "mystery",
+    "adventure",
+    "fantasy",
+    "war",
+    "noir",
+    "slasher",
+    "martial arts",
+    "kung fu",
+    "documentary",
+    "family",
+    "musical",
+    "animation"
+  ];
+  function parseYouTubeTitle(raw) {
+    let s = " " + raw + " ";
+    let year = null;
+    const ym = s.match(/\b(19\d{2}|20\d{2})\b/);
+    if (ym) year = ym[1];
+    s = s.replace(/[\[({][^\])}]*[\])}]/g, " ");
+    if (year) s = s.replace(new RegExp("\\b" + year + "\\b", "g"), " ");
+    [...YT_NOISE, ...YT_GENRES].forEach((n) => {
+      s = s.replace(new RegExp("\\b" + n + "\\b", "gi"), " ");
+    });
+    s = s.replace(/[^\w\s&':!.,-]/g, " ");
+    const segs = s.split(/\s[|–—•:_-]+\s/).map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length >= 2);
+    let title = segs.sort(
+      (a, b) => (b.match(/[a-z]/gi) || []).length - (a.match(/[a-z]/gi) || []).length
+    )[0] || s;
+    title = title.replace(/\s+/g, " ").replace(/^[\s'":.,-]+|[\s'":.,-]+$/g, "").trim();
+    return { title, year };
+  }
+
+  // src/lineup/data.js
+  var LS_LINEUP_CACHE = "sc_lineup_cache_v1";
+  var CACHE_MAX_AGE_MS = 20 * 60 * 60 * 1e3;
+  var FALLBACK_LIST_TITLE = "Coming Attractions";
+  var MAX_ESTIMATED_AHEAD = 4;
+  var _scheduleCache = null;
+  var _fetchFailed = false;
+  var _revalidating = false;
+  var _observedGapSeconds = [];
+  var _lastUnmatchedStart = null;
+  function readCache() {
+    try {
+      const raw = localStorage.getItem(LS_LINEUP_CACHE);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function writeCache(schedule) {
+    try {
+      localStorage.setItem(LS_LINEUP_CACHE, JSON.stringify({ ...schedule, fetchedAt: Date.now() }));
+    } catch (e) {
+    }
+  }
+  function allScheduleTitles() {
+    if (!_scheduleCache) return [];
+    return _scheduleCache.days.flatMap((d) => d.sections.flatMap((s) => s.items));
+  }
+  onSocket("changeMedia", (d) => {
+    const rawTitle = d && d.title;
+    const title = rawTitle ? parseMovieFilename(rawTitle).title : null;
+    const matchesSchedule = !!(title && _scheduleCache && allScheduleTitles().some((s) => s.title.toLowerCase() === title.toLowerCase()));
+    if (rawTitle && !matchesSchedule && _scheduleCache) {
+      _lastUnmatchedStart = Date.now();
+    } else if (_lastUnmatchedStart) {
+      _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1e3);
+      _lastUnmatchedStart = null;
+    }
+  });
+  async function refetchAndCache() {
+    if (_revalidating) return;
+    _revalidating = true;
+    try {
+      const result = await fetchTonightsSchedule();
+      _scheduleCache = result;
+      writeCache(result);
+    } catch (e) {
+    } finally {
+      _revalidating = false;
+    }
+  }
+  async function ensureSchedule() {
+    if (_scheduleCache || _fetchFailed) return;
+    const cached = readCache();
+    if (cached) {
+      _scheduleCache = cached;
+      if (Date.now() - (cached.fetchedAt || 0) > CACHE_MAX_AGE_MS) refetchAndCache();
+      return;
+    }
+    try {
+      const result = await fetchTonightsSchedule();
+      _scheduleCache = result;
+      writeCache(result);
+    } catch (e) {
+      _fetchFailed = true;
+    }
+  }
+  async function fallbackView() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+      const { title, year } = parseMovieFilename(movieState.lastMovieTitle);
+      const info = await lookupMovie(title, year);
+      if (!hasKey(LS_TMDB) || info.cleanTitle) {
+        items.push({ ...buildBase(info, title, year), isNowPlaying: true, etaLabel: "" });
+      }
+    }
+    getMotdPosterImages().forEach((img) => {
+      items.push({
+        cleanTitle: img.title || img.alt || "",
+        cleanYear: null,
+        poster: img.src,
+        backdrop: null,
+        overview: "",
+        isNowPlaying: false,
+        etaLabel: "",
+        clickable: false
+      });
+    });
+    return {
+      listTitle: FALLBACK_LIST_TITLE,
+      fallback: true,
+      days: [{ day: "Tonight", date: null, isToday: true, sections: [{ name: "", slug: null, items }] }]
+    };
+  }
+  function buildBase(info, title, year) {
+    var _a, _b, _c;
+    return {
+      cleanTitle: info.cleanTitle || title,
+      cleanYear: info.cleanYear || year,
+      poster: info.poster || null,
+      backdrop: info.backdrop || null,
+      overview: info.overview || "",
+      runtime: (_a = info.runtime) != null ? _a : null,
+      rating: (_b = info.rating) != null ? _b : null,
+      genres: info.genres || [],
+      parentalGuide: info.parentalGuide || null,
+      killCount: (_c = info.killCount) != null ? _c : null,
+      imdbId: info.imdbId || null
+    };
+  }
+  function buildDaySections(day, isTodayFlag, isFirstDay, infosByKey) {
+    var _a;
+    const flat = [];
+    day.sections.forEach((section, si) => {
+      section.items.forEach((item) => flat.push({ section, si, item }));
+    });
+    const currentTitle = isTodayFlag && movieState.lastMovieTitle ? parseMovieFilename(movieState.lastMovieTitle).title : "";
+    const currentFlatIndex = currentTitle ? flat.findIndex((f) => f.item.title.toLowerCase() === currentTitle.toLowerCase()) : -1;
+    const anchor = dayAnchorPacific(day.date);
+    const isColdStart = isFirstDay && currentFlatIndex === -1 && Date.now() < anchor.getTime();
+    const learnedGap = (_a = medianGapSeconds(_observedGapSeconds)) != null ? _a : 600;
+    let cumulative = currentFlatIndex !== -1 ? Math.max(0, getCurrentMediaSeconds() - getCurrentPlaybackSeconds()) : 0;
+    const builtFlat = flat.map((f, idx) => {
+      const info = infosByKey.get(f.item.title + "|" + f.item.year) || {};
+      const base = buildBase(info, f.item.title, f.item.year);
+      if (idx === currentFlatIndex) return { ...base, isNowPlaying: true, etaLabel: "" };
+      if (isColdStart && idx === 0) {
+        return { ...base, isNowPlaying: false, etaLabel: formatEta(anchor.getHours(), anchor.getMinutes(), "approx") };
+      }
+      if (currentFlatIndex === -1 || idx < currentFlatIndex) {
+        return { ...base, isNowPlaying: false, etaLabel: "" };
+      }
+      const offset = idx - currentFlatIndex;
+      cumulative += learnedGap;
+      let etaLabel = "";
+      if (offset <= MAX_ESTIMATED_AHEAD) {
+        const precision = offset === 1 ? "exact" : "approx";
+        const eta = new Date(Date.now() + cumulative * 1e3);
+        etaLabel = formatEta(eta.getHours(), eta.getMinutes(), precision);
+      }
+      cumulative += info.runtime ? info.runtime * 60 : 0;
+      return { ...base, isNowPlaying: false, etaLabel };
+    });
+    return day.sections.map((section, si) => ({
+      name: section.name,
+      slug: section.slug,
+      items: builtFlat.filter((_, idx) => flat[idx].si === si)
+    }));
+  }
+  async function getTonightsLineup() {
+    await ensureSchedule();
+    if (!_scheduleCache) return fallbackView();
+    const allItems = allScheduleTitles();
+    const infos = await Promise.all(allItems.map(({ title, year }) => lookupMovie(title, year)));
+    const infosByKey = new Map(allItems.map((item, i) => [item.title + "|" + item.year, infos[i]]));
+    const todayStr = pacificDateString();
+    const days = _scheduleCache.days.map((day, di) => ({
+      day: day.day,
+      date: day.date,
+      isToday: day.date === todayStr,
+      sections: buildDaySections(day, day.date === todayStr, di === 0, infosByKey)
+    }));
+    return { listTitle: _scheduleCache.title || FALLBACK_LIST_TITLE, fallback: false, days };
   }
 
   // src/cards/trivia.js
@@ -1103,38 +1467,38 @@
     screen2.querySelector("#sc-lineup-daytabs").innerHTML = "";
     screen2.querySelector("#sc-lineup-body").innerHTML = '<div id="sc-lineup-loading">Fetching tonight’s lineup…</div>';
   }
-  function itemButton(item2) {
+  function itemButton(item) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "sc-lineup-item" + (item2.isNowPlaying ? " sc-lineup-item-current" : "") + (item2.clickable === false ? " sc-lineup-item-static" : "");
+    btn.className = "sc-lineup-item" + (item.isNowPlaying ? " sc-lineup-item-current" : "") + (item.clickable === false ? " sc-lineup-item-static" : "");
     btn.innerHTML = `
-        <div class="sc-lineup-poster" style="${item2.poster ? `background-image:url(${item2.poster})` : ""}"></div>
-        <div class="sc-lineup-title">${item2.cleanTitle}${item2.cleanYear ? ` (${item2.cleanYear})` : ""}</div>
-        <div class="sc-lineup-eta">${item2.isNowPlaying ? "NOW PLAYING" : item2.etaLabel || ""}</div>`;
-    if (item2.clickable !== false) {
-      btn.addEventListener("click", () => showNowPlayingCard(item2, { autoHide: false, showProgress: item2.isNowPlaying }));
+        <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ""}"></div>
+        <div class="sc-lineup-title">${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ""}</div>
+        <div class="sc-lineup-eta">${item.isNowPlaying ? "NOW PLAYING" : item.etaLabel || ""}</div>`;
+    if (item.clickable !== false) {
+      btn.addEventListener("click", () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
     }
     return btn;
   }
-  function sectionEl(section2) {
+  function sectionEl(section) {
     const el = document.createElement("div");
     el.className = "sc-lineup-section";
-    const art = section2.slug ? `${ASSET_BASE}${section2.slug}.jpg` : DEFAULT_ART;
+    const art = section.slug ? `${ASSET_BASE}${section.slug}.jpg` : DEFAULT_ART;
     el.style.backgroundImage = `url('${art}')`;
     const probe = new Image();
     probe.onerror = () => {
       el.style.backgroundImage = `url('${DEFAULT_ART}')`;
     };
     probe.src = art;
-    if (section2.name) {
+    if (section.name) {
       const name = document.createElement("div");
       name.className = "sc-lineup-section-name";
-      name.textContent = section2.name;
+      name.textContent = section.name;
       el.appendChild(name);
     }
     const rail = document.createElement("div");
     rail.className = "sc-lineup-rail";
-    section2.items.forEach((item2) => rail.appendChild(itemButton(item2)));
+    section.items.forEach((item) => rail.appendChild(itemButton(item)));
     el.appendChild(rail);
     return el;
   }
@@ -1158,7 +1522,7 @@
       body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
       return;
     }
-    day.sections.forEach((section2) => body.appendChild(sectionEl(section2)));
+    day.sections.forEach((section) => body.appendChild(sectionEl(section)));
   }
   function showDay(screen2, day) {
     _activeDay = day;
@@ -1175,13 +1539,13 @@
       body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
       return;
     }
-    const section2 = document.createElement("div");
-    section2.className = "sc-lineup-section sc-lineup-section-fallback";
+    const section = document.createElement("div");
+    section.className = "sc-lineup-section sc-lineup-section-fallback";
     const rail = document.createElement("div");
     rail.className = "sc-lineup-rail";
-    items.forEach((item2) => rail.appendChild(itemButton(item2)));
-    section2.appendChild(rail);
-    body.appendChild(section2);
+    items.forEach((item) => rail.appendChild(itemButton(item)));
+    section.appendChild(rail);
+    body.appendChild(section);
   }
   function renderItems(screen2, data) {
     const header = screen2.querySelector("#sc-lineup-header");
@@ -1209,17 +1573,6 @@
   function hideLineupScreen() {
     const screen2 = document.getElementById("sc-lineup-screen");
     if (screen2) screen2.classList.remove("sc-lineup-visible");
-  }
-
-  // src/motd.js
-  function getMotdPosterImages() {
-    const motd = document.getElementById("motdrow");
-    if (!motd) return [];
-    return [...motd.querySelectorAll("img")].filter((img) => {
-      const w = parseInt(img.getAttribute("width") || "0", 10);
-      const h = parseInt(img.getAttribute("height") || "0", 10);
-      return h >= 100 && w <= 200;
-    });
   }
 
   // src/posters.js
@@ -1441,9 +1794,9 @@
     let open = false;
     const getUsers = () => {
       const items = [...document.querySelectorAll("#userlist .userlist_item")];
-      return items.map((item2) => {
+      return items.map((item) => {
         var _a;
-        const spans = item2.querySelectorAll("span");
+        const spans = item.querySelectorAll("span");
         const nameSpan = spans.length >= 2 ? spans[1] : spans[0];
         return ((_a = nameSpan == null ? void 0 : nameSpan.textContent) == null ? void 0 : _a.trim()) || "";
       }).filter(Boolean).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
@@ -2514,7 +2867,11 @@
     document.body.appendChild(btn);
   }
 
+  // src/settings.js
+  init_native();
+
   // src/update.js
+  init_native();
   var LS_UPDATE_CACHE = "sc_update_cache";
   var GH_RELEASES_API = "https://api.github.com/repos/spudzareneat/grindhouse-tv/releases/latest";
   var GH_RELEASES_PAGE = "https://github.com/spudzareneat/grindhouse-tv/releases/latest";
@@ -2593,126 +2950,6 @@
       checkForUpdate(false).catch(() => {
       });
     }, 4e3);
-  }
-
-  // src/parse.js
-  function parseMovieFilename(raw) {
-    let s = raw.replace(/\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|divx|xvid|ogv)$/i, "");
-    let year = null;
-    const yearMatch = s.match(/[\[(](\d{4})[\])]/);
-    if (yearMatch) {
-      year = yearMatch[1];
-      s = s.slice(0, yearMatch.index);
-    }
-    s = s.replace(/[._]+/g, " ");
-    s = s.replace(/[\[(][^\])]*/g, "").replace(/[\])]/, "");
-    s = s.replace(/\s+/g, " ").trim();
-    return { title: s, year };
-  }
-  var YT_NOISE = [
-    "full movie",
-    "full length movie",
-    "full length feature",
-    "full length film",
-    "full length",
-    "complete movie",
-    "complete film",
-    "the complete movie",
-    "entire movie",
-    "free movie",
-    "free film",
-    "free online",
-    "free to watch",
-    "watch online",
-    "watch free",
-    "watch now",
-    "online free",
-    "free with ads",
-    "with ads",
-    "no ads",
-    "ad free",
-    "official movie",
-    "official film",
-    "official",
-    "exclusive",
-    "premiere",
-    "world premiere",
-    "remastered",
-    "restored",
-    "colou?ri[sz]ed",
-    "subtitle[sd]?",
-    "subbed",
-    "dubbed",
-    "eng sub",
-    "hd",
-    "fhd",
-    "uhd",
-    "4k",
-    "2k",
-    "1080p",
-    "720p",
-    "480p",
-    "high definition",
-    "blu-?ray",
-    "dvd",
-    "web-?dl",
-    "uncut",
-    "extended",
-    "director.?s cut",
-    "special edition",
-    "classic movie",
-    "classic film",
-    "cult classic",
-    "b-?movie",
-    "feature film",
-    "feature",
-    "cinema",
-    "blockbuster",
-    "must watch",
-    "in english",
-    "english movie"
-  ];
-  var YT_GENRES = [
-    "action",
-    "thriller",
-    "horror",
-    "comedy",
-    "drama",
-    "sci-?fi",
-    "science fiction",
-    "western",
-    "romance",
-    "crime",
-    "mystery",
-    "adventure",
-    "fantasy",
-    "war",
-    "noir",
-    "slasher",
-    "martial arts",
-    "kung fu",
-    "documentary",
-    "family",
-    "musical",
-    "animation"
-  ];
-  function parseYouTubeTitle(raw) {
-    let s = " " + raw + " ";
-    let year = null;
-    const ym = s.match(/\b(19\d{2}|20\d{2})\b/);
-    if (ym) year = ym[1];
-    s = s.replace(/[\[({][^\])}]*[\])}]/g, " ");
-    if (year) s = s.replace(new RegExp("\\b" + year + "\\b", "g"), " ");
-    [...YT_NOISE, ...YT_GENRES].forEach((n) => {
-      s = s.replace(new RegExp("\\b" + n + "\\b", "gi"), " ");
-    });
-    s = s.replace(/[^\w\s&':!.,-]/g, " ");
-    const segs = s.split(/\s[|–—•:_-]+\s/).map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length >= 2);
-    let title = segs.sort(
-      (a, b) => (b.match(/[a-z]/gi) || []).length - (a.match(/[a-z]/gi) || []).length
-    )[0] || s;
-    title = title.replace(/\s+/g, " ").replace(/^[\s'":.,-]+|[\s'":.,-]+$/g, "").trim();
-    return { title, year };
   }
 
   // src/titleinject.js
@@ -2861,6 +3098,7 @@
   }
 
   // src/player/drive.js
+  init_native();
   function initGoogleDrive() {
     const ITAG_QMAP = { 37: 1080, 46: 1080, 22: 720, 45: 720, 59: 480, 44: 480, 35: 480, 18: 360, 43: 360, 34: 360 };
     const ITAG_CMAP = {
@@ -2917,8 +3155,8 @@
             return cb("Google has removed the video streams associated with this item.  It can no longer be played.");
           }
           data.links = {};
-          data.fmt_stream_map.split(",").forEach(function(item2) {
-            const pair = item2.split("|");
+          data.fmt_stream_map.split(",").forEach(function(item) {
+            const pair = item.split("|");
             data.links[pair[0]] = pair[1];
           });
           data.videoMap = mapLinks(data.links);
