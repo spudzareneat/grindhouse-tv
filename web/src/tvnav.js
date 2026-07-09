@@ -3,7 +3,7 @@ import { holdScrubber, wakeVideoControls } from './player/scrubber.js';
 import { chromeState } from './chrome/state.js';
 import { hideTriviaCard } from './cards/trivia.js';
 import { hideNowPlayingCard } from './cards/nowplaying.js';
-import { hideLineupScreen } from './lineup/screen.js';
+import { hideLineupScreen, stepLineupSection } from './lineup/screen.js';
 import { pickDirectional } from './tvnav/geometry.js';
 
 // Let other UI (settings modal) place the remote's focus ring on an element.
@@ -361,14 +361,16 @@ export function initTvNav() {
             }
         }
 
-        // Tonight's Lineup: one horizontal reel per themed section (day tabs stack several
-        // sections vertically), each a reel like the Coming Attractions strip above — items
-        // scrolled past a rail's edge are off-viewport but still valid targets, so (like the
-        // poster strip) this list is NOT isVisible-filtered. Scoped to focusEl's OWN rail
-        // (closest('.sc-lineup-rail')) so Left/Right can't walk across section boundaries, and
-        // so it only fires when focus is actually inside a rail — Left/Right on the day-tab row
-        // falls through to the generic geometric scorer below, same as it does in Settings' tab
-        // row (there's no need to special-case a plain 3-button horizontal row).
+        // Tonight's Lineup: a single themed section is shown at a time (a Netflix-row-style
+        // pager, not a scrollable stack) — Left/Right steps through that section's own reel
+        // like the Coming Attractions strip above (items scrolled past a rail's edge are
+        // off-viewport but still valid targets, so this list is NOT isVisible-filtered), while
+        // Up/Down PAGES to the previous/next section via stepLineupSection(), which re-renders
+        // #sc-lineup-body to show only that section and reports back the item at the same
+        // column so focus lands on roughly the same poster position. This replaced an earlier
+        // stacked-and-scrollable layout: the day-tab row, pinned outside the scroll region and
+        // therefore always isVisible(), kept out-competing the geometrically-correct row in the
+        // scorer, especially while that row was still scrolled out of view.
         const lineupScreen = document.getElementById('sc-lineup-screen');
         if (lineupScreen && lineupScreen.classList.contains('sc-lineup-visible')) {
             const rail = focusEl && focusEl.closest('.sc-lineup-rail');
@@ -379,34 +381,22 @@ export function initTvNav() {
                 setFocus(items[ni]);
                 return;
             }
-            const body = document.getElementById('sc-lineup-body');
-            const rails = body ? [...body.querySelectorAll('.sc-lineup-rail')] : [];
-            // Up/Down between stacked section rails is stepped explicitly by index (clamped to
-            // the target rail's length), same column-first, rather than left to the generic
-            // geometric scorer — confirmed on-device that the day-tab row (pinned outside
-            // #sc-lineup-body's scroll, so it's ALWAYS isVisible()) out-competes the rail that's
-            // actually above/below, especially while the real target is still scrolled out of
-            // view: Up from row 2 or row 3 jumped straight to a day tab instead of row 1/2.
             if (rail && (dir === 'up' || dir === 'down')) {
                 const items = [...rail.querySelectorAll('.sc-lineup-item')];
                 const myIndex = items.indexOf(focusEl);
-                const railIdx = rails.indexOf(rail);
-                const targetRail = dir === 'down' ? rails[railIdx + 1] : rails[railIdx - 1];
-                if (targetRail) {
-                    const targetItems = [...targetRail.querySelectorAll('.sc-lineup-item')];
-                    setFocus(targetItems[Math.min(myIndex, targetItems.length - 1)]);
-                    return;
-                }
+                const target = stepLineupSection(dir === 'down' ? 1 : -1, myIndex);
+                if (target) { setFocus(target); return; }
                 if (dir === 'up') {
-                    // No rail above — topmost section, steer to the active day tab (mirrors the
-                    // Coming Attractions strip's own toggle<->reel special case above).
+                    // No section above — first section of the day, steer to the active day tab
+                    // (mirrors the Coming Attractions strip's own toggle<->reel special case).
                     const activeTab = document.querySelector('.sc-lineup-daytab-active');
                     if (activeTab) { setFocus(activeTab); return; }
                 }
-                // dir === 'down' with no rail below (last section): nothing to do, fall through.
+                // dir === 'down' with no section below (last one): nothing to do, fall through.
             }
             if (dir === 'down' && focusEl && focusEl.classList.contains('sc-lineup-daytab')) {
-                const firstItem = rails[0] && rails[0].querySelector('.sc-lineup-item');
+                const body = document.getElementById('sc-lineup-body');
+                const firstItem = body && body.querySelector('.sc-lineup-item');
                 if (firstItem) { setFocus(firstItem); return; }
             }
         }
@@ -420,7 +410,7 @@ export function initTvNav() {
         if (idx !== -1) { setFocus(list[idx]); return; }
         // No neighbour that way — scroll a scrollable region if we're in one
         if (dir === 'up' || dir === 'down') {
-            const sc = (scope.querySelector && scope.querySelector('#sc-trivia-list, #sc-settings-modal, #messagebuffer, #sc-lineup-body')) ||
+            const sc = (scope.querySelector && scope.querySelector('#sc-trivia-list, #sc-settings-modal, #messagebuffer')) ||
                        document.getElementById('messagebuffer');
             if (sc && sc.scrollHeight > sc.clientHeight) sc.scrollTop += (dir === 'down' ? 140 : -140);
         }

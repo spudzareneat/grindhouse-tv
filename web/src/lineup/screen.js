@@ -4,18 +4,20 @@ import { showNowPlayingCard } from '../cards/nowplaying.js';
 /* ==========================================================
    TONIGHT'S LINEUP — full-screen TV schedule, opened from the Coming
    Attractions poster strip. Friday/Saturday/Sunday day tabs switch which
-   day's themed sections are shown; each section is its own horizontal rail
-   (like the old single-rail version, just one per section now). OK on a
-   film opens the existing Now-Playing card in browse mode. Registered as an
-   OVERLAY_IDS-trapped overlay in tvnav.js (see that file), which also scopes
-   Left/Right rail-stepping to whichever .sc-lineup-rail contains focus.
+   day is shown; within a day, one themed section's rail is shown at a time,
+   sized to fit the screen -- Up/Down PAGES between sections (a Netflix-row
+   feel without the scrolling) rather than stacking all of a day's sections
+   into a scrollable list. OK on a film opens the existing Now-Playing card
+   in browse mode. Registered as an OVERLAY_IDS-trapped overlay in tvnav.js
+   (see that file), which also drives section paging via stepLineupSection().
 ========================================================== */
 
 const ASSET_BASE = 'file:///android_asset/lineup-sections/';
 const DEFAULT_ART = ASSET_BASE + '_default.jpg';
 
-let _lastData = null;   // most recent getTonightsLineup() result, so day-tab switches don't refetch
-let _activeDay = null;  // currently selected day name
+let _lastData = null;          // most recent getTonightsLineup() result, so paging doesn't refetch
+let _activeDay = null;         // currently selected day name
+let _activeSectionIndex = 0;   // currently shown section within _activeDay
 
 function ensureScreenDom() {
     let screen = document.getElementById('sc-lineup-screen');
@@ -61,7 +63,9 @@ function itemButton(item) {
     return btn;
 }
 
-function sectionEl(section) {
+// One section's grouping, sized to fill the screen on its own -- position among the day's
+// other sections is shown as a small counter since only one grouping is visible at a time.
+function sectionEl(section, index, total) {
     const el = document.createElement('div');
     el.className = 'sc-lineup-section';
     const art = section.slug ? `${ASSET_BASE}${section.slug}.jpg` : DEFAULT_ART;
@@ -75,7 +79,7 @@ function sectionEl(section) {
     if (section.name) {
         const name = document.createElement('div');
         name.className = 'sc-lineup-section-name';
-        name.textContent = section.name;
+        name.innerHTML = `${section.name}${total > 1 ? `<span class="sc-lineup-section-count">${index + 1} / ${total}</span>` : ''}`;
         el.appendChild(name);
     }
     const rail = document.createElement('div');
@@ -106,14 +110,36 @@ function renderBody(screen, days) {
         body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
         return;
     }
-    day.sections.forEach(section => body.appendChild(sectionEl(section)));
+    if (_activeSectionIndex >= day.sections.length) _activeSectionIndex = 0;
+    body.appendChild(sectionEl(day.sections[_activeSectionIndex], _activeSectionIndex, day.sections.length));
 }
 
 function showDay(screen, day) {
     _activeDay = day;
+    _activeSectionIndex = 0; // switching days always lands on that day's first section
     const tabs = [...screen.querySelectorAll('.sc-lineup-daytab')];
     tabs.forEach(t => t.classList.toggle('sc-lineup-daytab-active', t.textContent === day));
     renderBody(screen, _lastData.days);
+}
+
+// Moves the shown section by `delta` (-1/+1), preserving the film column the caller was on
+// (clamped to the new section's length) so Up/Down lands on roughly the same poster position.
+// Returns the newly focused item element, or null if there's no section that way (caller
+// decides what to do at the boundary -- e.g. steer to the day tab row).
+export function stepLineupSection(delta, columnIndex) {
+    if (!_lastData || _lastData.fallback) return null;
+    const days = _lastData.days || [];
+    const day = days.find(d => d.day === _activeDay) || days[0];
+    if (!day) return null;
+    const newIndex = _activeSectionIndex + delta;
+    if (newIndex < 0 || newIndex >= day.sections.length) return null;
+    _activeSectionIndex = newIndex;
+    const screen = document.getElementById('sc-lineup-screen');
+    renderBody(screen, days);
+    const rail = screen.querySelector('.sc-lineup-rail');
+    if (!rail) return null;
+    const items = [...rail.querySelectorAll('.sc-lineup-item')];
+    return items[Math.min(columnIndex, items.length - 1)] || null;
 }
 
 // Degraded view when Reddit is unreachable: the current title (if known) plus the
@@ -143,9 +169,11 @@ function renderItems(screen, data) {
     _lastData = data;
     if (!data || data.fallback) { renderFallback(screen, data || { days: [] }); return; }
     const days = data.days || [];
-    if (!_activeDay || !days.some(d => d.day === _activeDay)) {
-        _activeDay = (days.find(d => d.isToday) || days[0] || {}).day || null;
-    }
+    // Recomputed fresh on every open (not just when _activeDay is unset) so a manual tab
+    // switch from a PRIOR open doesn't linger -- opening the screen always starts back on
+    // today's day (or the first day, before the weekend starts).
+    _activeDay = (days.find(d => d.isToday) || days[0] || {}).day || null;
+    _activeSectionIndex = 0;
     renderDayTabs(screen, days);
     renderBody(screen, days);
 }

@@ -1450,6 +1450,7 @@
   var DEFAULT_ART = ASSET_BASE + "_default.jpg";
   var _lastData = null;
   var _activeDay = null;
+  var _activeSectionIndex = 0;
   function ensureScreenDom() {
     let screen2 = document.getElementById("sc-lineup-screen");
     if (screen2) return screen2;
@@ -1483,7 +1484,7 @@
     }
     return btn;
   }
-  function sectionEl(section) {
+  function sectionEl(section, index, total) {
     const el = document.createElement("div");
     el.className = "sc-lineup-section";
     const art = section.slug ? `${ASSET_BASE}${section.slug}.jpg` : DEFAULT_ART;
@@ -1496,7 +1497,7 @@
     if (section.name) {
       const name = document.createElement("div");
       name.className = "sc-lineup-section-name";
-      name.textContent = section.name;
+      name.innerHTML = `${section.name}${total > 1 ? `<span class="sc-lineup-section-count">${index + 1} / ${total}</span>` : ""}`;
       el.appendChild(name);
     }
     const rail = document.createElement("div");
@@ -1525,13 +1526,30 @@
       body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
       return;
     }
-    day.sections.forEach((section) => body.appendChild(sectionEl(section)));
+    if (_activeSectionIndex >= day.sections.length) _activeSectionIndex = 0;
+    body.appendChild(sectionEl(day.sections[_activeSectionIndex], _activeSectionIndex, day.sections.length));
   }
   function showDay(screen2, day) {
     _activeDay = day;
+    _activeSectionIndex = 0;
     const tabs = [...screen2.querySelectorAll(".sc-lineup-daytab")];
     tabs.forEach((t) => t.classList.toggle("sc-lineup-daytab-active", t.textContent === day));
     renderBody(screen2, _lastData.days);
+  }
+  function stepLineupSection(delta, columnIndex) {
+    if (!_lastData || _lastData.fallback) return null;
+    const days = _lastData.days || [];
+    const day = days.find((d) => d.day === _activeDay) || days[0];
+    if (!day) return null;
+    const newIndex = _activeSectionIndex + delta;
+    if (newIndex < 0 || newIndex >= day.sections.length) return null;
+    _activeSectionIndex = newIndex;
+    const screen2 = document.getElementById("sc-lineup-screen");
+    renderBody(screen2, days);
+    const rail = screen2.querySelector(".sc-lineup-rail");
+    if (!rail) return null;
+    const items = [...rail.querySelectorAll(".sc-lineup-item")];
+    return items[Math.min(columnIndex, items.length - 1)] || null;
   }
   function renderFallback(screen2, data) {
     screen2.querySelector("#sc-lineup-daytabs").innerHTML = "";
@@ -1559,9 +1577,8 @@
       return;
     }
     const days = data.days || [];
-    if (!_activeDay || !days.some((d) => d.day === _activeDay)) {
-      _activeDay = (days.find((d) => d.isToday) || days[0] || {}).day || null;
-    }
+    _activeDay = (days.find((d) => d.isToday) || days[0] || {}).day || null;
+    _activeSectionIndex = 0;
     renderDayTabs(screen2, days);
     renderBody(screen2, days);
   }
@@ -2273,16 +2290,12 @@
           setFocus(items[ni]);
           return;
         }
-        const body = document.getElementById("sc-lineup-body");
-        const rails = body ? [...body.querySelectorAll(".sc-lineup-rail")] : [];
         if (rail && (dir === "up" || dir === "down")) {
           const items = [...rail.querySelectorAll(".sc-lineup-item")];
           const myIndex = items.indexOf(focusEl);
-          const railIdx = rails.indexOf(rail);
-          const targetRail = dir === "down" ? rails[railIdx + 1] : rails[railIdx - 1];
-          if (targetRail) {
-            const targetItems = [...targetRail.querySelectorAll(".sc-lineup-item")];
-            setFocus(targetItems[Math.min(myIndex, targetItems.length - 1)]);
+          const target = stepLineupSection(dir === "down" ? 1 : -1, myIndex);
+          if (target) {
+            setFocus(target);
             return;
           }
           if (dir === "up") {
@@ -2294,7 +2307,8 @@
           }
         }
         if (dir === "down" && focusEl && focusEl.classList.contains("sc-lineup-daytab")) {
-          const firstItem = rails[0] && rails[0].querySelector(".sc-lineup-item");
+          const body = document.getElementById("sc-lineup-body");
+          const firstItem = body && body.querySelector(".sc-lineup-item");
           if (firstItem) {
             setFocus(firstItem);
             return;
@@ -2314,7 +2328,7 @@
         return;
       }
       if (dir === "up" || dir === "down") {
-        const sc = scope.querySelector && scope.querySelector("#sc-trivia-list, #sc-settings-modal, #messagebuffer, #sc-lineup-body") || document.getElementById("messagebuffer");
+        const sc = scope.querySelector && scope.querySelector("#sc-trivia-list, #sc-settings-modal, #messagebuffer") || document.getElementById("messagebuffer");
         if (sc && sc.scrollHeight > sc.clientHeight) sc.scrollTop += dir === "down" ? 140 : -140;
       }
     }
@@ -5035,9 +5049,7 @@
                 align-items: flex-start !important; justify-content: flex-start !important;
                 font-family: 'Inter','Roboto',system-ui,sans-serif !important;
                 padding: 2vh 4vw !important; box-sizing: border-box !important;
-                /* The screen itself does NOT scroll — header/tabs stay pinned while
-                   #sc-lineup-body (below) scrolls beneath them. Three stacked sections are
-                   almost always taller than a TV's viewport. */
+                overflow: hidden !important; /* one section fills the remaining space -- no scrolling */
             }
             #sc-lineup-screen.sc-lineup-visible { display: flex !important; }
             #sc-lineup-header {
@@ -5051,12 +5063,12 @@
             body.sc-tv #sc-lineup-header { font-size: 15px !important; }
             body.sc-tv #sc-lineup-subtitle { font-size: 12px !important; }
             #sc-lineup-body {
-                width: 100% !important; display: flex !important; flex-direction: column !important; gap: 22px !important;
-                /* The actual scroll region: flex:1 fills whatever height #sc-lineup-screen has
-                   left after the header/tabs; min-height:0 is required for a flex child to
-                   shrink and scroll internally instead of pushing its parent taller. */
-                flex: 1 1 auto !important; min-height: 0 !important; overflow-y: auto !important;
-                padding-bottom: 8px !important;
+                width: 100% !important; display: flex !important; flex-direction: column !important;
+                /* Holds exactly one .sc-lineup-section at a time (a Netflix-row-style pager,
+                   not a scrollable stack) -- Up/Down PAGES between sections via
+                   stepLineupSection() in screen.js rather than scrolling through them. flex:1
+                   fills whatever height #sc-lineup-screen has left after the header/tabs. */
+                flex: 1 1 auto !important; min-height: 0 !important;
             }
 
             /* Day tabs — plain button row, same shape as settings.js's tab pattern; the whole-
@@ -5077,20 +5089,18 @@
                 outline: 3px solid #e0701a !important; outline-offset: 2px !important;
             }
 
-            /* One themed section per row: full-bleed background art (a bundled Android asset,
-               same 9 names every week) behind the section's rail of posters. */
+            /* The one currently-shown section: fills #sc-lineup-body's full height (not just its
+               content's natural size), full-bleed background art (a bundled Android asset, same
+               9 names every week) behind its rail of posters, content vertically centered within
+               whatever space is available so it reads as "this grouping fits the screen" rather
+               than pinned to one edge. */
             .sc-lineup-section {
-                position: relative !important; width: 100% !important; border-radius: 10px !important;
-                overflow: hidden !important; background-size: cover !important; background-position: center !important;
+                position: relative !important; width: 100% !important; height: 100% !important;
+                border-radius: 10px !important; overflow: hidden !important;
+                background-size: cover !important; background-position: center !important;
                 background-color: rgba(255,255,255,0.04) !important;
-                padding: 14px 0 16px !important;
-                /* #sc-lineup-body's default flex-shrink:1 would otherwise proportionally squash
-                   each stacked section to fit whatever space is left, clipping poster art against
-                   this element's own overflow:hidden well before the body's overflow-y:auto ever
-                   kicks in (confirmed on-device: posters were rendering ~40% of their real height,
-                   silently cropped). flex-shrink:0 keeps every section at its natural height, so
-                   the body's own scroll takes over instead of the flex box quietly shrinking. */
-                flex-shrink: 0 !important;
+                display: flex !important; flex-direction: column !important; justify-content: center !important;
+                padding: 14px 0 16px !important; box-sizing: border-box !important;
             }
             .sc-lineup-section::before {
                 content: '' !important; position: absolute !important; inset: 0 !important;
@@ -5104,6 +5114,12 @@
                 padding: 0 24px 10px !important; text-shadow: 0 2px 6px rgba(0,0,0,0.6) !important;
             }
             body.sc-tv .sc-lineup-section-name { font-size: 15px !important; }
+            /* Position within the day's groupings (e.g. "2 / 3") -- the only orientation cue
+               now that sections page instead of stacking where the next one could peek into view. */
+            .sc-lineup-section-count {
+                margin-left: 10px !important; font-weight: 600 !important; letter-spacing: 0.04em !important;
+                color: rgba(255,255,255,0.55) !important; text-transform: none !important;
+            }
 
             .sc-lineup-rail {
                 position: relative !important;
