@@ -1,16 +1,22 @@
 import { getTonightsLineup } from './data.js';
 import { showNowPlayingCard } from '../cards/nowplaying.js';
 import { getSectionTheme, ensureThemeFontsLoaded } from './sectionThemes.js';
+import { isTv } from '../tvdetect.js';
 
 /* ==========================================================
-   TONIGHT'S LINEUP — full-screen TV schedule, opened from the Coming
-   Attractions poster strip. Friday/Saturday/Sunday day tabs switch which
-   day is shown; within a day, one themed section's rail is shown at a time,
-   sized to fit the screen -- Up/Down PAGES between sections (a Netflix-row
-   feel without the scrolling) rather than stacking all of a day's sections
-   into a scrollable list. OK on a film opens the existing Now-Playing card
-   in browse mode. Registered as an OVERLAY_IDS-trapped overlay in tvnav.js
-   (see that file), which also drives section paging via stepLineupSection().
+   TONIGHT'S LINEUP — full-screen schedule, opened from the Coming Attractions
+   toggle on every platform. Friday/Saturday/Sunday day tabs switch which day
+   is shown. Within a day:
+     - TV: one themed section's rail fills the screen at a time -- Up/Down
+       PAGES between sections (a Netflix-row feel without scrolling),
+       driven by tvnav.js's D-pad handling via stepLineupSection().
+     - Phone/tablet: all of the day's sections render stacked, and native
+       touch-scroll moves between them (no swipe/gesture code -- this
+       codebase has none, so scrolling is the one interaction pattern
+       already proven elsewhere, e.g. the trivia card's list).
+   OK/tap on a film opens the existing Now-Playing card in browse mode.
+   Registered as an OVERLAY_IDS-trapped overlay in tvnav.js for TV; the
+   close button (below) is how every platform without a Back key closes it.
 ========================================================== */
 
 let _lastData = null;          // most recent getTonightsLineup() result, so paging doesn't refetch
@@ -24,10 +30,12 @@ function ensureScreenDom() {
     screen = document.createElement('div');
     screen.id = 'sc-lineup-screen';
     screen.innerHTML = `
+        <button id="sc-lineup-close" type="button">✕</button>
         <div id="sc-lineup-header"></div>
         <div id="sc-lineup-subtitle">Titles/times may be subject to change.</div>
         <nav id="sc-lineup-daytabs"></nav>
         <div id="sc-lineup-body"></div>`;
+    screen.querySelector('#sc-lineup-close').addEventListener('click', hideLineupScreen);
     document.body.appendChild(screen);
     return screen;
 }
@@ -108,8 +116,14 @@ function renderBody(screen, days) {
         body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
         return;
     }
-    if (_activeSectionIndex >= day.sections.length) _activeSectionIndex = 0;
-    body.appendChild(sectionEl(day.sections[_activeSectionIndex], _activeSectionIndex, day.sections.length));
+    if (isTv) {
+        // TV: one section fills the screen at a time (stepLineupSection() pages between them).
+        if (_activeSectionIndex >= day.sections.length) _activeSectionIndex = 0;
+        body.appendChild(sectionEl(day.sections[_activeSectionIndex], _activeSectionIndex, day.sections.length));
+    } else {
+        // Phone/tablet: every section stacked, native scroll moves between them.
+        day.sections.forEach((section, i) => body.appendChild(sectionEl(section, i, day.sections.length)));
+    }
 }
 
 function showDay(screen, day) {

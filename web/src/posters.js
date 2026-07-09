@@ -1,160 +1,22 @@
 import { usernameToColor } from './usercolors.js';
-import { chromeState } from './chrome/state.js';
 import { onSocket } from './socket.js';
-import { isTv } from './tvdetect.js';
 import { showLineupScreen } from './lineup/screen.js';
-import { getMotdPosterImages } from './motd.js';
 
 /* ==========================================================
-   POSTER STRIP — toggle show/hide the MOTD poster images
+   COMING ATTRACTIONS TOGGLE — opens the full-screen Tonight's Lineup on
+   every platform. (Named initPosterStrip for its settings.js call sites;
+   the small hover-zoom poster strip this used to toggle on phone/tablet
+   was retired once Lineup itself became reachable there.)
 ========================================================== */
 
 export function initPosterStrip() {
-    // Build the poster strip container from MOTD images
-    const imgs = getMotdPosterImages();
-    if (!imgs.length) return;
-
-    // Create our strip outside of #motdrow so we control it fully
-    const strip = document.createElement('div');
-    strip.id = 'sc-poster-strip';
-    // Single shared zoom element — lives on body, above everything
-    let zoomEl = document.getElementById('sc-poster-zoom');
-    if (!zoomEl) {
-        zoomEl = document.createElement('img');
-        zoomEl.id = 'sc-poster-zoom';
-        document.body.appendChild(zoomEl);
-    }
-
-    const ZOOM_H = 300;
-
-    const calcZoomTarget = (thumb) => {
-        const rect  = thumb.getBoundingClientRect();
-        const attrW = parseInt(thumb.getAttribute('width')  || 125);
-        const attrH = parseInt(thumb.getAttribute('height') || 175);
-        const zoomW = Math.round(ZOOM_H * (attrW / attrH));
-
-        // Always centre horizontally over the thumb, clamped to viewport
-        let left = rect.left + rect.width / 2 - zoomW / 2;
-        left = Math.max(8, Math.min(left, window.innerWidth - zoomW - 8));
-
-        // Anchor to the top of the thumb — expand upward from there
-        // If not enough room above, expand downward instead
-        let top;
-        if (rect.top >= ZOOM_H + 8) {
-            top = rect.top - ZOOM_H;          // expands upward, bottom edge at thumb top
-        } else {
-            top = rect.bottom - ZOOM_H;        // anchor bottom to thumb bottom, grows up into video
-            top = Math.max(8, top);
-        }
-
-        return { left, top, width: zoomW, height: ZOOM_H };
-    };
-
-    const positionZoom = (thumb) => {
-        const rect   = thumb.getBoundingClientRect();
-        const target = calcZoomTarget(thumb);
-
-        // Immediately place at thumb position/size (no transition yet)
-        zoomEl.classList.remove('sc-zoom-expanded');
-        zoomEl.style.transition = 'none';
-        zoomEl.style.left   = rect.left   + 'px';
-        zoomEl.style.top    = rect.top    + 'px';
-        zoomEl.style.width  = rect.width  + 'px';
-        zoomEl.style.height = rect.height + 'px';
-        zoomEl.style.display = 'block';
-
-        // Force a reflow so the browser registers the start state
-        zoomEl.getBoundingClientRect();
-
-        // Re-enable transition and animate to final size/position
-        zoomEl._collapsing = false;
-        zoomEl.style.transition = '';
-        zoomEl.style.left   = target.left   + 'px';
-        zoomEl.style.top    = target.top    + 'px';
-        zoomEl.style.width  = target.width  + 'px';
-        zoomEl.style.height = target.height + 'px';
-        zoomEl.classList.add('sc-zoom-expanded');
-    };
-
-    imgs.forEach(img => {
-        const thumb = document.createElement('img');
-        thumb.src = img.src;
-        thumb.className = 'sc-poster-thumb';
-        thumb.title = img.title || img.alt || '';
-        thumb.setAttribute('width',  img.getAttribute('width')  || '125');
-        thumb.setAttribute('height', img.getAttribute('height') || '175');
-
-        thumb.addEventListener('mouseenter', () => {
-            // Cancel any in-progress collapse
-            zoomEl._collapsing = false;
-            zoomEl.src = thumb.src;
-            zoomEl._activeThumb = thumb;   // remembered so an outside tap can collapse it
-            positionZoom(thumb);
-        });
-        thumb.addEventListener('mouseleave', () => {
-            zoomEl._collapsing = true;
-            // Animate back to thumb size then hide
-            const rect = thumb.getBoundingClientRect();
-            zoomEl.classList.remove('sc-zoom-expanded');
-            zoomEl.style.left   = rect.left   + 'px';
-            zoomEl.style.top    = rect.top    + 'px';
-            zoomEl.style.width  = rect.width  + 'px';
-            zoomEl.style.height = rect.height + 'px';
-            // Hide only if still collapsing when transition ends
-            const onEnd = () => {
-                zoomEl.removeEventListener('transitionend', onEnd);
-                if (zoomEl._collapsing) {
-                    zoomEl.style.display = 'none';
-                    zoomEl.src = '';
-                    zoomEl._collapsing = false;
-                }
-            };
-            zoomEl.addEventListener('transitionend', onEnd);
-        });
-
-        // Wrapper stays an <a> so TV-nav (strip.querySelectorAll('a')) can still
-        // enumerate/focus each poster, but it intentionally has NO href — opening the
-        // raw image URL on click/OK navigated the WebView and broke the app.
-        const wrap = document.createElement('a');
-        wrap.appendChild(thumb);
-        strip.appendChild(wrap);
-    });
-    document.body.appendChild(strip);
-
-    // Tapping a poster zooms it (via mouseenter on touch), but touch never fires the
-    // thumb's mouseleave — so a tap anywhere that ISN'T a poster collapses the zoom,
-    // reusing the existing mouseleave animation. Added once (initPosterStrip re-runs).
-    if (!document.body._scPosterDismiss) {
-        document.body._scPosterDismiss = true;
-        document.addEventListener('click', (e) => {
-            if (zoomEl.style.display !== 'block' || zoomEl._collapsing) return;
-            if (e.target && e.target.classList && e.target.classList.contains('sc-poster-thumb')) return;
-            const active = zoomEl._activeThumb;
-            if (active) active.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-        });
-    }
-
-    // Toggle button — injected below the video title
+    if (document.getElementById('sc-poster-toggle')) return; // re-init guard (settings.js calls this on MOTD updates)
     const toggleBtn = document.createElement('button');
     toggleBtn.id = 'sc-poster-toggle';
     toggleBtn.textContent = "Coming Attractions";
-    toggleBtn.title = 'Show/hide weekend lineup';
+    toggleBtn.title = "Show tonight's lineup";
     toggleBtn.dataset.noTvCaption = '1'; // button text is self-explanatory; no remote caption
-    toggleBtn.addEventListener('click', () => {
-        // TV: skip the small strip + hover-zoom entirely, open the full-screen Lineup
-        // rail directly — one press, no intermediate zoom step. Phone behavior (toggle
-        // the small strip) is completely unchanged.
-        if (isTv) { showLineupScreen(); return; }
-        const visible = strip.classList.toggle('sc-poster-visible');
-        toggleBtn.classList.toggle('sc-poster-toggle-active', visible);
-        // Tell the top bar system whether strip is open
-        chromeState.topBarIsOpen = visible;
-        if (visible && chromeState.topBarWake) {
-            chromeState.topBarWake(); // wake and keep awake
-        }
-        // If closing, restart the idle timer via a mousemove wake
-        // (the next mousemove in the zone will restart it naturally)
-    });
+    toggleBtn.addEventListener('click', () => showLineupScreen());
     document.body.appendChild(toggleBtn);
 }
 

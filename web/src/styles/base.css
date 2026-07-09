@@ -248,9 +248,6 @@
                 /* stays tap-targetable so the first tap can wake the bar, not act */
             }
             #sc-poster-toggle:hover { color: rgba(255,255,255,0.9) !important; }
-            #sc-poster-toggle.sc-poster-toggle-active {
-                color: rgba(255,255,255,0.9) !important;
-            }
             /* Pull the control bar out of embed-responsive's constrained box
                and pin it as a fixed element flush to the bottom of the screen.
                Right edge stops just before the settings button. */
@@ -365,70 +362,6 @@
 
             /* ===== MOTD — keep hidden, we extract images ourselves ===== */
             #motdrow { display: none !important; }
-
-            /* ===== POSTER STRIP ===== */
-            #sc-poster-strip {
-                display: none !important; /* hidden by default */
-                position: fixed !important;
-                top: 20px !important;   /* drops down from the header bar */
-                left: 0 !important;
-                z-index: 19500 !important;
-                width: 80vw !important;
-                background: rgba(0,0,0,0.93) !important;
-                padding: 8px 12px !important;
-                overflow-x: auto !important;
-                overflow-y: hidden !important;
-                white-space: nowrap !important;
-                border-bottom: 1px solid rgba(255,255,255,0.12) !important;
-                scrollbar-width: thin !important;
-                scrollbar-color: rgba(255,255,255,0.2) transparent !important;
-            }
-            body.sc-vertical #sc-poster-strip {
-                width: 100vw !important;
-                top: 20px !important;
-                bottom: auto !important;
-            }
-            #sc-poster-strip.sc-poster-visible {
-                display: block !important;
-            }
-            .sc-poster-thumb {
-                height: 110px !important;
-                width: auto !important;
-                border-radius: 4px !important;
-                margin-right: 6px !important;
-                opacity: 0.82 !important;
-                transition: opacity 0.15s !important;
-                vertical-align: top !important;
-                cursor: pointer !important;
-                display: inline-block !important;
-                flex-shrink: 0 !important;
-            }
-            .sc-poster-thumb:hover { opacity: 1 !important; }
-
-            #sc-poster-zoom {
-                display: none;
-                position: fixed !important;
-                z-index: 99990 !important;
-                pointer-events: none !important;
-                border-radius: 4px !important;
-                box-shadow: 0 0 0 rgba(0,0,0,0) !important;
-                border: 1px solid rgba(255,255,255,0.0) !important;
-                /* transition animates position, size, shadow, border together */
-                transition:
-                    top 0.22s cubic-bezier(0.22, 1, 0.36, 1),
-                    left 0.22s cubic-bezier(0.22, 1, 0.36, 1),
-                    width 0.22s cubic-bezier(0.22, 1, 0.36, 1),
-                    height 0.22s cubic-bezier(0.22, 1, 0.36, 1),
-                    box-shadow 0.22s ease,
-                    border-color 0.22s ease,
-                    border-radius 0.22s ease !important;
-            }
-            #sc-poster-zoom.sc-zoom-expanded {
-                box-shadow: 0 12px 48px rgba(0,0,0,0.92) !important;
-                border-color: rgba(255,255,255,0.2) !important;
-                border-radius: 6px !important;
-            }
-
 
             /* Toggle button — right side of the header bar, same line as the title */
             #sc-poster-toggle {
