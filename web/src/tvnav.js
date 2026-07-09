@@ -3,6 +3,7 @@ import { holdScrubber, wakeVideoControls } from './player/scrubber.js';
 import { chromeState } from './chrome/state.js';
 import { hideTriviaCard } from './cards/trivia.js';
 import { hideNowPlayingCard } from './cards/nowplaying.js';
+import { hideLineupScreen, stepLineupSection } from './lineup/screen.js';
 import { pickDirectional } from './tvnav/geometry.js';
 
 // Let other UI (settings modal) place the remote's focus ring on an element.
@@ -109,7 +110,7 @@ export function initLoginTvNav() {
 export function initTvNav() {
     if (!isTv) return;
     let focusEl = null;
-    let preOverlayFocusEl = null;
+    let overlayFocusStack = [];
 
     const isVisible = (el) => {
         if (!el || !el.getBoundingClientRect) return false;
@@ -122,15 +123,27 @@ export function initTvNav() {
     };
 
     // Topmost interactive overlay (poster strip excluded so its toggle stays reachable)
-    const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card'];
+    const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card', 'sc-lineup-screen'];
+    const isOverlayOpen = (id, o) => !!(o && isVisible(o) &&
+        (id !== 'sc-np-card' || o.classList.contains('sc-np-visible')) &&
+        (id !== 'sc-trivia-card' || o.classList.contains('sc-show')) &&
+        (id !== 'sc-lineup-screen' || o.classList.contains('sc-lineup-visible')));
     const openOverlay = () => {
         for (const id of OVERLAY_IDS) {
             const o = document.getElementById(id);
-            if (o && isVisible(o) &&
-                (id !== 'sc-np-card' || o.classList.contains('sc-np-visible')) &&
-                (id !== 'sc-trivia-card' || o.classList.contains('sc-show'))) return o;
+            if (isOverlayOpen(id, o)) return o;
         }
         return null;
+    };
+    // Count of simultaneously-open OVERLAY_IDS layers (0, 1, or 2+ when nested, e.g. the
+    // Now-Playing card opened from within the Lineup screen). Used by activate() to tell
+    // "a new overlay opened on top" (depth increased) apart from "the topmost overlay closed
+    // via its own click-to-dismiss, revealing one underneath" (depth decreased) — an identity
+    // comparison of openOverlay()'s single result can't distinguish these two cases.
+    const countOpenOverlays = () => {
+        let n = 0;
+        for (const id of OVERLAY_IDS) { if (isOverlayOpen(id, document.getElementById(id))) n++; }
+        return n;
     };
 
     // True while "free watch" is on. Seeking the movie (scrubber + Left/Right on
@@ -221,12 +234,12 @@ export function initTvNav() {
         focusEl = null;
     }
 
-    // Back-from-overlay restores focus to whatever opened it (settings gear,
-    // trivia button, ...) instead of leaving the ring cleared. Falls back to a
-    // plain clearFocus() if the opener is gone or hidden.
+    // Back-from-overlay restores focus to whatever opened it (settings gear, trivia
+    // button, the poster that opened the Lineup screen, ...). A stack so a nested
+    // overlay (Now-Playing card opened FROM the Lineup screen) unwinds one level at a
+    // time instead of jumping straight back to whatever opened the outermost one.
     function restoreFocusAfterOverlayClose() {
-        const restore = preOverlayFocusEl;
-        preOverlayFocusEl = null;
+        const restore = overlayFocusStack.pop() || null;
         clearFocus();
         if (restore && isVisible(restore)) setFocus(restore);
     }
@@ -348,6 +361,46 @@ export function initTvNav() {
             }
         }
 
+        // Tonight's Lineup: a single themed section is shown at a time (a Netflix-row-style
+        // pager, not a scrollable stack) — Left/Right steps through that section's own reel
+        // like the Coming Attractions strip above (items scrolled past a rail's edge are
+        // off-viewport but still valid targets, so this list is NOT isVisible-filtered), while
+        // Up/Down PAGES to the previous/next section via stepLineupSection(), which re-renders
+        // #sc-lineup-body to show only that section and reports back the item at the same
+        // column so focus lands on roughly the same poster position. This replaced an earlier
+        // stacked-and-scrollable layout: the day-tab row, pinned outside the scroll region and
+        // therefore always isVisible(), kept out-competing the geometrically-correct row in the
+        // scorer, especially while that row was still scrolled out of view.
+        const lineupScreen = document.getElementById('sc-lineup-screen');
+        if (lineupScreen && lineupScreen.classList.contains('sc-lineup-visible')) {
+            const rail = focusEl && focusEl.closest('.sc-lineup-rail');
+            if (rail && (dir === 'left' || dir === 'right')) {
+                const items = [...rail.querySelectorAll('.sc-lineup-item')];
+                const i = items.indexOf(focusEl);
+                const ni = dir === 'right' ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
+                setFocus(items[ni]);
+                return;
+            }
+            if (rail && (dir === 'up' || dir === 'down')) {
+                const items = [...rail.querySelectorAll('.sc-lineup-item')];
+                const myIndex = items.indexOf(focusEl);
+                const target = stepLineupSection(dir === 'down' ? 1 : -1, myIndex);
+                if (target) { setFocus(target); return; }
+                if (dir === 'up') {
+                    // No section above — first section of the day, steer to the active day tab
+                    // (mirrors the Coming Attractions strip's own toggle<->reel special case).
+                    const activeTab = document.querySelector('.sc-lineup-daytab-active');
+                    if (activeTab) { setFocus(activeTab); return; }
+                }
+                // dir === 'down' with no section below (last one): nothing to do, fall through.
+            }
+            if (dir === 'down' && focusEl && focusEl.classList.contains('sc-lineup-daytab')) {
+                const body = document.getElementById('sc-lineup-body');
+                const firstItem = body && body.querySelector('.sc-lineup-item');
+                if (firstItem) { setFocus(firstItem); return; }
+            }
+        }
+
         const { scope, list } = candidates();
         if (!list.length) return;
         if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) { setFocus(list[0]); return; }
@@ -382,9 +435,21 @@ export function initTvNav() {
         // Remember what opened an overlay so Back can restore focus to it instead
         // of just clearing the ring (see restoreFocusAfterOverlayClose()).
         const opener = focusEl;
-        const hadOverlay = !!openOverlay();
+        const depthBefore = countOpenOverlays();
         focusEl.click();
-        if (!hadOverlay && openOverlay()) preOverlayFocusEl = opener;
+        const depthAfter = countOpenOverlays();
+        if (depthAfter > depthBefore) {
+            // A new overlay layer opened on top of whatever was open before (including
+            // "nothing was open") — remember what opened it so Back can restore focus here.
+            overlayFocusStack.push(opener);
+        } else if (depthAfter < depthBefore) {
+            // The click itself closed a layer (a click-to-dismiss overlay like the
+            // Now-Playing card or trivia card, closed by OK instead of Back) — restore
+            // focus exactly the way Back would, popping the entry paired with whatever
+            // just closed. Keeps the stack correctly paired regardless of dismiss method.
+            restoreFocusAfterOverlayClose();
+            return;
+        }
         if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) { clearFocus(); setFocus(ownerBtn); }
     }
 
@@ -417,6 +482,8 @@ export function initTvNav() {
         if (trivia && trivia.classList.contains('sc-show')) { hideTriviaCard(); restoreFocusAfterOverlayClose(); return true; }
         const np = document.getElementById('sc-np-card');
         if (np && np.classList.contains('sc-np-visible')) { hideNowPlayingCard(); restoreFocusAfterOverlayClose(); return true; }
+        const lineup = document.getElementById('sc-lineup-screen');
+        if (lineup && lineup.classList.contains('sc-lineup-visible')) { hideLineupScreen(); restoreFocusAfterOverlayClose(); return true; }
         for (const id of ['sc-users-panel', 'sc-poll-panel']) {
             const p = document.getElementById(id);
             if (p && isVisible(p)) { p.style.display = 'none'; restoreFocusAfterOverlayClose(); return true; }

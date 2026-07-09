@@ -386,7 +386,18 @@ git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
 git commit -m "style: Tonight's Lineup full-screen rail"
 ```
 
-### Task 5: Entry point — OK on a poster opens the Lineup screen (TV only)
+### Task 5 (REVISED 2026-07-05 after device checkpoint): Entry point — toggle button opens the Lineup screen directly (TV only)
+
+> **Revision note:** the original Task 5 (OK on an individual poster inside the small strip
+> opens the Lineup screen) was implemented, reviewed, and device-tested. On the real TV it felt
+> janky — hover-zoom-into-the-small-strip, then OK-into-the-full-screen, then Back-Back-out was
+> too many steps stacked on top of each other. User feedback: skip the small strip navigation
+> entirely on TV — the "Coming Attractions" toggle button should open the full-screen Lineup
+> directly, one press, no intermediate zoom step. The small strip + hover-zoom stay completely
+> unchanged for phone (this was never TV-gated there). This only changes `posters.js` — Tasks
+> 2-4's screen/nav/CSS work is unaffected, because `sc-poster-toggle` was already reachable via
+> D-pad in `tvnav.js`'s `MAIN_IDS`, and Task 3's depth-based overlay-stack fix generically detects
+> "a new overlay opened" from *any* element's click, not specifically a poster's.
 
 **Files:**
 - Modify: `web/src/posters.js`
@@ -404,20 +415,35 @@ import { isTv } from './tvdetect.js';
 import { showLineupScreen } from './lineup/screen.js';
 ```
 
-- [ ] **Step 2:** In `initPosterStrip()`'s `imgs.forEach(...)` loop, add a click handler on the
-      wrapper anchor (right after it's created, before it's appended to the strip):
+- [ ] **Step 2:** Do NOT add any click handler to the individual poster `<a>` wrappers (the
+      original Task 5 approach) — revert that if present. Instead, modify the toggle button's
+      existing click handler (in `initPosterStrip()`, the `toggleBtn.addEventListener('click', ...)`
+      block) so that on TV it opens the Lineup screen directly instead of toggling the small
+      strip's visibility:
 
 ```js
-        const wrap = document.createElement('a');
-        wrap.appendChild(thumb);
-        // TV only: OK opens the full Tonight's Lineup screen instead of just the
-        // hover-zoom preview (which tvnav.js's setPosterFocus already triggers on
-        // focus). The click event still bubbles to the document-level dismiss
-        // handler above, which collapses the zoom — harmless, since we're navigating
-        // to a full-screen overlay anyway.
-        if (isTv) wrap.addEventListener('click', () => showLineupScreen());
-        strip.appendChild(wrap);
+    toggleBtn.addEventListener('click', () => {
+        // TV: skip the small strip + hover-zoom entirely, open the full-screen Lineup
+        // rail directly — one press, no intermediate zoom step. Phone behavior (toggle
+        // the small strip) is completely unchanged.
+        if (isTv) { showLineupScreen(); return; }
+        const visible = strip.classList.toggle('sc-poster-visible');
+        toggleBtn.classList.toggle('sc-poster-toggle-active', visible);
+        // Tell the top bar system whether strip is open
+        chromeState.topBarIsOpen = visible;
+        if (visible && chromeState.topBarWake) {
+            chromeState.topBarWake(); // wake and keep awake
+        }
+        // If closing, restart the idle timer via a mousemove wake
+        // (the next mousemove in the zone will restart it naturally)
+    });
 ```
+
+  This makes the small strip's `.sc-poster-visible` class permanently untoggled on TV, so
+  `tvnav.js`'s existing Coming-Attractions-reel D-pad special-casing in `move()` (entering the
+  strip, Left/Right paging posters, Up/Down exiting) becomes unreachable there — intentionally
+  left in place rather than removed, since it's still live and load-bearing for phone/tablet
+  touch navigation of the same strip, and this revision's scope is the TV entry point only.
 
 - [ ] **Step 3:** `cd web && npm run lint` — expect no errors.
 - [ ] **Step 4:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` — expect
@@ -426,7 +452,172 @@ import { showLineupScreen } from './lineup/screen.js';
 
 ```bash
 git add web/src/posters.js app/src/main/assets/cytube_mobile.js
-git commit -m "feat: OK on a poster opens Tonight's Lineup (TV)"
+git commit -m "fix: TV toggle button opens Tonight's Lineup directly (skip small strip)"
+```
+
+### Task 5e (added after 2nd round of device feedback): Now-Playing card progress bar only for the item actually playing
+
+> **Feedback:** browsing a non-current film from the Lineup rail showed the Now-Playing card's
+> elapsed/total/remaining progress bar — but that bar always reflects whatever's *actually*
+> playing right now, so on a browsed (non-current) item it's misleading. Keep it only when the
+> browsed item IS the one actually playing.
+
+**Files:**
+- Modify: `web/src/cards/nowplaying.js`
+- Modify: `web/src/lineup/screen.js`
+
+**Interfaces:**
+- `showNowPlayingCard(data, opts)` gains `opts.showProgress` (default `true` — every existing
+  call site keeps showing progress unchanged; only the Lineup rail's new call site passes `false`
+  for non-current items).
+
+- [ ] **Step 1:** In `web/src/cards/nowplaying.js`'s `showNowPlayingCard`, replace:
+
+```js
+    card.classList.add('sc-np-visible');
+
+    // Live elapsed / total / remaining bar — refreshes while the card is up.
+    // This is the remote-friendly stand-in for hovering a scrubber: summon the
+    // card (title button / 'i') and the progress updates in place.
+    _renderNpProgress();
+    clearInterval(_npProgTimer);
+    _npProgTimer = setInterval(_renderNpProgress, 500);
+```
+
+with:
+
+```js
+    card.classList.add('sc-np-visible');
+
+    // Live elapsed / total / remaining bar — only meaningful for the item that's actually
+    // playing right now (this is the remote-friendly stand-in for hovering a scrubber).
+    // Browsing a different item from Tonight's Lineup passes showProgress: false so it
+    // doesn't show the real now-playing item's progress mislabeled under this title.
+    const progWrap = card.querySelector('#sc-np-progress');
+    if (opts.showProgress !== false) {
+        _renderNpProgress();
+        clearInterval(_npProgTimer);
+        _npProgTimer = setInterval(_renderNpProgress, 500);
+    } else {
+        clearInterval(_npProgTimer);
+        if (progWrap) progWrap.style.display = 'none';
+    }
+```
+
+- [ ] **Step 2:** In `web/src/lineup/screen.js`'s `renderItems`, change the click handler:
+
+```js
+        btn.addEventListener('click', () => showNowPlayingCard(item, { autoHide: false }));
+```
+
+to:
+
+```js
+        btn.addEventListener('click', () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
+```
+
+- [ ] **Step 3:** `cd web && npm run lint` — expect no errors.
+- [ ] **Step 4:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` — expect
+      `bundled OK` and exit 0.
+- [ ] **Step 5:** Commit:
+
+```bash
+git add web/src/cards/nowplaying.js web/src/lineup/screen.js app/src/main/assets/cytube_mobile.js
+git commit -m "fix: Now-Playing card only shows progress for the item actually playing"
+```
+
+### Task 4c (added after 2nd round of device feedback): Lineup rail CSS polish
+
+> **Feedback:** (1) the D-pad focus ring outlines the whole tile (poster + title + eta stacked),
+> which looks strange — should highlight just the poster art, matching how the "now playing"
+> marker is already scoped. (2) scrolling to a later page and back can leave a poster's left edge
+> chopped (a `scrollIntoView({inline:'nearest'})` quirk with flex + gap). (3) the rail's scrollbar
+> is hidden entirely — should be visible so the total count/position is legible.
+
+**Files:**
+- Modify: `web/src/styles/tv.css`
+
+- [ ] **Step 1:** Replace the entire Lineup CSS block (from the `/* ── TONIGHT'S LINEUP
+      (full-screen TV schedule rail) ─────────────── */` comment through the last
+      `body.sc-tv .sc-lineup-eta { font-size: 16px !important; }` line — i.e. everything Task 4
+      added) with:
+
+```css
+            /* ── TONIGHT'S LINEUP (full-screen TV schedule rail) ─────────────── */
+            #sc-lineup-screen {
+                position: fixed !important; inset: 0 !important;
+                z-index: 20500 !important; /* below #sc-np-card (21000) so OK on a film covers this */
+                background: rgba(6,4,9,0.97) !important;
+                display: none !important; flex-direction: column !important;
+                align-items: flex-start !important; justify-content: center !important;
+                font-family: 'Inter','Roboto',system-ui,sans-serif !important;
+                padding: 5vh 4vw !important; box-sizing: border-box !important;
+            }
+            #sc-lineup-screen.sc-lineup-visible { display: flex !important; }
+            #sc-lineup-header {
+                color: #fff !important; font-size: 15px !important; font-weight: 700 !important;
+                letter-spacing: 0.14em !important; text-transform: uppercase !important;
+                opacity: 0.6 !important; margin-bottom: 28px !important;
+            }
+            #sc-lineup-rail {
+                display: flex !important; gap: 22px !important; width: 100% !important;
+                overflow-x: auto !important; overflow-y: hidden !important;
+                padding: 8px 4px 16px !important;
+                /* Snap fully to each item so paging Left/Right (and scrolling back) always
+                   settles on a whole poster — without this, scrollIntoView({inline:'nearest'})
+                   can leave a partially-scrolled position that chops a poster's edge. */
+                scroll-snap-type: x mandatory !important;
+                scrollbar-width: thin !important;
+                scrollbar-color: rgba(255,255,255,0.28) transparent !important;
+            }
+            #sc-lineup-rail::-webkit-scrollbar { height: 8px !important; }
+            #sc-lineup-rail::-webkit-scrollbar-track { background: rgba(255,255,255,0.05) !important; border-radius: 10px !important; }
+            #sc-lineup-rail::-webkit-scrollbar-thumb {
+                background: rgba(255,255,255,0.28) !important; border-radius: 10px !important;
+                border: 2px solid transparent !important; background-clip: padding-box !important;
+            }
+            #sc-lineup-rail::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.45) !important; background-clip: padding-box !important; }
+            body.sc-tv #sc-lineup-rail::-webkit-scrollbar { height: 10px !important; }
+            #sc-lineup-loading { color: rgba(255,255,255,0.6) !important; font-size: 18px !important; }
+            .sc-lineup-item {
+                flex: 0 0 220px !important; background: transparent !important; border: none !important;
+                color: #fff !important; cursor: pointer !important; text-align: left !important;
+                padding: 0 !important; display: flex !important; flex-direction: column !important; gap: 10px !important;
+                scroll-snap-align: start !important;
+            }
+            .sc-lineup-poster {
+                width: 220px !important; height: 308px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: cover !important; background-position: center !important;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
+            .sc-lineup-item-current .sc-lineup-poster {
+                box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
+            .sc-lineup-title { font-size: 15px !important; font-weight: 600 !important; line-height: 1.3 !important; }
+            .sc-lineup-eta { font-size: 13px !important; color: rgba(255,255,255,0.6) !important; }
+            .sc-lineup-item-current .sc-lineup-eta { color: var(--np-accent, #ff5b73) !important; font-weight: 700 !important; }
+            /* D-pad focus ring highlights just the poster art (not the whole tile — title/eta
+               stay plain), matching how the "now playing" marker above is scoped. Overrides
+               the generic body.sc-tv .sc-tv-focus rule via higher selector specificity. */
+            body.sc-tv .sc-lineup-item.sc-tv-focus { outline: none !important; box-shadow: none !important; }
+            body.sc-tv .sc-lineup-item.sc-tv-focus .sc-lineup-poster {
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
+            body.sc-tv .sc-lineup-item { flex-basis: 260px !important; }
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }
+            body.sc-tv .sc-lineup-title { font-size: 19px !important; }
+            body.sc-tv .sc-lineup-eta { font-size: 16px !important; }
+```
+
+- [ ] **Step 2:** `cd web && npm run bundle` — confirm it succeeds; grep the generated bundle for
+      `scroll-snap-type` to confirm the new CSS made it in.
+- [ ] **Step 3:** Commit:
+
+```bash
+git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "style: Lineup rail poster-only focus ring, scroll-snap, visible scrollbar"
 ```
 
 ### Task 6 (DEVICE, stage gate): Validate feel on the TV — STOP for explicit go-ahead
@@ -878,3 +1069,1791 @@ git commit -m "feat: Tonight's Lineup real Letterboxd pipeline (Stage 1)"
 - [ ] **Step 7: STOP.** Report results to the user and confirm Tonight's Lineup is complete, or
       note any follow-up (e.g. persisting the learned bumper gap across nights, which the vision
       doc mentions as a nice-to-have but this plan keeps session-only).
+
+---
+
+## Round 3 amendments (real-device + domain-knowledge feedback, added 2026-07-06)
+
+Live-tested against the actual room and Letterboxd site during Task 10 (see ledger). Feedback:
+the Letterboxd list spans the whole weekend undifferentiated by day (a linked Reddit post breaks
+it down by day, but that's explicitly out of scope for now -- "let's try starting with" simpler);
+the screen should show the real list title + a standing disclaimer instead of the static "Tonight's
+Lineup" label; estimates should only be attempted for the next 4 upcoming films (not just 3); a
+new cold-start case (current time is Friday before the usual noon-Pacific start, no live anchor at
+all) should give exactly one estimate (the first film, at Friday noon) and nothing else; browsing a
+film should show its IMDb parental-guide chips (the data was already being fetched by `lookupMovie`
+but silently dropped when building each item); poster art aspect ratio doesn't match TMDB's actual
+2:3 ratio, causing crop.
+
+### Task 8b: `letterboxd.js` -- parse the list's own title
+
+**Files:**
+- Modify: `web/src/lineup/letterboxd.js`
+- Modify: `web/test/letterboxd.test.mjs`
+
+**Interfaces:**
+- Produces: `parseListTitle(listPageHtml)` -> string or `null`. `fetchTonightsSchedule()`'s return
+  shape changes from `[{title, year}]` to `{ listTitle, items: [{title, year}] }`.
+
+> **Verified against the live site 2026-07-06** (`curl.exe`): the list page's
+> `<meta property="og:title" content="...">` carries the list's own clean title with no
+> site-suffix to strip (e.g. `"4th of July Weekend Grindhouse Schedule - Fri 7/3 - Sun 7/5/26"`)
+> -- cleaner than the `<title>` tag, which appends `" bull Letterboxd"`.
+
+- [ ] **Step 1:** Add to `web/test/letterboxd.test.mjs` (alongside the existing tests, same file):
+
+```js
+import { findCurrentWeekListUrl, parseListTitle, parseListTitles } from '../src/lineup/letterboxd.js';
+```
+
+(replacing the existing `import { findCurrentWeekListUrl, parseListTitles } from '../src/lineup/letterboxd.js';` line -- same import, just adding `parseListTitle`), and add these two tests:
+
+```js
+const TITLE_FIXTURE = '<html><head><meta property="og:title" content="4th of July Weekend Grindhouse Schedule - Fri 7/3 - Sun 7/5/26"></head><body></body></html>';
+
+test('parseListTitle extracts the lists own title from og:title', () => {
+    assert.strictEqual(parseListTitle(TITLE_FIXTURE), '4th of July Weekend Grindhouse Schedule - Fri 7/3 - Sun 7/5/26');
+});
+test('parseListTitle returns null when og:title is missing', () => {
+    assert.strictEqual(parseListTitle('<html><head></head><body></body></html>'), null);
+});
+```
+
+- [ ] **Step 2:** Run to confirm the two new tests fail (module doesn't export `parseListTitle`
+      yet): `cd web && node --test test/letterboxd.test.mjs`.
+- [ ] **Step 3:** In `web/src/lineup/letterboxd.js`, add the new function (place it after
+      `findCurrentWeekListUrl`, before `decodeHtmlEntities`):
+
+```js
+// The list page's <meta property="og:title"> carries the list's own clean title, no
+// site-suffix to strip (unlike the <title> tag, which appends a Letterboxd suffix).
+export function parseListTitle(listPageHtml) {
+    const m = listPageHtml.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']*)["']/i);
+    return m ? decodeHtmlEntities(m[1]).trim() : null;
+}
+```
+
+  Note: this places a call to `decodeHtmlEntities` before its definition in the file -- that's fine
+  for a `function` declaration (hoisted), but move `parseListTitle` to after
+  `decodeHtmlEntities` instead if you'd rather avoid relying on hoisting; either ordering works.
+
+- [ ] **Step 4:** Change `fetchTonightsSchedule`'s return value -- replace:
+
+```js
+    const titles = parseListTitles(listRes.body);
+    if (!titles.length) throw new Error('no titles parsed from schedule list');
+    return titles;
+```
+
+with:
+
+```js
+    const items = parseListTitles(listRes.body);
+    if (!items.length) throw new Error('no titles parsed from schedule list');
+    return { listTitle: parseListTitle(listRes.body), items };
+```
+
+- [ ] **Step 5:** Run all tests again: `node --test test/letterboxd.test.mjs` -> expect all PASS.
+- [ ] **Step 6:** `npm run lint` -- expect no errors.
+- [ ] **Step 7:** Commit:
+
+```bash
+git add web/src/lineup/letterboxd.js web/test/letterboxd.test.mjs
+git commit -m "feat: parse the Letterboxd list's own title for the Lineup screen header"
+```
+
+### Task 9b: `data.js` -- real list title, 4-film estimate window, Friday cold-start, parental-guide passthrough
+
+**Files:**
+- Modify: `web/src/lineup/data.js`
+
+**Interfaces:**
+- Consumes: `fetchTonightsSchedule()`'s new `{ listTitle, items }` shape (Task 8b).
+- Produces: `getTonightsLineup()` now returns `{ listTitle, items: [...] }` (items gain `rating`,
+  `genres`, `parentalGuide`, `killCount`, `imdbId` fields, passed straight through from `lookupMovie`
+  so browsing a film in `showNowPlayingCard` shows the same IMDb parental-guide chips/kill count
+  the real now-playing card shows).
+
+- [ ] **Step 1:** Replace the full contents of `web/src/lineup/data.js`:
+
+```js
+import { fetchTonightsSchedule } from './letterboxd.js';
+import { lookupMovie, movieState } from '../metadata/tmdb.js';
+import { onSocket } from '../socket.js';
+import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
+import { formatEta, medianGapSeconds } from './timing.js';
+
+/* ==========================================================
+   TONIGHT'S LINEUP -- data interface consumed by lineup/screen.js.
+   Fetches + caches the Letterboxd schedule once per session, locates "now" in
+   it via the live current title, and projects each of the next 4 upcoming
+   films' ETA from TMDB runtimes plus a learned median bumper-gap (beyond that,
+   compounding uncertainty isn't worth displaying as a time). Falls back to a
+   Now/Next-only view (built purely from live changeMedia data) if the
+   Letterboxd fetch fails, or to running-order-only (no times) if "now" can't
+   be placed on the list -- except the one case where a coarse anchor still
+   exists without a live match: Friday before the marathon's usual noon-Pacific
+   start, where the first film gets a single "starts around then" estimate.
+========================================================== */
+
+let _scheduleCache = null;   // [{title, year}] for the whole weekend, or null before first fetch
+let _listTitle = null;       // the real Letterboxd list's own title, shown as the screen header
+let _fetchFailed = false;    // sticky for the session once Letterboxd is unreachable
+let _lastChangeMedia = null; // most recent changeMedia payload (title), for the fallback
+let _observedGapSeconds = []; // durations (s) of changeMedia items that didn't match the schedule
+let _lastUnmatchedStart = null; // Date.now() when the current unmatched (bumper) item started
+
+const FALLBACK_LIST_TITLE = 'Now / Next';
+const MAX_ESTIMATED_AHEAD = 4; // only the next N upcoming films get any time estimate at all
+
+// Learn bumper-gap duration live: a changeMedia title that doesn't match anything in
+// tonight's schedule is a bumper; the time between it starting and the next
+// (matched-or-not) changeMedia is one observed gap sample.
+onSocket('changeMedia', (d) => {
+    const title = d && d.title;
+    const matchesSchedule = !!(title && _scheduleCache &&
+        _scheduleCache.some(s => s.title.toLowerCase() === title.toLowerCase()));
+    if (title && !matchesSchedule && _scheduleCache) {
+        _lastUnmatchedStart = Date.now();
+    } else if (_lastUnmatchedStart) {
+        _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1000);
+        _lastUnmatchedStart = null;
+    }
+    _lastChangeMedia = d || null;
+});
+
+async function ensureSchedule() {
+    if (_scheduleCache || _fetchFailed) return;
+    try {
+        const result = await fetchTonightsSchedule();
+        _scheduleCache = result.items;
+        _listTitle = result.listTitle;
+    } catch (e) {
+        _fetchFailed = true;
+    }
+}
+
+// Now/Next-only fallback: only what a plain viewer can see live, no future lineup.
+function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+        items.push({
+            cleanTitle: movieState.lastMovieTitle, cleanYear: null,
+            poster: null, backdrop: null, overview: '',
+            isNowPlaying: true, etaLabel: '',
+        });
+    }
+    if (_lastChangeMedia && _lastChangeMedia.title && _lastChangeMedia.title !== movieState.lastMovieTitle) {
+        items.push({
+            cleanTitle: _lastChangeMedia.title, cleanYear: null,
+            poster: null, backdrop: null, overview: '',
+            isNowPlaying: false, etaLabel: 'LATE',
+        });
+    }
+    return items;
+}
+
+// True only during the narrow window this heuristic exists for: the list is usually posted
+// mid-week and showtime is "about Noon PST" on Friday, so before Friday noon Pacific we have
+// no live anchor yet but CAN still make one coarse guess (the first film starts around then).
+function isFridayBeforeNoonPacific(now = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles', weekday: 'short', hour: 'numeric', hourCycle: 'h23',
+    }).formatToParts(now);
+    const weekday = parts.find(p => p.type === 'weekday').value;
+    const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
+    return weekday === 'Fri' && hour < 12;
+}
+
+// Every item's TMDB/IMDb-enriched fields, shared by both the matched and unmatched branches
+// below -- including parentalGuide/killCount/imdbId/rating/genres, which lookupMovie() already
+// fetches but earlier code dropped when building each item (browsing a film from the rail
+// showed none of the parent-guide chips the real now-playing card shows).
+function buildBase(info, title, year) {
+    return {
+        cleanTitle: info.cleanTitle || title,
+        cleanYear: info.cleanYear || year,
+        poster: info.poster || null,
+        backdrop: info.backdrop || null,
+        overview: info.overview || '',
+        rating: info.rating ?? null,
+        genres: info.genres || [],
+        parentalGuide: info.parentalGuide || null,
+        killCount: info.killCount ?? null,
+        imdbId: info.imdbId || null,
+    };
+}
+
+export async function getTonightsLineup() {
+    await ensureSchedule();
+    if (!_scheduleCache) return { listTitle: FALLBACK_LIST_TITLE, items: fallbackItems() };
+
+    const infos = await Promise.all(_scheduleCache.map(({ title, year }) => lookupMovie(title, year)));
+    const currentIndex = _scheduleCache.findIndex(s =>
+        movieState.lastMovieTitle && s.title.toLowerCase() === movieState.lastMovieTitle.toLowerCase());
+
+    if (currentIndex === -1) {
+        // Can't place "now" on the list (a bumper is playing, an off-schedule item is airing,
+        // or the marathon hasn't started this week) -- running order only, no times, per the
+        // vision doc's "never display precision the data can't support" -- except the single
+        // Friday-before-noon case, where the first film gets one coarse estimate.
+        const fridayEstimate = isFridayBeforeNoonPacific();
+        return {
+            listTitle: _listTitle || FALLBACK_LIST_TITLE,
+            items: _scheduleCache.map(({ title, year }, i) => ({
+                ...buildBase(infos[i], title, year),
+                isNowPlaying: false,
+                etaLabel: (fridayEstimate && i === 0) ? '≈ Fri 12:00 PM' : 'LATE',
+            })),
+        };
+    }
+
+    const learnedGap = medianGapSeconds(_observedGapSeconds) ?? 600; // 10-min cold-start default
+    let cumulative = Math.max(0, getCurrentMediaSeconds() - getCurrentPlaybackSeconds());
+    const items = [];
+    for (let i = currentIndex; i < _scheduleCache.length; i++) {
+        const { title, year } = _scheduleCache[i];
+        const info = infos[i];
+        const base = buildBase(info, title, year);
+        const offset = i - currentIndex;
+        if (offset === 0) { items.push({ ...base, isNowPlaying: true, etaLabel: '' }); continue; }
+
+        cumulative += learnedGap; // a bumper precedes this feature
+        if (offset > MAX_ESTIMATED_AHEAD) {
+            items.push({ ...base, isNowPlaying: false, etaLabel: 'LATE' });
+        } else {
+            const precision = offset === 1 ? 'exact' : 'approx';
+            const eta = new Date(Date.now() + cumulative * 1000);
+            items.push({ ...base, isNowPlaying: false, etaLabel: formatEta(eta.getHours(), eta.getMinutes(), precision) });
+        }
+        cumulative += info.runtime ? info.runtime * 60 : 0; // then this feature's own runtime
+    }
+    return { listTitle: _listTitle || FALLBACK_LIST_TITLE, items };
+}
+```
+
+- [ ] **Step 2:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 3:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 4:** Commit:
+
+```bash
+git add web/src/lineup/data.js app/src/main/assets/cytube_mobile.js
+git commit -m "feat: real list title, 4-film estimate window, Friday cold-start estimate, parental-guide passthrough"
+```
+
+### Task 9c: `screen.js` + `tv.css` -- dynamic header/subtitle, poster aspect-ratio fix
+
+**Files:**
+- Modify: `web/src/lineup/screen.js`
+- Modify: `web/src/styles/tv.css`
+
+**Interfaces:**
+- Consumes: `data.listTitle` from `getTonightsLineup()` (Task 9b).
+
+- [ ] **Step 1:** In `web/src/lineup/screen.js`'s `ensureScreenDom`, replace:
+
+```js
+    screen.innerHTML = `
+        <div id="sc-lineup-header">Tonight's Lineup</div>
+        <div id="sc-lineup-rail"></div>`;
+```
+
+with:
+
+```js
+    screen.innerHTML = `
+        <div id="sc-lineup-header"></div>
+        <div id="sc-lineup-subtitle">Titles/times may be subject to change.</div>
+        <div id="sc-lineup-rail"></div>`;
+```
+
+- [ ] **Step 2:** In the same file's `renderItems`, set the header text from the real list title
+      (add this as the first line of the function body):
+
+```js
+function renderItems(screen, data) {
+    const header = screen.querySelector('#sc-lineup-header');
+    if (header) header.textContent = (data && data.listTitle) || 'Grindhouse Lineup';
+    const rail = screen.querySelector('#sc-lineup-rail');
+```
+
+  (keep the rest of the function exactly as it is -- only the two new lines are added before the
+  existing `const rail = ...` line).
+
+- [ ] **Step 3:** In `web/src/styles/tv.css`, replace the header rule:
+
+```css
+            #sc-lineup-header {
+                color: #fff !important; font-size: 15px !important; font-weight: 700 !important;
+                letter-spacing: 0.14em !important; text-transform: uppercase !important;
+                opacity: 0.6 !important; margin-bottom: 28px !important;
+            }
+```
+
+with (dropping the small-caps "eyebrow" treatment now that this holds a real, longer title, and
+adding the new subtitle):
+
+```css
+            #sc-lineup-header {
+                color: #fff !important; font-size: 20px !important; font-weight: 700 !important;
+                line-height: 1.25 !important; margin-bottom: 4px !important;
+            }
+            #sc-lineup-subtitle {
+                color: rgba(255,255,255,0.45) !important; font-size: 12px !important;
+                margin-bottom: 24px !important;
+            }
+            body.sc-tv #sc-lineup-header { font-size: 26px !important; }
+            body.sc-tv #sc-lineup-subtitle { font-size: 15px !important; }
+```
+
+- [ ] **Step 4:** In the same file, fix the poster aspect ratio to TMDB's real 2:3 ratio (currently
+      220x308 / 260x364, neither of which is exactly 2:3, causing `background-size: cover` to crop
+      the art) -- replace:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 308px !important; border-radius: 8px !important;
+```
+
+with:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 330px !important; border-radius: 8px !important;
+```
+
+  and replace:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }
+```
+
+with:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 390px !important; }
+```
+
+- [ ] **Step 5:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 6:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 7:** Commit:
+
+```bash
+git add web/src/lineup/screen.js web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "feat: Lineup screen shows the real list title + disclaimer, fix poster aspect ratio"
+```
+
+### Task 10b (DEVICE, stage gate): Validate Round 3 changes -- STOP for explicit go-ahead
+
+- [ ] **Step 1:** Rebuild, reinstall, launch on the TV against the live room.
+- [ ] **Step 2:** Open the Lineup screen. Expect: the header shows the REAL current Letterboxd
+      list title (not "Tonight's Lineup"), with "Titles/times may be subject to change." beneath
+      it in a smaller, muted line.
+- [ ] **Step 3:** Confirm posters fill their frame without visible cropping at the top/bottom.
+- [ ] **Step 4:** If the current room item matches the schedule: confirm only the next 4 upcoming
+      films show a time estimate (approx/exact), and the 5th-and-beyond show `LATE`.
+- [ ] **Step 5:** If it's currently Friday before ~noon Pacific and nothing matches: confirm the
+      first film shows an estimate around Friday noon and every other film shows `LATE` with no
+      other times. On any other day/time with no match, confirm every film shows `LATE` (no
+      Friday estimate).
+- [ ] **Step 6:** OK on a film. Expect: the Now-Playing card in browse mode now shows IMDb
+      parent-guide chips (and kill count, if in the community JSONL) exactly like the real
+      now-playing card does.
+- [ ] **Step 7: STOP.** Report results to the user and confirm Tonight's Lineup is complete, or
+      note any follow-up.
+
+### Task 9d (found during controller's own device smoke test, before handing to user): posters get flex-shrunk shorter than their specified size
+
+**Files:**
+- Modify: `web/src/styles/tv.css`
+
+`.sc-lineup-poster` sits inside `.sc-lineup-item`, which is `display: flex; flex-direction:
+column` — making HEIGHT the flex main axis for the poster. A flex item's `flex-shrink` defaults to
+`1`, so on a screen where the item's available height is tight (verified live on a 960x540 test
+device), the poster compresses below its specified `height` even though `width` stays correct —
+silently reintroducing the aspect-ratio distortion Task 9c just fixed, just via a different
+mechanism (flex compression instead of `background-size: cover` cropping).
+
+- [ ] **Step 1:** In `web/src/styles/tv.css`, add `flex-shrink: 0` to `.sc-lineup-poster` — replace:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 330px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: cover !important; background-position: center !important;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
+```
+
+with:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 330px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: cover !important; background-position: center !important;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+                flex-shrink: 0 !important; /* keep the 2:3 box exact; the item column may
+                                              scroll/overflow before the poster compresses */
+            }
+```
+
+- [ ] **Step 2:** `cd web && npm run bundle` — confirm it succeeds.
+- [ ] **Step 3:** Commit:
+
+```bash
+git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "fix: prevent Lineup poster art from being flex-shrunk off its 2:3 ratio"
+```
+
+### Task 9e (device feedback on Task 9c/9d): revert frame size, use `background-size: contain` instead
+
+**Files:**
+- Modify: `web/src/styles/tv.css`
+
+> **Feedback:** growing the frame to TMDB's exact 2:3 ratio (Task 9c/9d) fixed the cropping but
+> made the whole card too big -- the poster now dominates the tile, the leftmost item's edge
+> doesn't fit in the panel, and there's no longer room to read a title/eta line below it. The
+> actual fix should keep the ORIGINAL, liked frame size (220x308 base / 260x364 TV) and instead
+> switch `background-size` from `cover` (crops to fill the box, which is what caused the original
+> cropping complaint) to `contain` (scales the whole image to fit inside the box, preserving its
+> aspect ratio -- a small letterbox gap on the sides is a much smaller cost than either cropping or
+> blowing up the frame). `flex-shrink: 0` (Task 9d) stays -- still good practice regardless of size.
+
+- [ ] **Step 1:** Replace the poster rule -- change:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 330px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: cover !important; background-position: center !important;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+                flex-shrink: 0 !important; /* keep the 2:3 box exact; the item column may
+                                              scroll/overflow before the poster compresses */
+            }
+```
+
+to:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 308px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: contain !important; background-repeat: no-repeat !important;
+                background-position: center !important;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+                flex-shrink: 0 !important; /* keep the box exact regardless of available space */
+            }
+```
+
+- [ ] **Step 2:** Revert the TV-size override -- change:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 390px !important; }
+```
+
+to:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }
+```
+
+- [ ] **Step 3:** `cd web && npm run bundle` -- confirm it succeeds.
+- [ ] **Step 4:** Commit:
+
+```bash
+git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "fix: revert Lineup poster frame to original size, use background-size:contain to avoid cropping"
+```
+
+### Task 9f (device feedback: still clipped): shrink header/subtitle/poster to fit the actual viewport, add shadow clearance
+
+**Files:**
+- Modify: `web/src/styles/tv.css`
+
+> **Root cause traced on the actual test device (960x540):** the full vertical stack (screen
+> padding + header + subtitle + rail padding + poster + gap + title + gap + eta) sums to more than
+> the 540px viewport height once the header holds the REAL list title (a full sentence, e.g. 63
+> characters) at the size tuned for the old short static label -- at that font size the sentence
+> likely wraps to 2 lines, pushing the bottom of the tile (title/eta) off-screen. Separately, the
+> "left side clipped" look is the poster's box-shadow/focus-ring glow getting cut off by the rail's
+> own `overflow-x: auto` boundary, since the rail's left padding (4px) isn't enough clearance for a
+> 30px shadow blur + focus outline on the leftmost item (nothing to scroll into on that side to
+> reveal the rest of the effect). Fix: shrink header/subtitle text and margins (it's holding a
+> sentence now, not a short label), reduce screen padding, trim the poster a bit further, reduce
+> shadow blur radius (needs less clearance), widen the rail's side padding for shadow/focus
+> clearance, and add `overflow-y: auto` on the screen itself as a safety net for even tighter
+> screens.
+
+- [ ] **Step 1:** Replace the screen padding -- change:
+
+```css
+            #sc-lineup-screen {
+                position: fixed !important; inset: 0 !important;
+                z-index: 20500 !important; /* below #sc-np-card (21000) so OK on a film covers this */
+                background: rgba(6,4,9,0.97) !important;
+                display: none !important; flex-direction: column !important;
+                align-items: flex-start !important; justify-content: center !important;
+                font-family: 'Inter','Roboto',system-ui,sans-serif !important;
+                padding: 5vh 4vw !important; box-sizing: border-box !important;
+            }
+```
+
+to:
+
+```css
+            #sc-lineup-screen {
+                position: fixed !important; inset: 0 !important;
+                z-index: 20500 !important; /* below #sc-np-card (21000) so OK on a film covers this */
+                background: rgba(6,4,9,0.97) !important;
+                display: none !important; flex-direction: column !important;
+                align-items: flex-start !important; justify-content: center !important;
+                font-family: 'Inter','Roboto',system-ui,sans-serif !important;
+                padding: 2vh 4vw !important; box-sizing: border-box !important;
+                overflow-y: auto !important; /* safety net: never let content become unreachable
+                                                 on an especially short screen */
+            }
+```
+
+- [ ] **Step 2:** Shrink the header/subtitle (it now holds a full sentence-length real list title,
+      not a short static label) -- change:
+
+```css
+            #sc-lineup-header {
+                color: #fff !important; font-size: 20px !important; font-weight: 700 !important;
+                line-height: 1.25 !important; margin-bottom: 4px !important;
+            }
+            #sc-lineup-subtitle {
+                color: rgba(255,255,255,0.45) !important; font-size: 12px !important;
+                margin-bottom: 24px !important;
+            }
+            body.sc-tv #sc-lineup-header { font-size: 26px !important; }
+            body.sc-tv #sc-lineup-subtitle { font-size: 15px !important; }
+```
+
+to:
+
+```css
+            #sc-lineup-header {
+                color: #fff !important; font-size: 14px !important; font-weight: 700 !important;
+                line-height: 1.25 !important; margin-bottom: 4px !important;
+            }
+            #sc-lineup-subtitle {
+                color: rgba(255,255,255,0.45) !important; font-size: 11px !important;
+                margin-bottom: 12px !important;
+            }
+            body.sc-tv #sc-lineup-header { font-size: 15px !important; }
+            body.sc-tv #sc-lineup-subtitle { font-size: 12px !important; }
+```
+
+- [ ] **Step 3:** Widen the rail's side padding so the poster's shadow/focus-ring has clearance
+      instead of being clipped by the scroll container's own edge -- change:
+
+```css
+            #sc-lineup-rail {
+                display: flex !important; gap: 22px !important; width: 100% !important;
+                overflow-x: auto !important; overflow-y: hidden !important;
+                padding: 8px 4px 16px !important;
+```
+
+to:
+
+```css
+            #sc-lineup-rail {
+                display: flex !important; gap: 22px !important; width: 100% !important;
+                overflow-x: auto !important; overflow-y: hidden !important;
+                padding: 8px 24px 14px !important;
+```
+
+- [ ] **Step 4:** Reduce the poster's shadow blur (needs less clearance, and reads lighter) and
+      trim the TV poster size a bit further for safety margin on short screens -- change:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 308px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: contain !important; background-repeat: no-repeat !important;
+                background-position: center !important;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+                flex-shrink: 0 !important; /* keep the box exact regardless of available space */
+            }
+            .sc-lineup-item-current .sc-lineup-poster {
+                box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
+```
+
+to:
+
+```css
+            .sc-lineup-poster {
+                width: 220px !important; height: 308px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: contain !important; background-repeat: no-repeat !important;
+                background-position: center !important;
+                box-shadow: 0 6px 14px rgba(0,0,0,0.45) !important;
+                flex-shrink: 0 !important; /* keep the box exact regardless of available space */
+            }
+            .sc-lineup-item-current .sc-lineup-poster {
+                box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 6px 14px rgba(0,0,0,0.45) !important;
+            }
+```
+
+- [ ] **Step 5:** Match the reduced shadow blur in the focus-ring rule -- change:
+
+```css
+            body.sc-tv .sc-lineup-item.sc-tv-focus .sc-lineup-poster {
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 10px 30px rgba(0,0,0,0.5) !important;
+            }
+```
+
+to:
+
+```css
+            body.sc-tv .sc-lineup-item.sc-tv-focus .sc-lineup-poster {
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 6px 14px rgba(0,0,0,0.45) !important;
+            }
+```
+
+- [ ] **Step 6:** Trim the TV poster/title/eta sizes for extra safety margin on short screens --
+      change:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 364px !important; }
+            body.sc-tv .sc-lineup-title { font-size: 19px !important; }
+            body.sc-tv .sc-lineup-eta { font-size: 16px !important; }
+```
+
+to:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 340px !important; }
+            body.sc-tv .sc-lineup-title { font-size: 16px !important; }
+            body.sc-tv .sc-lineup-eta { font-size: 14px !important; }
+```
+
+- [ ] **Step 7:** `cd web && npm run bundle` -- confirm it succeeds.
+- [ ] **Step 8:** Commit:
+
+```bash
+git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "fix: shrink Lineup header/subtitle/poster to fit short screens, add shadow clearance"
+```
+
+### Task 9g (device feedback: visible side borders): make the TV poster frame an exact 2:3 ratio
+
+**Files:**
+- Modify: `web/src/styles/tv.css`
+
+> **Feedback:** posters now fit and aren't cropped, but there are visible empty bars on the left
+> and right of the art. Cause: `background-size: contain` only avoids cropping — it doesn't
+> eliminate letterboxing/pillarboxing if the FRAME's own ratio doesn't match the image's ratio. The
+> current TV frame (260x340) isn't exactly 2:3 (TMDB posters are always 2:3), so `contain` adds
+> side bars to preserve the image's real proportions inside a frame that's proportionally too wide.
+> Fix: narrow the width to exactly 2:3 at the height already confirmed to fit vertically (340px,
+> verified via the Task 9f device pass) -- 226x339 is an exact 2:3 pair (226*3 = 339*2 = 678) and
+> keeps the same vertical footprint, so no further viewport-fit re-verification should be needed.
+
+- [ ] **Step 1:** Change the TV poster size to an exact 2:3 ratio -- replace:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 260px !important; height: 340px !important; }
+```
+
+with:
+
+```css
+            body.sc-tv .sc-lineup-poster { width: 226px !important; height: 339px !important; }
+```
+
+- [ ] **Step 2:** The item's flex-basis (which sets the column's overall width, currently matching
+      the old 260px poster width) should shrink to match, so the tile's own box isn't wider than
+      its poster -- replace:
+
+```css
+            body.sc-tv .sc-lineup-item { flex-basis: 260px !important; }
+```
+
+with:
+
+```css
+            body.sc-tv .sc-lineup-item { flex-basis: 226px !important; }
+```
+
+- [ ] **Step 3:** `cd web && npm run bundle` -- confirm it succeeds.
+- [ ] **Step 4:** Commit:
+
+```bash
+git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "fix: make the Lineup TV poster frame an exact 2:3 ratio, eliminating side letterboxing"
+```
+
+### Task 9h (device feedback: real bug): D-pad can't scroll the Lineup rail past the initially-visible items
+
+**Files:**
+- Modify: `web/src/tvnav.js`
+
+> **Root cause:** the Lineup screen was designed to rely on the generic overlay `candidates()`
+> path (scoped cone-weighted scorer) for Left/Right paging, on the assumption that being an
+> `OVERLAY_IDS` member was enough. It isn't: `candidates()`'s generic list is filtered through
+> `isVisible()`, which explicitly excludes any element whose bounding rect is off-screen
+> (`r.right < 0 || r.left > innerWidth`). For a horizontally-scrolling rail, items beyond the
+> initially-visible window are off-screen and therefore never enter the candidate list at all —
+> so the D-pad can never move focus to them (a chicken-and-egg problem: an item only becomes
+> visible once scrolled into view, but it can only be scrolled into view by first being focused).
+> This is exactly the problem the Coming Attractions poster strip already solves with its own
+> explicit, NOT-`isVisible`-filtered special case in `move()` — the Lineup rail needs the same
+> treatment.
+
+**Interfaces:**
+- No new exports; this only adds a new branch inside `web/src/tvnav.js`'s existing `move()`
+  function.
+
+- [ ] **Step 1:** In `web/src/tvnav.js`'s `move(dir)`, insert a new special case immediately after
+      the existing Coming Attractions poster-strip block and before the generic
+      `const { scope, list } = candidates();` fallback. Find this exact code (the end of the
+      poster-strip block):
+
+```js
+                    // up / down → step back out of the reel onto the toggle
+                    posterZoom(focusEl, false);
+                    if (toggle) setFocus(toggle);
+                    return;
+                }
+            }
+        }
+
+        const { scope, list } = candidates();
+```
+
+Replace it with:
+
+```js
+                    // up / down → step back out of the reel onto the toggle
+                    posterZoom(focusEl, false);
+                    if (toggle) setFocus(toggle);
+                    return;
+                }
+            }
+        }
+
+        // Tonight's Lineup rail: a horizontal reel like the Coming Attractions strip above —
+        // items scrolled past the rail's edge are off-viewport but still valid targets, so
+        // (like the poster strip) this list is NOT isVisible-filtered. Without this, the
+        // generic candidates() path below would strand navigation at whatever's currently
+        // on-screen, since isVisible() excludes anything scrolled out of view.
+        const lineupScreen = document.getElementById('sc-lineup-screen');
+        if (lineupScreen && lineupScreen.classList.contains('sc-lineup-visible') &&
+            (dir === 'left' || dir === 'right')) {
+            const rail = document.getElementById('sc-lineup-rail');
+            const items = rail ? [...rail.querySelectorAll('.sc-lineup-item')] : [];
+            if (items.length) {
+                const i = items.indexOf(focusEl);
+                const ni = dir === 'right' ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
+                setFocus(items[ni]);
+                return;
+            }
+        }
+
+        const { scope, list } = candidates();
+```
+
+- [ ] **Step 2:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 3:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 4:** Commit:
+
+```bash
+git add web/src/tvnav.js app/src/main/assets/cytube_mobile.js
+git commit -m "fix: Lineup rail Left/Right can now reach items scrolled off the initial view"
+```
+
+### Task 9i (design change per user's domain knowledge + real list data): parse the list's Published date
+
+**Files:**
+- Modify: `web/src/lineup/letterboxd.js`
+- Modify: `web/test/letterboxd.test.mjs`
+
+> **Context:** the user asked whether we know when a fetched Letterboxd list was actually created,
+> to tell a genuinely current list apart from a stale one left over from a prior week (relevant
+> Mon/Tue, before the new list is posted ~Wednesday). Checked the real list page
+> (`curl.exe`, 2026-07-06): it carries exactly one machine-readable timestamp,
+> `<span class="published">Published <time datetime="2026-07-01T16:00:37.212Z">`. This task parses
+> it; Task 9k uses it to gate on "is this list from the current week" using the actual system
+> clock, rather than guessing from a fixed day-count or day-of-week.
+
+**Interfaces:**
+- Produces: `parseListPublishedDate(listPageHtml)` -> ISO datetime string or `null`.
+  `fetchTonightsSchedule()`'s return shape gains a `publishedAt` field:
+  `{ listTitle, publishedAt, items }`.
+
+- [ ] **Step 1:** Add to `web/test/letterboxd.test.mjs` -- update the import line:
+
+```js
+import { findCurrentWeekListUrl, parseListPublishedDate, parseListTitle, parseListTitles } from '../src/lineup/letterboxd.js';
+```
+
+and add these two tests (the fixture is the real captured markup, 2026-07-06):
+
+```js
+const PUBLISHED_FIXTURE = '<p class="list-date"> <span class="published">Published <time datetime="2026-07-01T16:00:37.212Z" class="timeago -longform timeago-pending">2026-07-01T16:00:37.212Z</time></span> </p>';
+
+test('parseListPublishedDate extracts the ISO timestamp from the Published span', () => {
+    assert.strictEqual(parseListPublishedDate(PUBLISHED_FIXTURE), '2026-07-01T16:00:37.212Z');
+});
+test('parseListPublishedDate returns null when there is no Published span', () => {
+    assert.strictEqual(parseListPublishedDate('<p>no date here</p>'), null);
+});
+```
+
+- [ ] **Step 2:** Run to confirm the two new tests fail (module doesn't export
+      `parseListPublishedDate` yet): `cd web && node --test test/letterboxd.test.mjs`.
+- [ ] **Step 3:** In `web/src/lineup/letterboxd.js`, add the new function (place it after
+      `parseListTitle`):
+
+```js
+// The list page's "Published <time datetime="...">" gives the list's own creation timestamp --
+// used (Task 9k) to tell a genuinely current list apart from a stale one left from a prior week.
+export function parseListPublishedDate(listPageHtml) {
+    const m = listPageHtml.match(/<span class="published">[^<]*<time datetime="([^"]*)"/i);
+    return m ? m[1] : null;
+}
+```
+
+- [ ] **Step 4:** Change `fetchTonightsSchedule`'s return value -- replace:
+
+```js
+    const items = parseListTitles(listRes.body);
+    if (!items.length) throw new Error('no titles parsed from schedule list');
+    return { listTitle: parseListTitle(listRes.body), items };
+```
+
+with:
+
+```js
+    const items = parseListTitles(listRes.body);
+    if (!items.length) throw new Error('no titles parsed from schedule list');
+    return {
+        listTitle: parseListTitle(listRes.body),
+        publishedAt: parseListPublishedDate(listRes.body),
+        items,
+    };
+```
+
+- [ ] **Step 5:** Run all tests again: `node --test test/letterboxd.test.mjs` -- expect all PASS.
+- [ ] **Step 6:** `npm run lint` -- expect no errors.
+- [ ] **Step 7:** Commit:
+
+```bash
+git add web/src/lineup/letterboxd.js web/test/letterboxd.test.mjs
+git commit -m "feat: parse the Letterboxd list's Published date"
+```
+
+### Task 9j: `timing.js` -- current-week check (using system time) + widened cold-start window
+
+**Files:**
+- Modify: `web/src/lineup/timing.js`
+- Modify: `web/test/timing.test.mjs`
+
+**Interfaces:**
+- Produces: `isListForCurrentWeek(publishedAt, now = new Date())` -> boolean.
+  `isBeforeFridayNoonPacific(now = new Date())` -> boolean (moved here from `data.js`, widened,
+  and now independently unit-tested for the first time).
+
+> Per the user: rather than a fuzzy "N days old" threshold, use the actual system clock to check
+> whether the list's Published date falls in the *current* Mon-Sun calendar week (Pacific). A list
+> published Wednesday always covers the Fri-Sun immediately following, in the same Mon-Sun week --
+> so "published this week" is equivalent to "covers the upcoming/current weekend". This correctly
+> flips from `true` to `false` exactly at the Monday boundary, which is precisely the "no longer
+> Fri-Sun, and no new list yet" gap the user described.
+
+- [ ] **Step 1:** Add to `web/test/timing.test.mjs` the new tests (alongside the existing ones --
+      add this import line if not already present, and these test cases):
+
+```js
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from '../src/lineup/timing.js';
+
+// Fixed reference dates -- 2026-07-01 was confirmed a Wednesday from a real captured list page.
+const PUBLISHED = '2026-07-01T16:00:37.212Z'; // Wed 2026-07-01, 09:00 PDT
+
+test('isListForCurrentWeek: true for "now" later the same week (Friday)', () => {
+    assert.strictEqual(isListForCurrentWeek(PUBLISHED, new Date('2026-07-03T20:00:00.000Z')), true);
+});
+test('isListForCurrentWeek: true for "now" on the last day of that week (Sunday)', () => {
+    assert.strictEqual(isListForCurrentWeek(PUBLISHED, new Date('2026-07-05T20:00:00.000Z')), true);
+});
+test('isListForCurrentWeek: false once "now" crosses into the next week (Monday)', () => {
+    assert.strictEqual(isListForCurrentWeek(PUBLISHED, new Date('2026-07-06T20:00:00.000Z')), false);
+});
+test('isListForCurrentWeek: false well into the next week (Wednesday)', () => {
+    assert.strictEqual(isListForCurrentWeek(PUBLISHED, new Date('2026-07-08T20:00:00.000Z')), false);
+});
+test('isListForCurrentWeek: false when publishedAt is null', () => {
+    assert.strictEqual(isListForCurrentWeek(null, new Date('2026-07-03T20:00:00.000Z')), false);
+});
+test('isListForCurrentWeek: false when publishedAt is unparseable', () => {
+    assert.strictEqual(isListForCurrentWeek('not-a-date', new Date('2026-07-03T20:00:00.000Z')), false);
+});
+
+test('isBeforeFridayNoonPacific: true on Wednesday', () => {
+    assert.strictEqual(isBeforeFridayNoonPacific(new Date('2026-07-01T20:00:00.000Z')), true);
+});
+test('isBeforeFridayNoonPacific: true on Thursday', () => {
+    assert.strictEqual(isBeforeFridayNoonPacific(new Date('2026-07-02T20:00:00.000Z')), true);
+});
+test('isBeforeFridayNoonPacific: true Friday morning before noon Pacific', () => {
+    assert.strictEqual(isBeforeFridayNoonPacific(new Date('2026-07-03T18:00:00.000Z')), true); // 11:00 PDT
+});
+test('isBeforeFridayNoonPacific: false Friday afternoon after noon Pacific', () => {
+    assert.strictEqual(isBeforeFridayNoonPacific(new Date('2026-07-03T20:00:00.000Z')), false); // 13:00 PDT
+});
+test('isBeforeFridayNoonPacific: false on Saturday', () => {
+    assert.strictEqual(isBeforeFridayNoonPacific(new Date('2026-07-04T20:00:00.000Z')), false);
+});
+test('isBeforeFridayNoonPacific: false on Monday', () => {
+    assert.strictEqual(isBeforeFridayNoonPacific(new Date('2026-07-06T20:00:00.000Z')), false);
+});
+```
+
+  (If `formatEta`/`medianGapSeconds` are already imported from a prior task's test additions in
+  this file, merge the import list rather than duplicating the import statement.)
+
+- [ ] **Step 2:** Run to confirm the new tests fail (functions don't exist yet):
+      `cd web && node --test test/timing.test.mjs`.
+- [ ] **Step 3:** Add to `web/src/lineup/timing.js` (after the existing `medianGapSeconds`):
+
+```js
+const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+const DAY_MS = 86400000;
+
+// A UTC-anchored timestamp for just d's Pacific CALENDAR DATE (no time-of-day) -- safe for
+// day-difference arithmetic regardless of DST, since we never touch the time component.
+function pacificDateOnly(d) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(d);
+    const get = (t) => parts.find(p => p.type === t).value;
+    return Date.UTC(+get('year'), +get('month') - 1, +get('day'));
+}
+
+function pacificWeekday(d) {
+    return new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short' }).format(d);
+}
+
+// True if the list's Published timestamp falls within the current Mon-Sun week (Pacific) --
+// i.e. this is genuinely the current week's list, not a stale one left from a prior week. A
+// list published Wednesday always covers the Fri-Sun immediately following, in the same
+// Mon-Sun calendar week, so "published this week" is equivalent to "covers the
+// upcoming/current weekend".
+export function isListForCurrentWeek(publishedAt, now = new Date()) {
+    if (!publishedAt) return false;
+    const pub = new Date(publishedAt);
+    if (isNaN(pub.getTime())) return false;
+
+    const todayIdx = WEEKDAY_INDEX[pacificWeekday(now)];
+    const daysSinceMonday = (todayIdx + 6) % 7; // Mon=0 ... Sun=6
+    const startOfWeek = pacificDateOnly(now) - daysSinceMonday * DAY_MS;
+    const startOfNextWeek = startOfWeek + 7 * DAY_MS;
+
+    const pubDay = pacificDateOnly(pub);
+    return pubDay >= startOfWeek && pubDay < startOfNextWeek;
+}
+
+// True during the window the list exists but nothing live has started yet: the list is
+// typically posted Wednesday for the upcoming Fri-Sun marathon, and showtime is "about Noon
+// PST" on Friday. Wed/Thu/Fri-before-noon get one coarse "the first film starts around then"
+// guess; Sat/Sun (marathon likely live already) and Mon/Tue don't -- and by the time this is
+// checked, the caller has already confirmed via isListForCurrentWeek() that the list itself is
+// genuinely current, so Mon/Tue staleness is handled separately, not by this function.
+export function isBeforeFridayNoonPacific(now = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles', weekday: 'short', hour: 'numeric', hourCycle: 'h23',
+    }).formatToParts(now);
+    const weekday = parts.find(p => p.type === 'weekday').value;
+    const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
+    if (weekday === 'Wed' || weekday === 'Thu') return true;
+    if (weekday === 'Fri') return hour < 12;
+    return false;
+}
+```
+
+- [ ] **Step 4:** Run the tests again: `node --test test/timing.test.mjs` -- expect all PASS.
+- [ ] **Step 5:** `npm run lint` -- expect no errors.
+- [ ] **Step 6:** Commit:
+
+```bash
+git add web/src/lineup/timing.js web/test/timing.test.mjs
+git commit -m "feat: current-week check (system time) + widened cold-start estimate window"
+```
+
+### Task 9k: `data.js` -- gate on the list actually being current, wire the widened estimate window
+
+**Files:**
+- Modify: `web/src/lineup/data.js`
+
+**Interfaces:**
+- Consumes: `isListForCurrentWeek`, `isBeforeFridayNoonPacific` from `./timing.js` (Task 9j);
+  `fetchTonightsSchedule()`'s `publishedAt` field (Task 9i).
+
+- [ ] **Step 1:** Update the imports -- replace:
+
+```js
+import { formatEta, medianGapSeconds } from './timing.js';
+```
+
+with:
+
+```js
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+```
+
+- [ ] **Step 2:** Remove the now-redundant local `isFridayBeforeNoonPacific` function entirely --
+      delete this whole block (it's replaced by the imported `isBeforeFridayNoonPacific`):
+
+```js
+// True only during the narrow window this heuristic exists for: the list is usually posted
+// mid-week and showtime is "about Noon PST" on Friday, so before Friday noon Pacific we have
+// no live anchor yet but CAN still make one coarse guess (the first film starts around then).
+function isFridayBeforeNoonPacific(now = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles', weekday: 'short', hour: 'numeric', hourCycle: 'h23',
+    }).formatToParts(now);
+    const weekday = parts.find(p => p.type === 'weekday').value;
+    const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
+    return weekday === 'Fri' && hour < 12;
+}
+```
+
+- [ ] **Step 3:** Gate `ensureSchedule()` on the list actually being for the current week -- replace:
+
+```js
+async function ensureSchedule() {
+    if (_scheduleCache || _fetchFailed) return;
+    try {
+        const result = await fetchTonightsSchedule();
+        _scheduleCache = result.items;
+        _listTitle = result.listTitle;
+    } catch (e) {
+        _fetchFailed = true;
+    }
+}
+```
+
+with:
+
+```js
+async function ensureSchedule() {
+    if (_scheduleCache || _fetchFailed) return;
+    try {
+        const result = await fetchTonightsSchedule();
+        if (!isListForCurrentWeek(result.publishedAt)) {
+            // Stale -- this list covers a weekend from a prior week (most likely Mon/Tue,
+            // before the new one is posted ~Wednesday). Treat it the same as a fetch
+            // failure: fall back to the Now/Next-only view rather than show a whole
+            // already-aired weekend's lineup as if it were still upcoming.
+            _fetchFailed = true;
+            return;
+        }
+        _scheduleCache = result.items;
+        _listTitle = result.listTitle;
+    } catch (e) {
+        _fetchFailed = true;
+    }
+}
+```
+
+- [ ] **Step 4:** Update the call site -- replace:
+
+```js
+        const fridayEstimate = isFridayBeforeNoonPacific();
+```
+
+with:
+
+```js
+        const fridayEstimate = isBeforeFridayNoonPacific();
+```
+
+  (the local variable name `fridayEstimate` and the `'≈ Fri 12:00 PM'` label text stay exactly as
+  they are -- only where the deciding function comes from changes.)
+
+- [ ] **Step 5:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 6:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 7:** Commit:
+
+```bash
+git add web/src/lineup/data.js app/src/main/assets/cytube_mobile.js
+git commit -m "feat: fall back when the fetched list isn't for the current week"
+```
+
+### Task 9l (device feedback): extract MOTD poster-image reading into a shared module
+
+**Files:**
+- Create: `web/src/motd.js`
+- Modify: `web/src/posters.js`
+
+> **Context:** the "Now/Next" fallback (used when Letterboxd is unreachable or this week's list
+> hasn't posted yet) doesn't work well as a user experience. Feedback: fall back to the same
+> admin-curated "Coming Attractions" poster art the small strip already shows instead -- there's
+> always something real to look at that way. Both the poster strip (`posters.js`) and the Lineup
+> fallback (`lineup/data.js`, Task 9m) need the same MOTD-image-reading logic. Putting it in a
+> shared `motd.js` (rather than having `data.js` import from `posters.js` directly) avoids a
+> circular import: `posters.js` already imports `showLineupScreen` from `lineup/screen.js`, which
+> imports `getTonightsLineup` from `lineup/data.js` -- `data.js` importing back from `posters.js`
+> would complete a cycle.
+
+**Interfaces:**
+- Produces: `getMotdPosterImages()` -> array of `<img>` elements (empty array if `#motdrow`
+  doesn't exist or has no qualifying images). Consumed by `posters.js` (this task) and
+  `lineup/data.js` (Task 9m).
+
+- [ ] **Step 1:** Create `web/src/motd.js`:
+
+```js
+/* ==========================================================
+   MOTD POSTER IMAGES -- the admin-curated "Coming Attractions" art from
+   #motdrow. Shared by the small poster strip (posters.js) and the
+   Tonight's Lineup fallback (lineup/data.js) when Letterboxd isn't
+   usable, so there's still real curated art to look at either way.
+========================================================== */
+export function getMotdPosterImages() {
+    const motd = document.getElementById('motdrow');
+    if (!motd) return [];
+    return [...motd.querySelectorAll('img')].filter((img) => {
+        // Poster images in the MOTD are 125x175 — keep portrait-ish images, skip wide banners.
+        const w = parseInt(img.getAttribute('width') || '0', 10);
+        const h = parseInt(img.getAttribute('height') || '0', 10);
+        return h >= 100 && w <= 200;
+    });
+}
+```
+
+- [ ] **Step 2:** In `web/src/posters.js`, add the import at the top of the file:
+
+```js
+import { getMotdPosterImages } from './motd.js';
+```
+
+- [ ] **Step 3:** In `initPosterStrip()`, replace the inline MOTD lookup/filter -- change:
+
+```js
+export function initPosterStrip() {
+    const motd = document.getElementById('motdrow');
+    if (!motd) return;
+
+    // Build the poster strip container from MOTD images
+    const imgs = [...motd.querySelectorAll('img')].filter(img => {
+        // Read HTML attributes (not rendered dimensions — motdrow is hidden so rendered = 0)
+        const w = parseInt(img.getAttribute('width') || 0);
+        const h = parseInt(img.getAttribute('height') || 0);
+        // Poster images in the MOTD are 125x175 — keep portrait-ish images, skip wide banners
+        return h >= 100 && w <= 200;
+    });
+    if (!imgs.length) return;
+```
+
+to:
+
+```js
+export function initPosterStrip() {
+    // Build the poster strip container from MOTD images
+    const imgs = getMotdPosterImages();
+    if (!imgs.length) return;
+```
+
+- [ ] **Step 4:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 5:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 6 (DEVICE smoke, quick check only):** the small Coming Attractions poster strip
+      (phone/touch behavior, or the toggle-button path if somehow reached) should look and behave
+      completely unchanged -- this step is a pure refactor with no intended behavior change.
+- [ ] **Step 7:** Commit:
+
+```bash
+git add web/src/motd.js web/src/posters.js app/src/main/assets/cytube_mobile.js
+git commit -m "refactor: extract MOTD poster-image reading into a shared module"
+```
+
+### Task 9m (device feedback): fall back to the static Coming Attractions art, not a live Now/Next view
+
+**Files:**
+- Modify: `web/src/lineup/data.js`
+
+**Interfaces:**
+- Consumes: `getMotdPosterImages()` from `../motd.js` (Task 9l).
+
+- [ ] **Step 1:** Add the import -- change:
+
+```js
+import { fetchTonightsSchedule } from './letterboxd.js';
+import { lookupMovie, movieState } from '../metadata/tmdb.js';
+import { onSocket } from '../socket.js';
+import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+```
+
+to:
+
+```js
+import { fetchTonightsSchedule } from './letterboxd.js';
+import { lookupMovie, movieState } from '../metadata/tmdb.js';
+import { onSocket } from '../socket.js';
+import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+import { getMotdPosterImages } from '../motd.js';
+```
+
+- [ ] **Step 2:** Rename the fallback title constant to match what it now actually shows -- change:
+
+```js
+const FALLBACK_LIST_TITLE = 'Now / Next';
+```
+
+to:
+
+```js
+const FALLBACK_LIST_TITLE = 'Coming Attractions';
+```
+
+- [ ] **Step 3:** Rewrite `fallbackItems()` -- replace:
+
+```js
+// Now/Next-only fallback: only what a plain viewer can see live, no future lineup.
+function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+        items.push({
+            cleanTitle: movieState.lastMovieTitle, cleanYear: null,
+            poster: null, backdrop: null, overview: '',
+            isNowPlaying: true, etaLabel: '',
+        });
+    }
+    if (_lastChangeMedia && _lastChangeMedia.title && _lastChangeMedia.title !== movieState.lastMovieTitle) {
+        items.push({
+            cleanTitle: _lastChangeMedia.title, cleanYear: null,
+            poster: null, backdrop: null, overview: '',
+            isNowPlaying: false, etaLabel: 'LATE',
+        });
+    }
+    return items;
+}
+```
+
+with:
+
+```js
+// Fallback when Letterboxd is unreachable or this week's list hasn't posted yet: the current
+// item (if known) plus the same admin-curated "Coming Attractions" art the small poster strip
+// shows -- no real title/time data for those, but still something real to look at instead of
+// an empty or thin live-only view.
+function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+        items.push({
+            cleanTitle: movieState.lastMovieTitle, cleanYear: null,
+            poster: null, backdrop: null, overview: '',
+            isNowPlaying: true, etaLabel: '',
+        });
+    }
+    getMotdPosterImages().forEach((img) => {
+        items.push({
+            cleanTitle: img.title || img.alt || 'Coming Attraction', cleanYear: null,
+            poster: img.src, backdrop: null, overview: '',
+            isNowPlaying: false, etaLabel: 'LATE',
+        });
+    });
+    return items;
+}
+```
+
+  Note: `_lastChangeMedia` is still read by the bumper-gap-learning `onSocket('changeMedia', ...)`
+  listener elsewhere in this file -- only `fallbackItems()`'s own use of it is removed here, the
+  variable itself and that listener are untouched.
+
+- [ ] **Step 4:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 5:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 6:** Commit:
+
+```bash
+git add web/src/lineup/data.js app/src/main/assets/cytube_mobile.js
+git commit -m "fix: Lineup fallback shows the static Coming Attractions art, not a thin Now/Next view"
+```
+
+### Task 9n (device feedback): blank instead of "LATE", real poster for fallback now-playing, skip likely shorts/bumpers
+
+**Files:**
+- Modify: `web/src/lineup/data.js`
+
+> **Feedback, four items:**
+> 1. When there's no time estimate at all, show nothing rather than the literal word "LATE".
+> 2. The fallback's "now playing" item never got a real poster -- it was hardcoded
+>    `poster: null` instead of being looked up via TMDB like every other item.
+> 3. If what's "now playing" is actually a short/bumper (not a real feature), it shouldn't be
+>    shown as "now playing" at all in the fallback. Heuristic: if TMDB is configured and a lookup
+>    for the exact title confidently finds nothing (`info.cleanTitle` is falsy), treat it as
+>    probably not a real feature and skip it. Without a TMDB key configured at all there's no way
+>    to tell, so default to showing it (better to show something than wrongly hide every title).
+> 4. The static Coming Attractions fallback posters are "for display only" -- OK on them
+>    shouldn't do anything (they have no real title/overview to show in a card).
+
+**Interfaces:**
+- Every item gains an implicit `clickable` field (`undefined`/`true` = clickable, `false` = display
+  only). `web/src/lineup/screen.js` (Task 9o) reads this to decide whether to attach a click
+  handler.
+
+- [ ] **Step 1:** Add the new imports -- change:
+
+```js
+import { fetchTonightsSchedule } from './letterboxd.js';
+import { lookupMovie, movieState } from '../metadata/tmdb.js';
+import { onSocket } from '../socket.js';
+import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+import { getMotdPosterImages } from '../motd.js';
+```
+
+to:
+
+```js
+import { fetchTonightsSchedule } from './letterboxd.js';
+import { lookupMovie, movieState } from '../metadata/tmdb.js';
+import { onSocket } from '../socket.js';
+import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+import { getMotdPosterImages } from '../motd.js';
+import { hasKey, LS_TMDB } from '../store.js';
+```
+
+- [ ] **Step 2:** Rewrite `fallbackItems()` -- replace:
+
+```js
+// Fallback when Letterboxd is unreachable or this week's list hasn't posted yet: the current
+// item (if known) plus the same admin-curated "Coming Attractions" art the small poster strip
+// shows -- no real title/time data for those, but still something real to look at instead of
+// an empty or thin live-only view.
+function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+        items.push({
+            cleanTitle: movieState.lastMovieTitle, cleanYear: null,
+            poster: null, backdrop: null, overview: '',
+            isNowPlaying: true, etaLabel: '',
+        });
+    }
+    getMotdPosterImages().forEach((img) => {
+        items.push({
+            cleanTitle: img.title || img.alt || 'Coming Attraction', cleanYear: null,
+            poster: img.src, backdrop: null, overview: '',
+            isNowPlaying: false, etaLabel: 'LATE',
+        });
+    });
+    return items;
+}
+```
+
+with:
+
+```js
+// Fallback when Letterboxd is unreachable or this week's list hasn't posted yet: the current
+// item (if known and it looks like a real feature, not a short/bumper) plus the same
+// admin-curated "Coming Attractions" art the small poster strip shows (display-only -- no real
+// title/overview to show for those, so OK does nothing) -- still something real to look at
+// instead of an empty or thin live-only view.
+async function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+        const info = await lookupMovie(movieState.lastMovieTitle, null);
+        // Skip likely bumpers/shorts: if TMDB is configured and confidently found nothing for
+        // this exact title, it's probably not a real feature. Without a TMDB key at all there's
+        // no way to tell, so default to showing it.
+        if (!hasKey(LS_TMDB) || info.cleanTitle) {
+            items.push({ ...buildBase(info, movieState.lastMovieTitle, null), isNowPlaying: true, etaLabel: '' });
+        }
+    }
+    getMotdPosterImages().forEach((img) => {
+        items.push({
+            cleanTitle: img.title || img.alt || 'Coming Attraction', cleanYear: null,
+            poster: img.src, backdrop: null, overview: '',
+            isNowPlaying: false, etaLabel: '', clickable: false,
+        });
+    });
+    return items;
+}
+```
+
+- [ ] **Step 3:** `fallbackItems()` is now `async` -- update its one call site to await it. Change:
+
+```js
+    if (!_scheduleCache) return { listTitle: FALLBACK_LIST_TITLE, items: fallbackItems() };
+```
+
+to:
+
+```js
+    if (!_scheduleCache) return { listTitle: FALLBACK_LIST_TITLE, items: await fallbackItems() };
+```
+
+- [ ] **Step 4:** Replace "LATE" with a blank label in the `currentIndex === -1` branch -- change:
+
+```js
+                etaLabel: (fridayEstimate && i === 0) ? '≈ Fri 12:00 PM' : 'LATE',
+```
+
+to:
+
+```js
+                etaLabel: (fridayEstimate && i === 0) ? '≈ Fri 12:00 PM' : '',
+```
+
+- [ ] **Step 5:** Replace "LATE" with a blank label in the main projection loop -- change:
+
+```js
+        if (offset > MAX_ESTIMATED_AHEAD) {
+            items.push({ ...base, isNowPlaying: false, etaLabel: 'LATE' });
+        } else {
+```
+
+to:
+
+```js
+        if (offset > MAX_ESTIMATED_AHEAD) {
+            items.push({ ...base, isNowPlaying: false, etaLabel: '' });
+        } else {
+```
+
+- [ ] **Step 6:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 7:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 8:** Commit:
+
+```bash
+git add web/src/lineup/data.js app/src/main/assets/cytube_mobile.js
+git commit -m "fix: blank (not LATE) for unknown times, real poster + short/bumper filter for fallback now-playing"
+```
+
+### Task 9o (device feedback): fallback posters are display-only -- OK should do nothing
+
+**Files:**
+- Modify: `web/src/lineup/screen.js`
+
+**Interfaces:**
+- Consumes: `item.clickable` (Task 9n) -- `false` means don't attach a click handler.
+
+- [ ] **Step 1:** In `renderItems()`, gate the click handler on `item.clickable` -- change:
+
+```js
+        btn.addEventListener('click', () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
+```
+
+to:
+
+```js
+        // Static Coming Attractions fallback posters are display-only (item.clickable === false)
+        // -- they have no real title/overview to show, so OK does nothing for them.
+        if (item.clickable !== false) {
+            btn.addEventListener('click', () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
+        }
+```
+
+- [ ] **Step 2:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 3:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 4:** Commit:
+
+```bash
+git add web/src/lineup/screen.js app/src/main/assets/cytube_mobile.js
+git commit -m "fix: display-only Lineup items (fallback posters) don't respond to OK"
+```
+
+### Task 9p (bug found via live device testing, not user-reported): normalize the current-title match, blank the fallback poster's placeholder title
+
+**Files:**
+- Modify: `web/src/lineup/data.js`
+
+> **Root cause, verified live 2026-07-06:** `movieState.lastMovieTitle` (set in `titleinject.js`)
+> starts as the raw queue title, but gets OVERWRITTEN with the TMDB-cleaned `"Title (Year)"`
+> string shortly after each `changeMedia` (the header's own text is rewritten once the async TMDB
+> lookup resolves, and a later re-trigger of `injectMovieLinks` re-reads that rewritten text back
+> into `movieState.lastMovieTitle`). Confirmed live: with "Toy Soldiers (1991)" genuinely playing,
+> `movieState.lastMovieTitle` held exactly that string -- year included -- and every place in this
+> file that used it directly (the schedule-title match, and the Task 9n fallback's TMDB lookup)
+> broke as a result: the lookup for the literal string `"Toy Soldiers (1991)"` found no confident
+> TMDB match, so Task 9n's short/bumper heuristic wrongly treated a real movie as a bumper and
+> skipped it entirely. The SAME issue would prevent the main matched-live pipeline from ever
+> finding `currentIndex` once a title has "settled" into this format, since schedule titles from
+> Letterboxd are bare (no year) and a direct string comparison against a year-suffixed title never
+> matches. Fix: run `movieState.lastMovieTitle` (and the `changeMedia` payload's own `title`, used
+> by the bumper-gap-learning listener) through the EXISTING `parseMovieFilename` utility (already
+> used elsewhere in this codebase for exactly this "Title (Year)" extraction) before using it for
+> any match or lookup.
+>
+> Also folds in a small follow-up to Task 9n's own fallback-poster change: the placeholder text
+> `'Coming Attraction'` shown when a MOTD image has no `title`/`alt` should be blank instead, per
+> the same "don't say anything when we don't know" principle already applied to times.
+
+- [ ] **Step 1:** Add the import -- change:
+
+```js
+import { fetchTonightsSchedule } from './letterboxd.js';
+import { lookupMovie, movieState } from '../metadata/tmdb.js';
+import { onSocket } from '../socket.js';
+import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+import { getMotdPosterImages } from '../motd.js';
+import { hasKey, LS_TMDB } from '../store.js';
+```
+
+to:
+
+```js
+import { fetchTonightsSchedule } from './letterboxd.js';
+import { lookupMovie, movieState } from '../metadata/tmdb.js';
+import { onSocket } from '../socket.js';
+import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
+import { formatEta, isBeforeFridayNoonPacific, isListForCurrentWeek, medianGapSeconds } from './timing.js';
+import { getMotdPosterImages } from '../motd.js';
+import { hasKey, LS_TMDB } from '../store.js';
+import { parseMovieFilename } from '../parse.js';
+```
+
+- [ ] **Step 2:** Normalize the `changeMedia` payload's title before matching it against the
+      schedule (used by the bumper-gap-learning listener) -- change:
+
+```js
+onSocket('changeMedia', (d) => {
+    const title = d && d.title;
+    const matchesSchedule = !!(title && _scheduleCache &&
+        _scheduleCache.some(s => s.title.toLowerCase() === title.toLowerCase()));
+    if (title && !matchesSchedule && _scheduleCache) {
+        _lastUnmatchedStart = Date.now();
+    } else if (_lastUnmatchedStart) {
+        _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1000);
+        _lastUnmatchedStart = null;
+    }
+    _lastChangeMedia = d || null;
+});
+```
+
+to:
+
+```js
+onSocket('changeMedia', (d) => {
+    const rawTitle = d && d.title;
+    const title = rawTitle ? parseMovieFilename(rawTitle).title : null;
+    const matchesSchedule = !!(title && _scheduleCache &&
+        _scheduleCache.some(s => s.title.toLowerCase() === title.toLowerCase()));
+    if (rawTitle && !matchesSchedule && _scheduleCache) {
+        _lastUnmatchedStart = Date.now();
+    } else if (_lastUnmatchedStart) {
+        _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1000);
+        _lastUnmatchedStart = null;
+    }
+    _lastChangeMedia = d || null;
+});
+```
+
+- [ ] **Step 3:** Normalize `movieState.lastMovieTitle` before the fallback's TMDB lookup, and blank
+      the MOTD placeholder title -- replace:
+
+```js
+async function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+        const info = await lookupMovie(movieState.lastMovieTitle, null);
+        // Skip likely bumpers/shorts: if TMDB is configured and confidently found nothing for
+        // this exact title, it's probably not a real feature. Without a TMDB key at all there's
+        // no way to tell, so default to showing it.
+        if (!hasKey(LS_TMDB) || info.cleanTitle) {
+            items.push({ ...buildBase(info, movieState.lastMovieTitle, null), isNowPlaying: true, etaLabel: '' });
+        }
+    }
+    getMotdPosterImages().forEach((img) => {
+        items.push({
+            cleanTitle: img.title || img.alt || 'Coming Attraction', cleanYear: null,
+            poster: img.src, backdrop: null, overview: '',
+            isNowPlaying: false, etaLabel: '', clickable: false,
+        });
+    });
+    return items;
+}
+```
+
+with:
+
+```js
+async function fallbackItems() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+        const { title, year } = parseMovieFilename(movieState.lastMovieTitle);
+        const info = await lookupMovie(title, year);
+        // Skip likely bumpers/shorts: if TMDB is configured and confidently found nothing for
+        // this exact title, it's probably not a real feature. Without a TMDB key at all there's
+        // no way to tell, so default to showing it.
+        if (!hasKey(LS_TMDB) || info.cleanTitle) {
+            items.push({ ...buildBase(info, title, year), isNowPlaying: true, etaLabel: '' });
+        }
+    }
+    getMotdPosterImages().forEach((img) => {
+        items.push({
+            cleanTitle: img.title || img.alt || '', cleanYear: null,
+            poster: img.src, backdrop: null, overview: '',
+            isNowPlaying: false, etaLabel: '', clickable: false,
+        });
+    });
+    return items;
+}
+```
+
+- [ ] **Step 4:** Normalize `movieState.lastMovieTitle` before the main `currentIndex` match --
+      replace:
+
+```js
+    const infos = await Promise.all(_scheduleCache.map(({ title, year }) => lookupMovie(title, year)));
+    const currentIndex = _scheduleCache.findIndex(s =>
+        movieState.lastMovieTitle && s.title.toLowerCase() === movieState.lastMovieTitle.toLowerCase());
+```
+
+with:
+
+```js
+    const infos = await Promise.all(_scheduleCache.map(({ title, year }) => lookupMovie(title, year)));
+    const currentTitle = movieState.lastMovieTitle ? parseMovieFilename(movieState.lastMovieTitle).title : '';
+    const currentIndex = _scheduleCache.findIndex(s =>
+        currentTitle && s.title.toLowerCase() === currentTitle.toLowerCase());
+```
+
+- [ ] **Step 5:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 6:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 7 (DEVICE, quick check):** with a real, non-year-suffixed genuine match no longer
+      needed -- reopen the Lineup screen while a real feature is playing and confirm it now shows
+      up as "NOW PLAYING" with a real poster (not skipped).
+- [ ] **Step 8:** Commit:
+
+```bash
+git add web/src/lineup/data.js app/src/main/assets/cytube_mobile.js
+git commit -m "fix: strip the year suffix before matching/looking up the current title"
+```
+
+### Task 9q (device feedback): gray focus ring for display-only (fallback) items
+
+**Files:**
+- Modify: `web/src/lineup/screen.js`
+- Modify: `web/src/styles/tv.css`
+
+> The orange D-pad focus ring is meant to signal "this is selectable" -- for the static Coming
+> Attractions fallback posters (`clickable: false`, Task 9n/9o), landing focus on one should look
+> visually different (gray, not orange) to signal there's nothing to select here.
+
+- [ ] **Step 1:** In `web/src/lineup/screen.js`'s `renderItems()`, add a class for display-only
+      items -- change:
+
+```js
+        btn.className = 'sc-lineup-item' + (item.isNowPlaying ? ' sc-lineup-item-current' : '');
+```
+
+to:
+
+```js
+        btn.className = 'sc-lineup-item'
+            + (item.isNowPlaying ? ' sc-lineup-item-current' : '')
+            + (item.clickable === false ? ' sc-lineup-item-static' : '');
+```
+
+- [ ] **Step 2:** In `web/src/styles/tv.css`, add a gray focus-ring override right after the
+      existing orange one -- find:
+
+```css
+            body.sc-tv .sc-lineup-item.sc-tv-focus { outline: none !important; box-shadow: none !important; }
+            body.sc-tv .sc-lineup-item.sc-tv-focus .sc-lineup-poster {
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 6px 14px rgba(0,0,0,0.45) !important;
+            }
+```
+
+and add immediately after it:
+
+```css
+            /* Display-only fallback items (Coming Attractions art with no real title/time data)
+               get a gray focus ring instead of orange, signaling there's nothing to select. */
+            body.sc-tv .sc-lineup-item-static.sc-tv-focus .sc-lineup-poster {
+                outline: 3px solid #888 !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(136,136,136,0.32), 0 6px 14px rgba(0,0,0,0.45) !important;
+            }
+```
+
+- [ ] **Step 3:** `cd web && npm run lint` -- expect no errors.
+- [ ] **Step 4:** `npm run bundle && node --check ../app/src/main/assets/cytube_mobile.js` -- expect
+      `bundled OK` and exit 0.
+- [ ] **Step 5:** Commit:
+
+```bash
+git add web/src/lineup/screen.js web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "feat: gray D-pad focus ring for display-only Lineup items"
+```
+
+### Task 9r (device feedback, root cause traced live): fix the persistent left-edge clipping via scroll-snap
+
+**Files:**
+- Modify: `web/src/styles/tv.css`
+
+> **Root cause, verified live 2026-07-06 via CDP:** the rail's left padding (`24px`, from Task 9f)
+> IS present in the layout (`item.offsetLeft` correctly reflects it), but `scroll-snap-type: x
+> mandatory` (Task 9f) forces the initial scroll position to skip past it -- setting
+> `rail.scrollLeft = 0` directly gets immediately overridden back to `24` by the browser's snap
+> enforcement. This is a real, known CSS gap: `scroll-snap-align: start` snaps to the *scrollport*,
+> which by default does NOT include the container's own `padding` unless a matching
+> `scroll-padding` is also set. Without it, mandatory snapping treats the padding as scrollable
+> slack to skip past rather than reserved space, so the first item always ends up flush with the
+> unpadded scrollport edge -- reproducing the exact "left side clipped" look, regardless of how
+> much `padding` is added (this is why Task 9f's padding widen alone didn't fully fix it).
+
+- [ ] **Step 1:** In `web/src/styles/tv.css`, add `scroll-padding` matching the rail's own
+      `padding` -- change:
+
+```css
+            #sc-lineup-rail {
+                display: flex !important; gap: 22px !important; width: 100% !important;
+                overflow-x: auto !important; overflow-y: hidden !important;
+                padding: 8px 24px 14px !important;
+                /* Snap fully to each item so paging Left/Right (and scrolling back) always
+                   settles on a whole poster — without this, scrollIntoView({inline:'nearest'})
+                   can leave a partially-scrolled position that chops a poster's edge. */
+                scroll-snap-type: x mandatory !important;
+                scrollbar-width: thin !important;
+                scrollbar-color: rgba(255,255,255,0.28) transparent !important;
+            }
+```
+
+to:
+
+```css
+            #sc-lineup-rail {
+                display: flex !important; gap: 22px !important; width: 100% !important;
+                overflow-x: auto !important; overflow-y: hidden !important;
+                padding: 8px 24px 14px !important;
+                /* Snap fully to each item so paging Left/Right (and scrolling back) always
+                   settles on a whole poster — without this, scrollIntoView({inline:'nearest'})
+                   can leave a partially-scrolled position that chops a poster's edge. */
+                scroll-snap-type: x mandatory !important;
+                /* Mandatory snap otherwise ignores the container's own padding as reserved
+                   space and skips past it — this keeps the first/last item's snap position
+                   inside the padding instead of flush with the unpadded scrollport edge. */
+                scroll-padding: 8px 24px 14px !important;
+                scrollbar-width: thin !important;
+                scrollbar-color: rgba(255,255,255,0.28) transparent !important;
+            }
+```
+
+- [ ] **Step 2:** `cd web && npm run bundle` -- confirm it succeeds.
+- [ ] **Step 3:** Commit:
+
+```bash
+git add web/src/styles/tv.css app/src/main/assets/cytube_mobile.js
+git commit -m "fix: scroll-padding keeps the Lineup rail's own padding out of scroll-snap's reach"
+```

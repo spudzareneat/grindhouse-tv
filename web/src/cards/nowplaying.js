@@ -161,12 +161,19 @@ export function showNowPlayingCard(data, opts = {}) {
 
     card.classList.add('sc-np-visible');
 
-    // Live elapsed / total / remaining bar — refreshes while the card is up.
-    // This is the remote-friendly stand-in for hovering a scrubber: summon the
-    // card (title button / 'i') and the progress updates in place.
-    _renderNpProgress();
-    clearInterval(_npProgTimer);
-    _npProgTimer = setInterval(_renderNpProgress, 500);
+    // Live elapsed / total / remaining bar — only meaningful for the item that's actually
+    // playing right now (this is the remote-friendly stand-in for hovering a scrubber).
+    // Browsing a different item from Tonight's Lineup passes showProgress: false so it
+    // doesn't show the real now-playing item's progress mislabeled under this title.
+    const progWrap = card.querySelector('#sc-np-progress');
+    if (opts.showProgress !== false) {
+        _renderNpProgress();
+        clearInterval(_npProgTimer);
+        _npProgTimer = setInterval(_renderNpProgress, 500);
+    } else {
+        clearInterval(_npProgTimer);
+        if (progWrap) progWrap.style.display = 'none';
+    }
 
     // Reveal a long synopsis by gliding to its bottom after a few seconds.
     const revealMs = _autoScrollOverview();

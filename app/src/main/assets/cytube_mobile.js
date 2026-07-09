@@ -1,5 +1,59 @@
 /* GENERATED FILE — do not edit. Source: web/src/**. Rebuild: cd web && npm run bundle */
 (() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __esm = (fn, res) => function __init() {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  };
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+
+  // src/native.js
+  var native_exports = {};
+  __export(native_exports, {
+    nativeHttpGet: () => nativeHttpGet
+  });
+  function nativeHttpGet(url, headers = {}) {
+    return new Promise((resolve, reject) => {
+      if (!(window.CytubeNative && typeof CytubeNative.httpGet === "function")) {
+        reject(new Error("native http unavailable"));
+        return;
+      }
+      const id = "h" + Math.random().toString(36).slice(2);
+      _scHttpCbs[id] = (res) => {
+        if (res && res.error) reject(new Error(res.error));
+        else resolve(res);
+      };
+      try {
+        CytubeNative.httpGet(id, url, JSON.stringify(headers));
+      } catch (e) {
+        delete _scHttpCbs[id];
+        reject(e);
+      }
+      setTimeout(() => {
+        if (_scHttpCbs[id]) {
+          delete _scHttpCbs[id];
+          reject(new Error("timeout"));
+        }
+      }, 1e4);
+    });
+  }
+  var _scHttpCbs;
+  var init_native = __esm({
+    "src/native.js"() {
+      _scHttpCbs = {};
+      window.__scHttpResolve = function(id, res) {
+        const cb = _scHttpCbs[id];
+        if (cb) {
+          delete _scHttpCbs[id];
+          cb(res);
+        }
+      };
+    }
+  });
+
   // src/chat/usernames.js
   function getChatUsernames() {
     const names = /* @__PURE__ */ new Set();
@@ -475,15 +529,1098 @@
     whenSocket((s) => s.on(event, handler));
   }
 
-  // src/posters.js
-  function initPosterStrip() {
+  // src/tvdetect.js
+  var isTv = function() {
+    try {
+      if (window.CytubeNative && typeof CytubeNative.isTv === "function") return !!CytubeNative.isTv();
+    } catch (e) {
+    }
+    return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
+  }();
+
+  // src/lineup/reddit.js
+  var FEED_URL = "https://www.reddit.com/r/420Grindhouse/.rss";
+  var BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+  };
+  var DAY_NAMES = ["Friday", "Saturday", "Sunday"];
+  function slugify(name) {
+    return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  }
+  function decodeHtmlEntities(s) {
+    return s.replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16))).replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10))).replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  }
+  function parseFirstEntry(feedXml) {
+    const start = feedXml.indexOf("<entry>");
+    if (start === -1) return null;
+    const end = feedXml.indexOf("</entry>", start);
+    if (end === -1) return null;
+    const entry = feedXml.slice(start, end + "</entry>".length);
+    const idM = entry.match(/<id>([^<]+)<\/id>/);
+    const titleM = entry.match(/<title>([^<]+)<\/title>/);
+    const contentM = entry.match(/<content type="html">([\s\S]*?)<\/content>/);
+    if (!idM || !titleM || !contentM) return null;
+    const pubM = entry.match(/<published>([^<]+)<\/published>/);
+    return {
+      postId: idM[1],
+      title: decodeHtmlEntities(titleM[1]),
+      publishedAt: pubM ? pubM[1] : null,
+      contentHtml: decodeHtmlEntities(contentM[1])
+    };
+  }
+  function parseDateRange(title, publishedAt) {
+    const m = title && title.match(/Fri\D*(\d{1,2})\/(\d{1,2})/i);
+    if (!m || !publishedAt) return null;
+    const pub = new Date(publishedAt);
+    if (isNaN(pub.getTime())) return null;
+    const friMonth = parseInt(m[1], 10), friDay = parseInt(m[2], 10);
+    const pubMonth = pub.getMonth() + 1;
+    const year = pubMonth === 12 && friMonth === 1 ? pub.getFullYear() + 1 : pub.getFullYear();
+    const fri = Date.UTC(year, friMonth - 1, friDay);
+    const toStr = (ms) => new Date(ms).toISOString().slice(0, 10);
+    return { fri: toStr(fri), sat: toStr(fri + 864e5), sun: toStr(fri + 2 * 864e5) };
+  }
+  function parseListItems(ulInnerHtml) {
+    const items = [];
+    const liRe = /<li>([\s\S]*?)<\/li>/g;
+    let lm;
+    while (lm = liRe.exec(ulInnerHtml)) {
+      const display = lm[1].replace(/<strong>[^<]*<\/strong>\s*/, "").replace(/<[^>]+>/g, "").trim();
+      const withoutAka = display.replace(/\s+aka\s+.+$/i, "");
+      const ym = withoutAka.match(/^(.*)\s\((\d{4})\)$/);
+      if (ym) items.push({ title: ym[1].trim(), year: ym[2], display });
+    }
+    return items;
+  }
+  function parseSchedule(contentHtml) {
+    const days = [];
+    let currentDay = null;
+    let pendingSectionName = null;
+    const re = /<strong>([^<]*)<\/strong>|<ul>([\s\S]*?)<\/ul>/g;
+    let m;
+    while (m = re.exec(contentHtml)) {
+      if (m[1] !== void 0) {
+        const text = m[1].trim();
+        if (DAY_NAMES.includes(text)) {
+          currentDay = { day: text, sections: [] };
+          days.push(currentDay);
+          pendingSectionName = null;
+        } else {
+          pendingSectionName = text;
+        }
+      } else if (currentDay && pendingSectionName) {
+        const items = parseListItems(m[2]);
+        if (items.length) currentDay.sections.push({ name: pendingSectionName, slug: slugify(pendingSectionName), items });
+        pendingSectionName = null;
+      }
+    }
+    return days;
+  }
+  async function fetchTonightsSchedule() {
+    const { nativeHttpGet: nativeHttpGet2 } = await Promise.resolve().then(() => (init_native(), native_exports));
+    const res = await nativeHttpGet2(FEED_URL, BROWSER_HEADERS);
+    if (!res || res.status !== 200) throw new Error("Reddit feed HTTP " + (res && res.status));
+    const entry = parseFirstEntry(res.body);
+    if (!entry) throw new Error("no entries found in feed");
+    const dateRange = parseDateRange(entry.title, entry.publishedAt);
+    if (!dateRange) throw new Error("could not parse weekend date range from title: " + entry.title);
+    const days = parseSchedule(entry.contentHtml);
+    if (!days.length) throw new Error("no days parsed from schedule post");
+    const dateByDay = { Friday: dateRange.fri, Saturday: dateRange.sat, Sunday: dateRange.sun };
+    return {
+      postId: entry.postId,
+      title: entry.title,
+      publishedAt: entry.publishedAt,
+      days: days.map((d) => ({ ...d, date: dateByDay[d.day] || null }))
+    };
+  }
+
+  // src/metadata/tmdb.js
+  init_native();
+
+  // src/metadata/imdb.js
+  init_native();
+  var IMDB_GQL = "https://caching.graphql.imdb.com/";
+  var IMDB_HEADERS = {
+    "Accept": "application/graphql+json, application/json",
+    "Content-Type": "application/json",
+    "x-imdb-client-name": "imdb-web-next-localized",
+    "x-imdb-user-language": "en-US",
+    "x-imdb-user-country": "US"
+  };
+  async function imdbQuery(operationName, query, variables) {
+    const url = IMDB_GQL + "?operationName=" + encodeURIComponent(operationName) + "&query=" + encodeURIComponent(query) + "&variables=" + encodeURIComponent(JSON.stringify(variables));
+    const res = await nativeHttpGet(url, IMDB_HEADERS);
+    if (!res || res.status !== 200) throw new Error("IMDb GQL HTTP " + (res && res.status));
+    return JSON.parse(res.body);
+  }
+  async function fetchImdbParentalGuide(tconst) {
+    if (!tconst) return null;
+    const q = "query GHGuide($id: ID!){ title(id:$id){ parentsGuide{ categories{ category{ text } severity{ text } } } } }";
+    try {
+      const data = await imdbQuery("GHGuide", q, { id: tconst });
+      const cats = data && data.data && data.data.title && data.data.title.parentsGuide ? data.data.title.parentsGuide.categories : null;
+      if (!cats) return null;
+      return cats.map((c) => ({ category: c.category && c.category.text, severity: c.severity && c.severity.text })).filter((c) => c.category && c.severity);
+    } catch (e) {
+      return null;
+    }
+  }
+  var _triviaCache = {};
+  async function fetchImdbTrivia(tconst) {
+    if (!tconst) return null;
+    if (_triviaCache[tconst]) return _triviaCache[tconst];
+    const q = "query GHTrivia($id: ID!){ title(id:$id){ trivia(first: 30){ edges{ node{ text{ plainText } } } } } }";
+    try {
+      const data = await imdbQuery("GHTrivia", q, { id: tconst });
+      const edges = data && data.data && data.data.title && data.data.title.trivia ? data.data.title.trivia.edges : [];
+      const items = (edges || []).map((e) => e && e.node && e.node.text && e.node.text.plainText).filter(Boolean);
+      _triviaCache[tconst] = items;
+      return items;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // src/metadata/tmdb.js
+  var LINK_DEFS = [
+    { key: "imdb", label: "IMDb", color: "#f5c518", fg: "#000", char: "i" },
+    { key: "letterboxd", label: "Letterboxd", color: "#2c4a2e", fg: "#00e054", char: "L" },
+    { key: "wiki", label: "Wikipedia", color: "#444", fg: "#eee", char: "W" }
+  ];
+  var movieState = {
+    lastMovieTitle: "",
+    movieLinkCache: {}
+    // cache by raw title to avoid repeat lookups
+  };
+  var killCountDb = null;
+  async function getKillCountDb() {
+    if (killCountDb !== null) return killCountDb;
+    killCountDb = {};
+    try {
+      const text = await new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: "GET",
+          url: "https://raw.githubusercontent.com/lklynet/Kill-Count/main/killcounts.jsonl",
+          onload: (r) => r.status === 200 ? resolve(r.responseText) : reject(new Error(`HTTP ${r.status}`)),
+          onerror: reject
+        });
+      });
+      let loaded = 0;
+      for (const line of text.split("\n")) {
+        const s = line.trim();
+        if (!s) continue;
+        try {
+          const entry = JSON.parse(s);
+          if (entry.tmdb_id != null) {
+            killCountDb[String(entry.tmdb_id)] = entry.count;
+            loaded++;
+          }
+        } catch (e) {
+        }
+      }
+    } catch (e) {
+      console.warn("[CyTube SC] Kill count DB failed to load:", e);
+    }
+    return killCountDb;
+  }
+  async function validateTmdbKey(key) {
+    if (!key) return "invalid";
+    const url = `https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(key)}`;
+    try {
+      const res = await fetch(url);
+      if (res.status === 200) return "valid";
+      if (res.status === 401) return "invalid";
+      return "error";
+    } catch (e) {
+      try {
+        const r = await nativeHttpGet(url);
+        if (r.status === 200) return "valid";
+        if (r.status === 401) return "invalid";
+        return "error";
+      } catch (e2) {
+        return "error";
+      }
+    }
+  }
+  async function lookupMovie(title, year) {
+    var _a, _b;
+    const cacheKey = title + (year || "");
+    if (movieState.movieLinkCache[cacheKey] !== void 0) return movieState.movieLinkCache[cacheKey];
+    let tmdbResult = null;
+    let wikiUrl = null;
+    const tmdbPromise = hasKey(LS_TMDB) ? (async () => {
+      var _a2, _b2;
+      try {
+        const params = new URLSearchParams({ api_key: getKey(LS_TMDB), query: title, language: "en-US" });
+        if (year) params.set("year", year);
+        const res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!((_a2 = data.results) == null ? void 0 : _a2.length)) return;
+        let best = data.results[0];
+        if (year) {
+          const withYear = data.results.find((r) => {
+            var _a3;
+            return (_a3 = r.release_date) == null ? void 0 : _a3.startsWith(year);
+          });
+          if (withYear) best = withYear;
+        }
+        const detailRes = await fetch(
+          `https://api.themoviedb.org/3/movie/${best.id}?api_key=${getKey(LS_TMDB)}&append_to_response=external_ids`
+        );
+        if (!detailRes.ok) return;
+        const detail = await detailRes.json();
+        tmdbResult = {
+          tmdbId: best.id,
+          imdbId: detail.imdb_id || ((_b2 = detail.external_ids) == null ? void 0 : _b2.imdb_id) || null,
+          title: detail.title,
+          year: detail.release_date ? detail.release_date.slice(0, 4) : year,
+          poster: detail.poster_path ? `https://image.tmdb.org/t/p/w500${detail.poster_path}` : null,
+          backdrop: detail.backdrop_path ? `https://image.tmdb.org/t/p/w1280${detail.backdrop_path}` : null,
+          rating: detail.vote_average ? Math.round(detail.vote_average * 10) / 10 : null,
+          runtime: detail.runtime || null,
+          overview: detail.overview || "",
+          genres: (detail.genres || []).map((g) => g.name)
+        };
+      } catch (e) {
+      }
+    })() : Promise.resolve();
+    const wikiPromise = (async () => {
+      var _a2, _b2;
+      try {
+        const searchTitle = title + (year ? " " + year : "") + " film";
+        const res = await fetch(
+          `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(searchTitle)}&srlimit=1&format=json&origin=*`
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const hit = (_b2 = (_a2 = data == null ? void 0 : data.query) == null ? void 0 : _a2.search) == null ? void 0 : _b2[0];
+        if (hit) wikiUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(hit.title.replace(/ /g, "_"))}`;
+      } catch (e) {
+      }
+    })();
+    await Promise.all([tmdbPromise, wikiPromise]);
+    let killCount = null;
+    if (tmdbResult == null ? void 0 : tmdbResult.tmdbId) {
+      const db = await getKillCountDb();
+      const count = db[String(tmdbResult.tmdbId)];
+      if (count !== void 0 && count !== null) killCount = count;
+    }
+    const parentalGuide = await fetchImdbParentalGuide(tmdbResult == null ? void 0 : tmdbResult.imdbId);
+    const result = {
+      links: {
+        imdb: (tmdbResult == null ? void 0 : tmdbResult.imdbId) ? `https://www.imdb.com/title/${tmdbResult.imdbId}/` : null,
+        letterboxd: (tmdbResult == null ? void 0 : tmdbResult.tmdbId) ? `https://letterboxd.com/tmdb/${tmdbResult.tmdbId}` : null,
+        wiki: wikiUrl
+      },
+      killCount,
+      parentalGuide,
+      imdbId: (tmdbResult == null ? void 0 : tmdbResult.imdbId) || null,
+      cleanTitle: (tmdbResult == null ? void 0 : tmdbResult.title) || null,
+      cleanYear: (tmdbResult == null ? void 0 : tmdbResult.year) || null,
+      poster: (tmdbResult == null ? void 0 : tmdbResult.poster) || null,
+      backdrop: (tmdbResult == null ? void 0 : tmdbResult.backdrop) || null,
+      rating: (_a = tmdbResult == null ? void 0 : tmdbResult.rating) != null ? _a : null,
+      runtime: (_b = tmdbResult == null ? void 0 : tmdbResult.runtime) != null ? _b : null,
+      overview: (tmdbResult == null ? void 0 : tmdbResult.overview) || "",
+      genres: (tmdbResult == null ? void 0 : tmdbResult.genres) || []
+    };
+    movieState.movieLinkCache[cacheKey] = result;
+    return result;
+  }
+
+  // src/mediatime.js
+  var mediaState = {
+    currentMediaSeconds: 0,
+    currentMediaType: "",
+    currentPlaybackTime: 0
+  };
+  function parseTimeToSeconds(t) {
+    const parts = String(t).trim().split(":").map(Number);
+    if (!parts.length || parts.some(isNaN)) return 0;
+    return parts.reduce((acc, v) => acc * 60 + v, 0);
+  }
+  function getCurrentMediaSeconds() {
+    if (mediaState.currentMediaSeconds > 0) return mediaState.currentMediaSeconds;
+    const el = document.querySelector("#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time");
+    return el ? parseTimeToSeconds(el.textContent) : 0;
+  }
+  function getCurrentPlaybackSeconds() {
+    const v = document.querySelector("#videowrap video");
+    if (v && isFinite(v.currentTime) && v.currentTime > 0) return v.currentTime;
+    return mediaState.currentPlaybackTime;
+  }
+  function formatHMS(s) {
+    s = Math.max(0, Math.floor(s || 0));
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+    const pad = (n) => String(n).padStart(2, "0");
+    return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+  }
+
+  // src/lineup/timing.js
+  function formatEta(hour24, minute, precision) {
+    if (precision === "late") return "LATE";
+    const period = hour24 >= 12 ? "PM" : "AM";
+    let h = hour24 % 12;
+    if (h === 0) h = 12;
+    const mm = String(minute).padStart(2, "0");
+    const prefix = precision === "approx" ? "~" : "≈";
+    return `${prefix} ${h}:${mm} ${period}`;
+  }
+  function medianGapSeconds(observedGaps) {
+    if (!observedGaps.length) return null;
+    const sorted = [...observedGaps].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+  function pacificOffsetMinutes(d) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    }).formatToParts(d);
+    const get = (t) => parts.find((p) => p.type === t).value;
+    const hour = parseInt(get("hour"), 10) % 24;
+    const asUTC = Date.UTC(+get("year"), +get("month") - 1, +get("day"), hour, +get("minute"), +get("second"));
+    return (asUTC - d.getTime()) / 6e4;
+  }
+  function dayAnchorPacific(dateStr) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const guess = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+    const offsetMinutes = pacificOffsetMinutes(guess);
+    return new Date(guess.getTime() - offsetMinutes * 6e4);
+  }
+  function pacificDateString(now = /* @__PURE__ */ new Date()) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(now);
+    const get = (t) => parts.find((p) => p.type === t).value;
+    return `${get("year")}-${get("month")}-${get("day")}`;
+  }
+
+  // src/motd.js
+  function getMotdPosterImages() {
     const motd = document.getElementById("motdrow");
-    if (!motd) return;
-    const imgs = [...motd.querySelectorAll("img")].filter((img) => {
-      const w = parseInt(img.getAttribute("width") || 0);
-      const h = parseInt(img.getAttribute("height") || 0);
+    if (!motd) return [];
+    return [...motd.querySelectorAll("img")].filter((img) => {
+      const w = parseInt(img.getAttribute("width") || "0", 10);
+      const h = parseInt(img.getAttribute("height") || "0", 10);
       return h >= 100 && w <= 200;
     });
+  }
+
+  // src/parse.js
+  function parseMovieFilename(raw) {
+    let s = raw.replace(/\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|divx|xvid|ogv)$/i, "");
+    let year = null;
+    const yearMatch = s.match(/[\[(](\d{4})[\])]/);
+    if (yearMatch) {
+      year = yearMatch[1];
+      s = s.slice(0, yearMatch.index);
+    }
+    s = s.replace(/[._]+/g, " ");
+    s = s.replace(/[\[(][^\])]*/g, "").replace(/[\])]/, "");
+    s = s.replace(/\s+/g, " ").trim();
+    return { title: s, year };
+  }
+  var YT_NOISE = [
+    "full movie",
+    "full length movie",
+    "full length feature",
+    "full length film",
+    "full length",
+    "complete movie",
+    "complete film",
+    "the complete movie",
+    "entire movie",
+    "free movie",
+    "free film",
+    "free online",
+    "free to watch",
+    "watch online",
+    "watch free",
+    "watch now",
+    "online free",
+    "free with ads",
+    "with ads",
+    "no ads",
+    "ad free",
+    "official movie",
+    "official film",
+    "official",
+    "exclusive",
+    "premiere",
+    "world premiere",
+    "remastered",
+    "restored",
+    "colou?ri[sz]ed",
+    "subtitle[sd]?",
+    "subbed",
+    "dubbed",
+    "eng sub",
+    "hd",
+    "fhd",
+    "uhd",
+    "4k",
+    "2k",
+    "1080p",
+    "720p",
+    "480p",
+    "high definition",
+    "blu-?ray",
+    "dvd",
+    "web-?dl",
+    "uncut",
+    "extended",
+    "director.?s cut",
+    "special edition",
+    "classic movie",
+    "classic film",
+    "cult classic",
+    "b-?movie",
+    "feature film",
+    "feature",
+    "cinema",
+    "blockbuster",
+    "must watch",
+    "in english",
+    "english movie"
+  ];
+  var YT_GENRES = [
+    "action",
+    "thriller",
+    "horror",
+    "comedy",
+    "drama",
+    "sci-?fi",
+    "science fiction",
+    "western",
+    "romance",
+    "crime",
+    "mystery",
+    "adventure",
+    "fantasy",
+    "war",
+    "noir",
+    "slasher",
+    "martial arts",
+    "kung fu",
+    "documentary",
+    "family",
+    "musical",
+    "animation"
+  ];
+  function parseYouTubeTitle(raw) {
+    let s = " " + raw + " ";
+    let year = null;
+    const ym = s.match(/\b(19\d{2}|20\d{2})\b/);
+    if (ym) year = ym[1];
+    s = s.replace(/[\[({][^\])}]*[\])}]/g, " ");
+    if (year) s = s.replace(new RegExp("\\b" + year + "\\b", "g"), " ");
+    [...YT_NOISE, ...YT_GENRES].forEach((n) => {
+      s = s.replace(new RegExp("\\b" + n + "\\b", "gi"), " ");
+    });
+    s = s.replace(/[^\w\s&':!.,-]/g, " ");
+    const segs = s.split(/\s[|–—•:_-]+\s/).map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length >= 2);
+    let title = segs.sort(
+      (a, b) => (b.match(/[a-z]/gi) || []).length - (a.match(/[a-z]/gi) || []).length
+    )[0] || s;
+    title = title.replace(/\s+/g, " ").replace(/^[\s'":.,-]+|[\s'":.,-]+$/g, "").trim();
+    return { title, year };
+  }
+
+  // src/lineup/data.js
+  var LS_LINEUP_CACHE = "sc_lineup_cache_v1";
+  var CACHE_MAX_AGE_MS = 20 * 60 * 60 * 1e3;
+  var FALLBACK_LIST_TITLE = "Coming Attractions";
+  var MAX_ESTIMATED_AHEAD = 4;
+  var _scheduleCache = null;
+  var _fetchFailed = false;
+  var _revalidating = false;
+  var _observedGapSeconds = [];
+  var _lastUnmatchedStart = null;
+  function readCache() {
+    try {
+      const raw = localStorage.getItem(LS_LINEUP_CACHE);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function writeCache(schedule) {
+    try {
+      localStorage.setItem(LS_LINEUP_CACHE, JSON.stringify({ ...schedule, fetchedAt: Date.now() }));
+    } catch (e) {
+    }
+  }
+  function allScheduleTitles() {
+    if (!_scheduleCache) return [];
+    return _scheduleCache.days.flatMap((d) => d.sections.flatMap((s) => s.items));
+  }
+  onSocket("changeMedia", (d) => {
+    const rawTitle = d && d.title;
+    const title = rawTitle ? parseMovieFilename(rawTitle).title : null;
+    const matchesSchedule = !!(title && _scheduleCache && allScheduleTitles().some((s) => s.title.toLowerCase() === title.toLowerCase()));
+    if (rawTitle && !matchesSchedule && _scheduleCache) {
+      _lastUnmatchedStart = Date.now();
+    } else if (_lastUnmatchedStart) {
+      _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1e3);
+      _lastUnmatchedStart = null;
+    }
+  });
+  async function refetchAndCache() {
+    if (_revalidating) return;
+    _revalidating = true;
+    try {
+      const result = await fetchTonightsSchedule();
+      _scheduleCache = result;
+      writeCache(result);
+    } catch (e) {
+    } finally {
+      _revalidating = false;
+    }
+  }
+  async function ensureSchedule() {
+    if (_scheduleCache || _fetchFailed) return;
+    const cached = readCache();
+    if (cached) {
+      _scheduleCache = cached;
+      if (Date.now() - (cached.fetchedAt || 0) > CACHE_MAX_AGE_MS) refetchAndCache();
+      return;
+    }
+    try {
+      const result = await fetchTonightsSchedule();
+      _scheduleCache = result;
+      writeCache(result);
+    } catch (e) {
+      _fetchFailed = true;
+    }
+  }
+  async function fallbackView() {
+    const items = [];
+    if (movieState.lastMovieTitle) {
+      const { title, year } = parseMovieFilename(movieState.lastMovieTitle);
+      const info = await lookupMovie(title, year);
+      if (!hasKey(LS_TMDB) || info.cleanTitle) {
+        items.push({ ...buildBase(info, title, year), isNowPlaying: true, etaLabel: "" });
+      }
+    }
+    getMotdPosterImages().forEach((img) => {
+      items.push({
+        cleanTitle: img.title || img.alt || "",
+        cleanYear: null,
+        poster: img.src,
+        backdrop: null,
+        overview: "",
+        isNowPlaying: false,
+        etaLabel: "",
+        clickable: false
+      });
+    });
+    return {
+      listTitle: FALLBACK_LIST_TITLE,
+      fallback: true,
+      days: [{ day: "Tonight", date: null, isToday: true, sections: [{ name: "", slug: null, items }] }]
+    };
+  }
+  function buildBase(info, title, year) {
+    var _a, _b, _c;
+    return {
+      cleanTitle: info.cleanTitle || title,
+      cleanYear: info.cleanYear || year,
+      poster: info.poster || null,
+      backdrop: info.backdrop || null,
+      overview: info.overview || "",
+      runtime: (_a = info.runtime) != null ? _a : null,
+      rating: (_b = info.rating) != null ? _b : null,
+      genres: info.genres || [],
+      parentalGuide: info.parentalGuide || null,
+      killCount: (_c = info.killCount) != null ? _c : null,
+      imdbId: info.imdbId || null
+    };
+  }
+  function buildDaySections(day, isTodayFlag, infosByKey) {
+    var _a;
+    const flat = [];
+    day.sections.forEach((section, si) => {
+      section.items.forEach((item) => flat.push({ section, si, item }));
+    });
+    const currentTitle = isTodayFlag && movieState.lastMovieTitle ? parseMovieFilename(movieState.lastMovieTitle).title : "";
+    const currentFlatIndex = currentTitle ? flat.findIndex((f) => f.item.title.toLowerCase() === currentTitle.toLowerCase()) : -1;
+    const anchor = dayAnchorPacific(day.date);
+    const isColdStart = currentFlatIndex === -1 && Date.now() < anchor.getTime();
+    const learnedGap = (_a = medianGapSeconds(_observedGapSeconds)) != null ? _a : 600;
+    let cumulative = currentFlatIndex !== -1 ? Math.max(0, getCurrentMediaSeconds() - getCurrentPlaybackSeconds()) : 0;
+    const builtFlat = flat.map((f, idx) => {
+      const info = infosByKey.get(f.item.title + "|" + f.item.year) || {};
+      const base = buildBase(info, f.item.title, f.item.year);
+      if (idx === currentFlatIndex) return { ...base, isNowPlaying: true, etaLabel: "" };
+      if (isColdStart && idx === 0) {
+        return { ...base, isNowPlaying: false, etaLabel: formatEta(anchor.getHours(), anchor.getMinutes(), "approx") };
+      }
+      if (currentFlatIndex === -1 || idx < currentFlatIndex) {
+        return { ...base, isNowPlaying: false, etaLabel: "" };
+      }
+      const offset = idx - currentFlatIndex;
+      cumulative += learnedGap;
+      let etaLabel = "";
+      if (offset <= MAX_ESTIMATED_AHEAD) {
+        const precision = offset === 1 ? "exact" : "approx";
+        const eta = new Date(Date.now() + cumulative * 1e3);
+        etaLabel = formatEta(eta.getHours(), eta.getMinutes(), precision);
+      }
+      cumulative += info.runtime ? info.runtime * 60 : 0;
+      return { ...base, isNowPlaying: false, etaLabel };
+    });
+    return day.sections.map((section, si) => ({
+      name: section.name,
+      slug: section.slug,
+      items: builtFlat.filter((_, idx) => flat[idx].si === si)
+    }));
+  }
+  async function getTonightsLineup() {
+    await ensureSchedule();
+    if (!_scheduleCache) return fallbackView();
+    const allItems = allScheduleTitles();
+    const infos = await Promise.all(allItems.map(({ title, year }) => lookupMovie(title, year)));
+    const infosByKey = new Map(allItems.map((item, i) => [item.title + "|" + item.year, infos[i]]));
+    const todayStr = pacificDateString();
+    const days = _scheduleCache.days.map((day) => ({
+      day: day.day,
+      date: day.date,
+      isToday: day.date === todayStr,
+      sections: buildDaySections(day, day.date === todayStr, infosByKey)
+    }));
+    return { listTitle: _scheduleCache.title || FALLBACK_LIST_TITLE, fallback: false, days };
+  }
+
+  // src/cards/trivia.js
+  function _escHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function showTriviaCard() {
+    const tconst = npState.data && npState.data.imdbId;
+    if (!tconst) return;
+    let card = document.getElementById("sc-trivia-card");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "sc-trivia-card";
+      card.innerHTML = `
+            <div id="sc-trivia-panel">
+                <div id="sc-trivia-head">
+                    <span id="sc-trivia-title">Trivia</span>
+                    <button id="sc-trivia-close" type="button">✕</button>
+                </div>
+                <div id="sc-trivia-list"></div>
+            </div>`;
+      document.body.appendChild(card);
+      card.addEventListener("click", (e) => {
+        if (e.target === card) hideTriviaCard();
+      });
+      card.querySelector("#sc-trivia-close").addEventListener("click", hideTriviaCard);
+    }
+    card.querySelector("#sc-trivia-title").textContent = "Trivia" + (npState.data.cleanTitle ? " — " + npState.data.cleanTitle : "");
+    const list = card.querySelector("#sc-trivia-list");
+    list.innerHTML = '<div class="sc-trivia-item">Loading…</div>';
+    card.classList.add("sc-show");
+    fetchImdbTrivia(tconst).then((items) => {
+      if (!document.getElementById("sc-trivia-card")) return;
+      if (!items || !items.length) {
+        list.innerHTML = '<div class="sc-trivia-item">No trivia found.</div>';
+        return;
+      }
+      list.innerHTML = items.map((t) => `<div class="sc-trivia-item">${_escHtml(t)}</div>`).join("");
+      list.scrollTop = 0;
+    });
+  }
+  function hideTriviaCard() {
+    const card = document.getElementById("sc-trivia-card");
+    if (card) card.classList.remove("sc-show");
+  }
+  function toggleTriviaCard() {
+    const card = document.getElementById("sc-trivia-card");
+    if (card && card.classList.contains("sc-show")) hideTriviaCard();
+    else showTriviaCard();
+  }
+
+  // src/cards/nowplaying.js
+  var NP_PG_SHORT = {
+    "Sex & Nudity": "Sex/Nudity",
+    "Violence & Gore": "Violence",
+    "Profanity": "Profanity",
+    "Alcohol, Drugs & Smoking": "Drugs",
+    "Frightening & Intense Scenes": "Frightening"
+  };
+  var npState = {
+    data: null,
+    // latest movie data for the card
+    introDone: false
+    // startup intro card has run (see initIntroSequence)
+  };
+  var _npHideTimer = null;
+  var _npProgTimer = null;
+  var _npWatcherInit = false;
+  function _renderNpProgress() {
+    const card = document.getElementById("sc-np-card");
+    if (!card) {
+      clearInterval(_npProgTimer);
+      return;
+    }
+    const wrap = card.querySelector("#sc-np-progress");
+    const fill = card.querySelector("#sc-np-prog-fill");
+    const elapsedEl = card.querySelector("#sc-np-prog-elapsed");
+    const totalEl = card.querySelector("#sc-np-prog-total");
+    const remainEl = card.querySelector("#sc-np-prog-remain");
+    if (!wrap || !fill) return;
+    const dur = getCurrentMediaSeconds();
+    if (dur > 0) {
+      const elapsed = Math.min(getCurrentPlaybackSeconds(), dur);
+      const pct = Math.max(0, Math.min(100, elapsed / dur * 100));
+      fill.style.setProperty("width", pct + "%", "important");
+      elapsedEl.textContent = formatHMS(elapsed);
+      totalEl.textContent = formatHMS(dur);
+      remainEl.textContent = "−" + formatHMS(dur - elapsed) + " left";
+      wrap.style.display = "";
+    } else {
+      wrap.style.display = "none";
+    }
+  }
+  function _npCardEnabled() {
+    return isTv;
+  }
+  var _npScrollTimer = null;
+  var _npScrollRaf = null;
+  var _NP_SCROLL_DELAY = 3500;
+  function _autoScrollOverview() {
+    clearTimeout(_npScrollTimer);
+    cancelAnimationFrame(_npScrollRaf);
+    const card = document.getElementById("sc-np-card");
+    const ov = card && card.querySelector("#sc-np-overview");
+    if (!ov) return 0;
+    ov.scrollTop = 0;
+    const dist = ov.scrollHeight - ov.clientHeight;
+    if (dist <= 4) return 0;
+    const dur = Math.min(12e3, Math.max(2500, dist / 24 * 1e3));
+    _npScrollTimer = setTimeout(() => {
+      const start = ov.scrollTop;
+      const span = ov.scrollHeight - ov.clientHeight - start;
+      if (span <= 0) return;
+      const t0 = performance.now();
+      const step = (now) => {
+        const c = document.getElementById("sc-np-card");
+        if (!c || !c.classList.contains("sc-np-visible")) return;
+        const p = Math.min(1, (now - t0) / dur);
+        const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+        ov.scrollTop = start + span * e;
+        if (p < 1) _npScrollRaf = requestAnimationFrame(step);
+      };
+      _npScrollRaf = requestAnimationFrame(step);
+    }, _NP_SCROLL_DELAY);
+    return _NP_SCROLL_DELAY + dur;
+  }
+  function showNowPlayingCard(data, opts = {}) {
+    if (!data || !data.cleanTitle && !data.backdrop) return;
+    let card = document.getElementById("sc-np-card");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "sc-np-card";
+      card.innerHTML = `
+            <div id="sc-np-backdrop"></div>
+            <div id="sc-np-scrim"></div>
+            <div id="sc-np-content">
+                <img id="sc-np-poster" alt="" />
+                <div id="sc-np-info">
+                    <div id="sc-np-eyebrow">Now Playing</div>
+                    <div id="sc-np-title"></div>
+                    <div id="sc-np-meta"></div>
+                    <div id="sc-np-overview"></div>
+                    <div id="sc-np-chips"></div>
+                    <div id="sc-np-progress">
+                        <div id="sc-np-prog-bar"><div id="sc-np-prog-fill"></div></div>
+                        <div id="sc-np-prog-times">
+                            <span id="sc-np-prog-elapsed">0:00</span>
+                            <span id="sc-np-prog-remain"></span>
+                            <span id="sc-np-prog-total">0:00</span>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+      document.body.appendChild(card);
+      card.addEventListener("click", hideNowPlayingCard);
+    }
+    const title = data.cleanTitle || movieState.lastMovieTitle || "";
+    const year = data.cleanYear ? ` (${data.cleanYear})` : "";
+    const bd = card.querySelector("#sc-np-backdrop");
+    const poster = card.querySelector("#sc-np-poster");
+    const meta = card.querySelector("#sc-np-meta");
+    const chips = card.querySelector("#sc-np-chips");
+    bd.style.backgroundImage = data.backdrop ? `url(${data.backdrop})` : "none";
+    if (data.poster) {
+      poster.src = data.poster;
+      poster.style.display = "";
+    } else poster.style.display = "none";
+    card.querySelector("#sc-np-title").textContent = title + year;
+    card.querySelector("#sc-np-overview").textContent = data.overview || "";
+    const metaParts = [];
+    if (data.rating) metaParts.push(`⭐ ${data.rating}`);
+    if (data.runtime) metaParts.push(`${Math.floor(data.runtime / 60)}h ${data.runtime % 60}m`);
+    if (data.genres && data.genres.length) metaParts.push(data.genres.slice(0, 3).join(" · "));
+    meta.textContent = metaParts.join("     ");
+    const chipHtml = [];
+    (data.parentalGuide || []).forEach((pg) => {
+      const sev = String(pg.severity || "").toLowerCase();
+      const label = NP_PG_SHORT[pg.category] || pg.category;
+      chipHtml.push(`<span class="sc-np-chip sc-sev-${sev}">${label}: ${pg.severity}</span>`);
+    });
+    if (data.killCount !== null && data.killCount !== void 0) {
+      chipHtml.push(`<span class="sc-np-chip">💀 ${data.killCount} kills</span>`);
+    }
+    chips.innerHTML = chipHtml.join("");
+    card.classList.add("sc-np-visible");
+    const progWrap = card.querySelector("#sc-np-progress");
+    if (opts.showProgress !== false) {
+      _renderNpProgress();
+      clearInterval(_npProgTimer);
+      _npProgTimer = setInterval(_renderNpProgress, 500);
+    } else {
+      clearInterval(_npProgTimer);
+      if (progWrap) progWrap.style.display = "none";
+    }
+    const revealMs = _autoScrollOverview();
+    clearTimeout(_npHideTimer);
+    if (opts.autoHide) {
+      const v = document.querySelector("#videowrap video");
+      const playing = v && !v.paused;
+      if (playing || !v) _npHideTimer = setTimeout(hideNowPlayingCard, Math.max(7e3, revealMs + 2500));
+    }
+  }
+  function hideNowPlayingCard() {
+    const card = document.getElementById("sc-np-card");
+    if (card) card.classList.remove("sc-np-visible");
+    clearTimeout(_npHideTimer);
+    clearInterval(_npProgTimer);
+    clearTimeout(_npScrollTimer);
+    cancelAnimationFrame(_npScrollRaf);
+  }
+  function initNowPlayingWatcher() {
+    if (_npWatcherInit) return;
+    _npWatcherInit = true;
+    const toggle = () => {
+      const card = document.getElementById("sc-np-card");
+      if (card && card.classList.contains("sc-np-visible")) hideNowPlayingCard();
+      else if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
+    };
+    document.addEventListener("keydown", (e) => {
+      const t = e.target;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
+      if (e.key === "i" || e.key === "I") toggle();
+      else if (e.key === "t" || e.key === "T") toggleTriviaCard();
+    });
+    const bindTitle = () => {
+      const h = document.getElementById("videowrap-header");
+      if (!h) return;
+      if (npState.data && npState.data.imdbId && !document.getElementById("sc-trivia-btn")) {
+        const btn = document.createElement("button");
+        btn.id = "sc-trivia-btn";
+        btn.type = "button";
+        btn.textContent = "Trivia";
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          showTriviaCard();
+        });
+        if (document.body.classList.contains("sc-video-dimmed")) btn.classList.add("sc-bar-dim");
+        h.appendChild(btn);
+      }
+    };
+    bindTitle();
+    new MutationObserver(bindTitle).observe(document.body, { childList: true, subtree: true });
+  }
+
+  // src/lineup/sectionThemes.js
+  var THEMES = {
+    "funky-cheese-friday": { font: "Boogaloo", color: "#e0a92a", wash: "#2b210a" },
+    "friday-grindhouse-a-go-go": { font: "Chewy", color: "#ec4899", wash: "#2a0e1c" },
+    "friday-night-freak-show": { font: "Creepster", color: "#52c41a", wash: "#0f2109" },
+    "psychedelic-saturday": { font: "'Rubik Wet Paint'", color: "#a855f7", wash: "#200c2b" },
+    "saturday-prime-time-drive-in": { font: "Monoton", color: "#22d3ee", wash: "#06232a" },
+    "red-light-saturday-night": { font: "'Vast Shadow'", color: "#ef4444", wash: "#2b0a0a" },
+    "the-sunday-classics": { font: "Cinzel", color: "#b8b8b8", wash: "#1c1c1c" },
+    "sunday-slop-o-rama": { font: "Eater", color: "#a3b125", wash: "#1c1f08" },
+    "last-call-sunday-night": { font: "'Bungee Shade'", color: "#6366f1", wash: "#12102b" }
+  };
+  var DEFAULT_THEME = { font: null, color: "#9aa0a8", wash: "#14141a" };
+  function getSectionTheme(slug) {
+    return THEMES[slug] || DEFAULT_THEME;
+  }
+  var FONT_FAMILIES = ["Boogaloo", "Chewy", "Creepster", "Rubik+Wet+Paint", "Monoton", "Vast+Shadow", "Cinzel", "Eater", "Bungee+Shade"];
+  var FONTS_LINK_ID = "sc-lineup-theme-fonts";
+  function ensureThemeFontsLoaded() {
+    if (document.getElementById(FONTS_LINK_ID)) return;
+    const link = document.createElement("link");
+    link.id = FONTS_LINK_ID;
+    link.rel = "stylesheet";
+    link.href = `https://fonts.googleapis.com/css2?${FONT_FAMILIES.map((f) => `family=${f}`).join("&")}&display=swap`;
+    document.head.appendChild(link);
+  }
+
+  // src/lineup/screen.js
+  var _lastData = null;
+  var _activeDay = null;
+  var _activeSectionIndex = 0;
+  function ensureScreenDom() {
+    ensureThemeFontsLoaded();
+    let screen2 = document.getElementById("sc-lineup-screen");
+    if (screen2) return screen2;
+    screen2 = document.createElement("div");
+    screen2.id = "sc-lineup-screen";
+    screen2.innerHTML = `
+        <div id="sc-lineup-header"></div>
+        <div id="sc-lineup-subtitle">Titles/times may be subject to change.</div>
+        <nav id="sc-lineup-daytabs"></nav>
+        <div id="sc-lineup-body"></div>`;
+    document.body.appendChild(screen2);
+    return screen2;
+  }
+  function renderLoading(screen2) {
+    screen2.querySelector("#sc-lineup-daytabs").innerHTML = "";
+    screen2.querySelector("#sc-lineup-body").innerHTML = '<div id="sc-lineup-loading">Fetching tonight’s lineup…</div>';
+  }
+  function itemButton(item) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sc-lineup-item" + (item.isNowPlaying ? " sc-lineup-item-current" : "") + (item.clickable === false ? " sc-lineup-item-static" : "");
+    const titleText = `${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ""}`;
+    const etaText = item.isNowPlaying ? "NOW PLAYING" : item.etaLabel || "";
+    btn.innerHTML = `
+        <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ""}">
+            ${!item.poster ? `<div class="sc-lineup-poster-fallback">${titleText}</div>` : ""}
+            ${etaText ? `<div class="sc-lineup-eta">${etaText}</div>` : ""}
+        </div>`;
+    if (item.clickable !== false) {
+      btn.addEventListener("click", () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
+    }
+    return btn;
+  }
+  function sectionEl(section, index, total) {
+    const el = document.createElement("div");
+    el.className = "sc-lineup-section";
+    const theme = getSectionTheme(section.slug);
+    el.style.setProperty("--sc-lineup-wash", theme.wash);
+    if (section.name) {
+      const name = document.createElement("div");
+      name.className = "sc-lineup-section-name";
+      name.style.setProperty("color", theme.color, "important");
+      if (theme.font) name.style.setProperty("font-family", `${theme.font}, cursive`, "important");
+      name.innerHTML = `${section.name}${total > 1 ? `<span class="sc-lineup-section-count">${index + 1} / ${total}</span>` : ""}`;
+      el.appendChild(name);
+    }
+    const rail = document.createElement("div");
+    rail.className = "sc-lineup-rail";
+    section.items.forEach((item) => rail.appendChild(itemButton(item)));
+    el.appendChild(rail);
+    return el;
+  }
+  function renderDayTabs(screen2, days) {
+    const tabs = screen2.querySelector("#sc-lineup-daytabs");
+    tabs.innerHTML = "";
+    days.forEach((d) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "sc-lineup-daytab" + (d.day === _activeDay ? " sc-lineup-daytab-active" : "");
+      btn.textContent = d.day;
+      btn.addEventListener("click", () => showDay(screen2, d.day));
+      tabs.appendChild(btn);
+    });
+  }
+  function renderBody(screen2, days) {
+    const body = screen2.querySelector("#sc-lineup-body");
+    body.innerHTML = "";
+    const day = days.find((d) => d.day === _activeDay) || days[0];
+    if (!day || !day.sections.length) {
+      body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
+      return;
+    }
+    if (_activeSectionIndex >= day.sections.length) _activeSectionIndex = 0;
+    body.appendChild(sectionEl(day.sections[_activeSectionIndex], _activeSectionIndex, day.sections.length));
+  }
+  function showDay(screen2, day) {
+    _activeDay = day;
+    _activeSectionIndex = 0;
+    const tabs = [...screen2.querySelectorAll(".sc-lineup-daytab")];
+    tabs.forEach((t) => t.classList.toggle("sc-lineup-daytab-active", t.textContent === day));
+    renderBody(screen2, _lastData.days);
+  }
+  function stepLineupSection(delta, columnIndex) {
+    if (!_lastData || _lastData.fallback) return null;
+    const days = _lastData.days || [];
+    const day = days.find((d) => d.day === _activeDay) || days[0];
+    if (!day) return null;
+    const newIndex = _activeSectionIndex + delta;
+    if (newIndex < 0 || newIndex >= day.sections.length) return null;
+    _activeSectionIndex = newIndex;
+    const screen2 = document.getElementById("sc-lineup-screen");
+    renderBody(screen2, days);
+    const rail = screen2.querySelector(".sc-lineup-rail");
+    if (!rail) return null;
+    const items = [...rail.querySelectorAll(".sc-lineup-item")];
+    return items[Math.min(columnIndex, items.length - 1)] || null;
+  }
+  function renderFallback(screen2, data) {
+    screen2.querySelector("#sc-lineup-daytabs").innerHTML = "";
+    const body = screen2.querySelector("#sc-lineup-body");
+    body.innerHTML = "";
+    const items = data.days && data.days[0] && data.days[0].sections[0] && data.days[0].sections[0].items || [];
+    if (!items.length) {
+      body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
+      return;
+    }
+    const section = document.createElement("div");
+    section.className = "sc-lineup-section sc-lineup-section-fallback";
+    const rail = document.createElement("div");
+    rail.className = "sc-lineup-rail";
+    items.forEach((item) => rail.appendChild(itemButton(item)));
+    section.appendChild(rail);
+    body.appendChild(section);
+  }
+  function renderItems(screen2, data) {
+    const header = screen2.querySelector("#sc-lineup-header");
+    if (header) header.textContent = data && data.listTitle || "Grindhouse Lineup";
+    _lastData = data;
+    if (!data || data.fallback) {
+      renderFallback(screen2, data || { days: [] });
+      return;
+    }
+    const days = data.days || [];
+    _activeDay = (days.find((d) => d.isToday) || days[0] || {}).day || null;
+    _activeSectionIndex = 0;
+    renderDayTabs(screen2, days);
+    renderBody(screen2, days);
+  }
+  function showLineupScreen() {
+    const screen2 = ensureScreenDom();
+    screen2.classList.add("sc-lineup-visible");
+    renderLoading(screen2);
+    getTonightsLineup().then((data) => renderItems(screen2, data)).catch(() => {
+      renderItems(screen2, { fallback: true, days: [] });
+    });
+  }
+  function hideLineupScreen() {
+    const screen2 = document.getElementById("sc-lineup-screen");
+    if (screen2) screen2.classList.remove("sc-lineup-visible");
+  }
+
+  // src/posters.js
+  function initPosterStrip() {
+    const imgs = getMotdPosterImages();
     if (!imgs.length) return;
     const strip = document.createElement("div");
     strip.id = "sc-poster-strip";
@@ -580,6 +1717,10 @@
     toggleBtn.title = "Show/hide weekend lineup";
     toggleBtn.dataset.noTvCaption = "1";
     toggleBtn.addEventListener("click", () => {
+      if (isTv) {
+        showLineupScreen();
+        return;
+      }
       const visible = strip.classList.toggle("sc-poster-visible");
       toggleBtn.classList.toggle("sc-poster-toggle-active", visible);
       chromeState.topBarIsOpen = visible;
@@ -768,15 +1909,6 @@
     }
   }
 
-  // src/tvdetect.js
-  var isTv = function() {
-    try {
-      if (window.CytubeNative && typeof CytubeNative.isTv === "function") return !!CytubeNative.isTv();
-    } catch (e) {
-    }
-    return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
-  }();
-
   // src/player/scrubber.js
   function wakeVideoControls() {
     try {
@@ -814,496 +1946,6 @@
       el.classList.add("vjs-user-inactive");
       el.classList.remove("vjs-user-active");
     }
-  }
-
-  // src/native.js
-  var _scHttpCbs = {};
-  window.__scHttpResolve = function(id, res) {
-    const cb = _scHttpCbs[id];
-    if (cb) {
-      delete _scHttpCbs[id];
-      cb(res);
-    }
-  };
-  function nativeHttpGet(url, headers = {}) {
-    return new Promise((resolve, reject) => {
-      if (!(window.CytubeNative && typeof CytubeNative.httpGet === "function")) {
-        reject(new Error("native http unavailable"));
-        return;
-      }
-      const id = "h" + Math.random().toString(36).slice(2);
-      _scHttpCbs[id] = (res) => {
-        if (res && res.error) reject(new Error(res.error));
-        else resolve(res);
-      };
-      try {
-        CytubeNative.httpGet(id, url, JSON.stringify(headers));
-      } catch (e) {
-        delete _scHttpCbs[id];
-        reject(e);
-      }
-      setTimeout(() => {
-        if (_scHttpCbs[id]) {
-          delete _scHttpCbs[id];
-          reject(new Error("timeout"));
-        }
-      }, 1e4);
-    });
-  }
-
-  // src/metadata/imdb.js
-  var IMDB_GQL = "https://caching.graphql.imdb.com/";
-  var IMDB_HEADERS = {
-    "Accept": "application/graphql+json, application/json",
-    "Content-Type": "application/json",
-    "x-imdb-client-name": "imdb-web-next-localized",
-    "x-imdb-user-language": "en-US",
-    "x-imdb-user-country": "US"
-  };
-  async function imdbQuery(operationName, query, variables) {
-    const url = IMDB_GQL + "?operationName=" + encodeURIComponent(operationName) + "&query=" + encodeURIComponent(query) + "&variables=" + encodeURIComponent(JSON.stringify(variables));
-    const res = await nativeHttpGet(url, IMDB_HEADERS);
-    if (!res || res.status !== 200) throw new Error("IMDb GQL HTTP " + (res && res.status));
-    return JSON.parse(res.body);
-  }
-  async function fetchImdbParentalGuide(tconst) {
-    if (!tconst) return null;
-    const q = "query GHGuide($id: ID!){ title(id:$id){ parentsGuide{ categories{ category{ text } severity{ text } } } } }";
-    try {
-      const data = await imdbQuery("GHGuide", q, { id: tconst });
-      const cats = data && data.data && data.data.title && data.data.title.parentsGuide ? data.data.title.parentsGuide.categories : null;
-      if (!cats) return null;
-      return cats.map((c) => ({ category: c.category && c.category.text, severity: c.severity && c.severity.text })).filter((c) => c.category && c.severity);
-    } catch (e) {
-      return null;
-    }
-  }
-  var _triviaCache = {};
-  async function fetchImdbTrivia(tconst) {
-    if (!tconst) return null;
-    if (_triviaCache[tconst]) return _triviaCache[tconst];
-    const q = "query GHTrivia($id: ID!){ title(id:$id){ trivia(first: 30){ edges{ node{ text{ plainText } } } } } }";
-    try {
-      const data = await imdbQuery("GHTrivia", q, { id: tconst });
-      const edges = data && data.data && data.data.title && data.data.title.trivia ? data.data.title.trivia.edges : [];
-      const items = (edges || []).map((e) => e && e.node && e.node.text && e.node.text.plainText).filter(Boolean);
-      _triviaCache[tconst] = items;
-      return items;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  // src/mediatime.js
-  var mediaState = {
-    currentMediaSeconds: 0,
-    currentMediaType: "",
-    currentPlaybackTime: 0
-  };
-  function parseTimeToSeconds(t) {
-    const parts = String(t).trim().split(":").map(Number);
-    if (!parts.length || parts.some(isNaN)) return 0;
-    return parts.reduce((acc, v) => acc * 60 + v, 0);
-  }
-  function getCurrentMediaSeconds() {
-    if (mediaState.currentMediaSeconds > 0) return mediaState.currentMediaSeconds;
-    const el = document.querySelector("#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time");
-    return el ? parseTimeToSeconds(el.textContent) : 0;
-  }
-  function getCurrentPlaybackSeconds() {
-    const v = document.querySelector("#videowrap video");
-    if (v && isFinite(v.currentTime) && v.currentTime > 0) return v.currentTime;
-    return mediaState.currentPlaybackTime;
-  }
-  function formatHMS(s) {
-    s = Math.max(0, Math.floor(s || 0));
-    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
-    const pad = (n) => String(n).padStart(2, "0");
-    return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
-  }
-
-  // src/metadata/tmdb.js
-  var LINK_DEFS = [
-    { key: "imdb", label: "IMDb", color: "#f5c518", fg: "#000", char: "i" },
-    { key: "letterboxd", label: "Letterboxd", color: "#2c4a2e", fg: "#00e054", char: "L" },
-    { key: "wiki", label: "Wikipedia", color: "#444", fg: "#eee", char: "W" }
-  ];
-  var movieState = {
-    lastMovieTitle: "",
-    movieLinkCache: {}
-    // cache by raw title to avoid repeat lookups
-  };
-  var killCountDb = null;
-  async function getKillCountDb() {
-    if (killCountDb !== null) return killCountDb;
-    killCountDb = {};
-    try {
-      const text = await new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({
-          method: "GET",
-          url: "https://raw.githubusercontent.com/lklynet/Kill-Count/main/killcounts.jsonl",
-          onload: (r) => r.status === 200 ? resolve(r.responseText) : reject(new Error(`HTTP ${r.status}`)),
-          onerror: reject
-        });
-      });
-      let loaded = 0;
-      for (const line of text.split("\n")) {
-        const s = line.trim();
-        if (!s) continue;
-        try {
-          const entry = JSON.parse(s);
-          if (entry.tmdb_id != null) {
-            killCountDb[String(entry.tmdb_id)] = entry.count;
-            loaded++;
-          }
-        } catch (e) {
-        }
-      }
-    } catch (e) {
-      console.warn("[CyTube SC] Kill count DB failed to load:", e);
-    }
-    return killCountDb;
-  }
-  async function validateTmdbKey(key) {
-    if (!key) return "invalid";
-    const url = `https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(key)}`;
-    try {
-      const res = await fetch(url);
-      if (res.status === 200) return "valid";
-      if (res.status === 401) return "invalid";
-      return "error";
-    } catch (e) {
-      try {
-        const r = await nativeHttpGet(url);
-        if (r.status === 200) return "valid";
-        if (r.status === 401) return "invalid";
-        return "error";
-      } catch (e2) {
-        return "error";
-      }
-    }
-  }
-  async function lookupMovie(title, year) {
-    var _a, _b;
-    const cacheKey = title + (year || "");
-    if (movieState.movieLinkCache[cacheKey] !== void 0) return movieState.movieLinkCache[cacheKey];
-    let tmdbResult = null;
-    let wikiUrl = null;
-    const tmdbPromise = hasKey(LS_TMDB) ? (async () => {
-      var _a2, _b2;
-      try {
-        const params = new URLSearchParams({ api_key: getKey(LS_TMDB), query: title, language: "en-US" });
-        if (year) params.set("year", year);
-        const res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!((_a2 = data.results) == null ? void 0 : _a2.length)) return;
-        let best = data.results[0];
-        if (year) {
-          const withYear = data.results.find((r) => {
-            var _a3;
-            return (_a3 = r.release_date) == null ? void 0 : _a3.startsWith(year);
-          });
-          if (withYear) best = withYear;
-        }
-        const detailRes = await fetch(
-          `https://api.themoviedb.org/3/movie/${best.id}?api_key=${getKey(LS_TMDB)}&append_to_response=external_ids`
-        );
-        if (!detailRes.ok) return;
-        const detail = await detailRes.json();
-        tmdbResult = {
-          tmdbId: best.id,
-          imdbId: detail.imdb_id || ((_b2 = detail.external_ids) == null ? void 0 : _b2.imdb_id) || null,
-          title: detail.title,
-          year: detail.release_date ? detail.release_date.slice(0, 4) : year,
-          poster: detail.poster_path ? `https://image.tmdb.org/t/p/w500${detail.poster_path}` : null,
-          backdrop: detail.backdrop_path ? `https://image.tmdb.org/t/p/w1280${detail.backdrop_path}` : null,
-          rating: detail.vote_average ? Math.round(detail.vote_average * 10) / 10 : null,
-          runtime: detail.runtime || null,
-          overview: detail.overview || "",
-          genres: (detail.genres || []).map((g) => g.name)
-        };
-      } catch (e) {
-      }
-    })() : Promise.resolve();
-    const wikiPromise = (async () => {
-      var _a2, _b2;
-      try {
-        const searchTitle = title + (year ? " " + year : "") + " film";
-        const res = await fetch(
-          `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(searchTitle)}&srlimit=1&format=json&origin=*`
-        );
-        if (!res.ok) return;
-        const data = await res.json();
-        const hit = (_b2 = (_a2 = data == null ? void 0 : data.query) == null ? void 0 : _a2.search) == null ? void 0 : _b2[0];
-        if (hit) wikiUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(hit.title.replace(/ /g, "_"))}`;
-      } catch (e) {
-      }
-    })();
-    await Promise.all([tmdbPromise, wikiPromise]);
-    let killCount = null;
-    if (tmdbResult == null ? void 0 : tmdbResult.tmdbId) {
-      const db = await getKillCountDb();
-      const count = db[String(tmdbResult.tmdbId)];
-      if (count !== void 0 && count !== null) killCount = count;
-    }
-    const parentalGuide = await fetchImdbParentalGuide(tmdbResult == null ? void 0 : tmdbResult.imdbId);
-    const result = {
-      links: {
-        imdb: (tmdbResult == null ? void 0 : tmdbResult.imdbId) ? `https://www.imdb.com/title/${tmdbResult.imdbId}/` : null,
-        letterboxd: (tmdbResult == null ? void 0 : tmdbResult.tmdbId) ? `https://letterboxd.com/tmdb/${tmdbResult.tmdbId}` : null,
-        wiki: wikiUrl
-      },
-      killCount,
-      parentalGuide,
-      imdbId: (tmdbResult == null ? void 0 : tmdbResult.imdbId) || null,
-      cleanTitle: (tmdbResult == null ? void 0 : tmdbResult.title) || null,
-      cleanYear: (tmdbResult == null ? void 0 : tmdbResult.year) || null,
-      poster: (tmdbResult == null ? void 0 : tmdbResult.poster) || null,
-      backdrop: (tmdbResult == null ? void 0 : tmdbResult.backdrop) || null,
-      rating: (_a = tmdbResult == null ? void 0 : tmdbResult.rating) != null ? _a : null,
-      runtime: (_b = tmdbResult == null ? void 0 : tmdbResult.runtime) != null ? _b : null,
-      overview: (tmdbResult == null ? void 0 : tmdbResult.overview) || "",
-      genres: (tmdbResult == null ? void 0 : tmdbResult.genres) || []
-    };
-    movieState.movieLinkCache[cacheKey] = result;
-    return result;
-  }
-
-  // src/cards/nowplaying.js
-  var NP_PG_SHORT = {
-    "Sex & Nudity": "Sex/Nudity",
-    "Violence & Gore": "Violence",
-    "Profanity": "Profanity",
-    "Alcohol, Drugs & Smoking": "Drugs",
-    "Frightening & Intense Scenes": "Frightening"
-  };
-  var npState = {
-    data: null,
-    // latest movie data for the card
-    introDone: false
-    // startup intro card has run (see initIntroSequence)
-  };
-  var _npHideTimer = null;
-  var _npProgTimer = null;
-  var _npWatcherInit = false;
-  function _renderNpProgress() {
-    const card = document.getElementById("sc-np-card");
-    if (!card) {
-      clearInterval(_npProgTimer);
-      return;
-    }
-    const wrap = card.querySelector("#sc-np-progress");
-    const fill = card.querySelector("#sc-np-prog-fill");
-    const elapsedEl = card.querySelector("#sc-np-prog-elapsed");
-    const totalEl = card.querySelector("#sc-np-prog-total");
-    const remainEl = card.querySelector("#sc-np-prog-remain");
-    if (!wrap || !fill) return;
-    const dur = getCurrentMediaSeconds();
-    if (dur > 0) {
-      const elapsed = Math.min(getCurrentPlaybackSeconds(), dur);
-      const pct = Math.max(0, Math.min(100, elapsed / dur * 100));
-      fill.style.setProperty("width", pct + "%", "important");
-      elapsedEl.textContent = formatHMS(elapsed);
-      totalEl.textContent = formatHMS(dur);
-      remainEl.textContent = "−" + formatHMS(dur - elapsed) + " left";
-      wrap.style.display = "";
-    } else {
-      wrap.style.display = "none";
-    }
-  }
-  function _npCardEnabled() {
-    return isTv;
-  }
-  var _npScrollTimer = null;
-  var _npScrollRaf = null;
-  var _NP_SCROLL_DELAY = 3500;
-  function _autoScrollOverview() {
-    clearTimeout(_npScrollTimer);
-    cancelAnimationFrame(_npScrollRaf);
-    const card = document.getElementById("sc-np-card");
-    const ov = card && card.querySelector("#sc-np-overview");
-    if (!ov) return 0;
-    ov.scrollTop = 0;
-    const dist = ov.scrollHeight - ov.clientHeight;
-    if (dist <= 4) return 0;
-    const dur = Math.min(12e3, Math.max(2500, dist / 24 * 1e3));
-    _npScrollTimer = setTimeout(() => {
-      const start = ov.scrollTop;
-      const span = ov.scrollHeight - ov.clientHeight - start;
-      if (span <= 0) return;
-      const t0 = performance.now();
-      const step = (now) => {
-        const c = document.getElementById("sc-np-card");
-        if (!c || !c.classList.contains("sc-np-visible")) return;
-        const p = Math.min(1, (now - t0) / dur);
-        const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-        ov.scrollTop = start + span * e;
-        if (p < 1) _npScrollRaf = requestAnimationFrame(step);
-      };
-      _npScrollRaf = requestAnimationFrame(step);
-    }, _NP_SCROLL_DELAY);
-    return _NP_SCROLL_DELAY + dur;
-  }
-  function showNowPlayingCard(data, opts = {}) {
-    if (!data || !data.cleanTitle && !data.backdrop) return;
-    let card = document.getElementById("sc-np-card");
-    if (!card) {
-      card = document.createElement("div");
-      card.id = "sc-np-card";
-      card.innerHTML = `
-            <div id="sc-np-backdrop"></div>
-            <div id="sc-np-scrim"></div>
-            <div id="sc-np-content">
-                <img id="sc-np-poster" alt="" />
-                <div id="sc-np-info">
-                    <div id="sc-np-eyebrow">Now Playing</div>
-                    <div id="sc-np-title"></div>
-                    <div id="sc-np-meta"></div>
-                    <div id="sc-np-overview"></div>
-                    <div id="sc-np-chips"></div>
-                    <div id="sc-np-progress">
-                        <div id="sc-np-prog-bar"><div id="sc-np-prog-fill"></div></div>
-                        <div id="sc-np-prog-times">
-                            <span id="sc-np-prog-elapsed">0:00</span>
-                            <span id="sc-np-prog-remain"></span>
-                            <span id="sc-np-prog-total">0:00</span>
-                        </div>
-                    </div>
-                </div>
-            </div>`;
-      document.body.appendChild(card);
-      card.addEventListener("click", hideNowPlayingCard);
-    }
-    const title = data.cleanTitle || movieState.lastMovieTitle || "";
-    const year = data.cleanYear ? ` (${data.cleanYear})` : "";
-    const bd = card.querySelector("#sc-np-backdrop");
-    const poster = card.querySelector("#sc-np-poster");
-    const meta = card.querySelector("#sc-np-meta");
-    const chips = card.querySelector("#sc-np-chips");
-    bd.style.backgroundImage = data.backdrop ? `url(${data.backdrop})` : "none";
-    if (data.poster) {
-      poster.src = data.poster;
-      poster.style.display = "";
-    } else poster.style.display = "none";
-    card.querySelector("#sc-np-title").textContent = title + year;
-    card.querySelector("#sc-np-overview").textContent = data.overview || "";
-    const metaParts = [];
-    if (data.rating) metaParts.push(`⭐ ${data.rating}`);
-    if (data.runtime) metaParts.push(`${Math.floor(data.runtime / 60)}h ${data.runtime % 60}m`);
-    if (data.genres && data.genres.length) metaParts.push(data.genres.slice(0, 3).join(" · "));
-    meta.textContent = metaParts.join("     ");
-    const chipHtml = [];
-    (data.parentalGuide || []).forEach((pg) => {
-      const sev = String(pg.severity || "").toLowerCase();
-      const label = NP_PG_SHORT[pg.category] || pg.category;
-      chipHtml.push(`<span class="sc-np-chip sc-sev-${sev}">${label}: ${pg.severity}</span>`);
-    });
-    if (data.killCount !== null && data.killCount !== void 0) {
-      chipHtml.push(`<span class="sc-np-chip">💀 ${data.killCount} kills</span>`);
-    }
-    chips.innerHTML = chipHtml.join("");
-    card.classList.add("sc-np-visible");
-    _renderNpProgress();
-    clearInterval(_npProgTimer);
-    _npProgTimer = setInterval(_renderNpProgress, 500);
-    const revealMs = _autoScrollOverview();
-    clearTimeout(_npHideTimer);
-    if (opts.autoHide) {
-      const v = document.querySelector("#videowrap video");
-      const playing = v && !v.paused;
-      if (playing || !v) _npHideTimer = setTimeout(hideNowPlayingCard, Math.max(7e3, revealMs + 2500));
-    }
-  }
-  function hideNowPlayingCard() {
-    const card = document.getElementById("sc-np-card");
-    if (card) card.classList.remove("sc-np-visible");
-    clearTimeout(_npHideTimer);
-    clearInterval(_npProgTimer);
-    clearTimeout(_npScrollTimer);
-    cancelAnimationFrame(_npScrollRaf);
-  }
-  function initNowPlayingWatcher() {
-    if (_npWatcherInit) return;
-    _npWatcherInit = true;
-    const toggle = () => {
-      const card = document.getElementById("sc-np-card");
-      if (card && card.classList.contains("sc-np-visible")) hideNowPlayingCard();
-      else if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
-    };
-    document.addEventListener("keydown", (e) => {
-      const t = e.target;
-      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
-      if (e.key === "i" || e.key === "I") toggle();
-      else if (e.key === "t" || e.key === "T") toggleTriviaCard();
-    });
-    const bindTitle = () => {
-      const h = document.getElementById("videowrap-header");
-      if (!h) return;
-      if (npState.data && npState.data.imdbId && !document.getElementById("sc-trivia-btn")) {
-        const btn = document.createElement("button");
-        btn.id = "sc-trivia-btn";
-        btn.type = "button";
-        btn.textContent = "Trivia";
-        btn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          showTriviaCard();
-        });
-        if (document.body.classList.contains("sc-video-dimmed")) btn.classList.add("sc-bar-dim");
-        h.appendChild(btn);
-      }
-    };
-    bindTitle();
-    new MutationObserver(bindTitle).observe(document.body, { childList: true, subtree: true });
-  }
-
-  // src/cards/trivia.js
-  function _escHtml(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-  function showTriviaCard() {
-    const tconst = npState.data && npState.data.imdbId;
-    if (!tconst) return;
-    let card = document.getElementById("sc-trivia-card");
-    if (!card) {
-      card = document.createElement("div");
-      card.id = "sc-trivia-card";
-      card.innerHTML = `
-            <div id="sc-trivia-panel">
-                <div id="sc-trivia-head">
-                    <span id="sc-trivia-title">Trivia</span>
-                    <button id="sc-trivia-close" type="button">✕</button>
-                </div>
-                <div id="sc-trivia-list"></div>
-            </div>`;
-      document.body.appendChild(card);
-      card.addEventListener("click", (e) => {
-        if (e.target === card) hideTriviaCard();
-      });
-      card.querySelector("#sc-trivia-close").addEventListener("click", hideTriviaCard);
-    }
-    card.querySelector("#sc-trivia-title").textContent = "Trivia" + (npState.data.cleanTitle ? " — " + npState.data.cleanTitle : "");
-    const list = card.querySelector("#sc-trivia-list");
-    list.innerHTML = '<div class="sc-trivia-item">Loading…</div>';
-    card.classList.add("sc-show");
-    fetchImdbTrivia(tconst).then((items) => {
-      if (!document.getElementById("sc-trivia-card")) return;
-      if (!items || !items.length) {
-        list.innerHTML = '<div class="sc-trivia-item">No trivia found.</div>';
-        return;
-      }
-      list.innerHTML = items.map((t) => `<div class="sc-trivia-item">${_escHtml(t)}</div>`).join("");
-      list.scrollTop = 0;
-    });
-  }
-  function hideTriviaCard() {
-    const card = document.getElementById("sc-trivia-card");
-    if (card) card.classList.remove("sc-show");
-  }
-  function toggleTriviaCard() {
-    const card = document.getElementById("sc-trivia-card");
-    if (card && card.classList.contains("sc-show")) hideTriviaCard();
-    else showTriviaCard();
   }
 
   // src/tvnav/geometry.js
@@ -1464,7 +2106,7 @@
   function initTvNav() {
     if (!isTv) return;
     let focusEl = null;
-    let preOverlayFocusEl = null;
+    let overlayFocusStack = [];
     const isVisible = (el) => {
       if (!el || !el.getBoundingClientRect) return false;
       const r = el.getBoundingClientRect();
@@ -1473,13 +2115,21 @@
       const cs = getComputedStyle(el);
       return cs.visibility !== "hidden" && cs.display !== "none";
     };
-    const OVERLAY_IDS = ["sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card"];
+    const OVERLAY_IDS = ["sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card", "sc-lineup-screen"];
+    const isOverlayOpen = (id, o) => !!(o && isVisible(o) && (id !== "sc-np-card" || o.classList.contains("sc-np-visible")) && (id !== "sc-trivia-card" || o.classList.contains("sc-show")) && (id !== "sc-lineup-screen" || o.classList.contains("sc-lineup-visible")));
     const openOverlay = () => {
       for (const id of OVERLAY_IDS) {
         const o = document.getElementById(id);
-        if (o && isVisible(o) && (id !== "sc-np-card" || o.classList.contains("sc-np-visible")) && (id !== "sc-trivia-card" || o.classList.contains("sc-show"))) return o;
+        if (isOverlayOpen(id, o)) return o;
       }
       return null;
+    };
+    const countOpenOverlays = () => {
+      let n = 0;
+      for (const id of OVERLAY_IDS) {
+        if (isOverlayOpen(id, document.getElementById(id))) n++;
+      }
+      return n;
     };
     const isDesynced = () => {
       const b = document.getElementById("sc-desync-btn");
@@ -1550,8 +2200,7 @@
       focusEl = null;
     }
     function restoreFocusAfterOverlayClose() {
-      const restore = preOverlayFocusEl;
-      preOverlayFocusEl = null;
+      const restore = overlayFocusStack.pop() || null;
       clearFocus();
       if (restore && isVisible(restore)) setFocus(restore);
     }
@@ -1654,6 +2303,41 @@
           }
         }
       }
+      const lineupScreen = document.getElementById("sc-lineup-screen");
+      if (lineupScreen && lineupScreen.classList.contains("sc-lineup-visible")) {
+        const rail = focusEl && focusEl.closest(".sc-lineup-rail");
+        if (rail && (dir === "left" || dir === "right")) {
+          const items = [...rail.querySelectorAll(".sc-lineup-item")];
+          const i = items.indexOf(focusEl);
+          const ni = dir === "right" ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
+          setFocus(items[ni]);
+          return;
+        }
+        if (rail && (dir === "up" || dir === "down")) {
+          const items = [...rail.querySelectorAll(".sc-lineup-item")];
+          const myIndex = items.indexOf(focusEl);
+          const target = stepLineupSection(dir === "down" ? 1 : -1, myIndex);
+          if (target) {
+            setFocus(target);
+            return;
+          }
+          if (dir === "up") {
+            const activeTab = document.querySelector(".sc-lineup-daytab-active");
+            if (activeTab) {
+              setFocus(activeTab);
+              return;
+            }
+          }
+        }
+        if (dir === "down" && focusEl && focusEl.classList.contains("sc-lineup-daytab")) {
+          const body = document.getElementById("sc-lineup-body");
+          const firstItem = body && body.querySelector(".sc-lineup-item");
+          if (firstItem) {
+            setFocus(firstItem);
+            return;
+          }
+        }
+      }
       const { scope, list } = candidates();
       if (!list.length) return;
       if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) {
@@ -1690,9 +2374,15 @@
       const ownerWrap = focusEl.classList && focusEl.classList.contains("vjs-menu-item") && focusEl.closest(".vjs-menu-button");
       const ownerBtn = ownerWrap && ownerWrap.querySelector("button.vjs-menu-button");
       const opener = focusEl;
-      const hadOverlay = !!openOverlay();
+      const depthBefore = countOpenOverlays();
       focusEl.click();
-      if (!hadOverlay && openOverlay()) preOverlayFocusEl = opener;
+      const depthAfter = countOpenOverlays();
+      if (depthAfter > depthBefore) {
+        overlayFocusStack.push(opener);
+      } else if (depthAfter < depthBefore) {
+        restoreFocusAfterOverlayClose();
+        return;
+      }
       if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) {
         clearFocus();
         setFocus(ownerBtn);
@@ -1747,6 +2437,12 @@
       const np = document.getElementById("sc-np-card");
       if (np && np.classList.contains("sc-np-visible")) {
         hideNowPlayingCard();
+        restoreFocusAfterOverlayClose();
+        return true;
+      }
+      const lineup = document.getElementById("sc-lineup-screen");
+      if (lineup && lineup.classList.contains("sc-lineup-visible")) {
+        hideLineupScreen();
         restoreFocusAfterOverlayClose();
         return true;
       }
@@ -2221,6 +2917,9 @@
     });
     document.body.appendChild(btn);
   }
+
+  // src/settings.js
+  init_native();
 
   // src/chat/keyboard.js
   function isEditable(el) {
@@ -3933,6 +4632,7 @@
   }
 
   // src/update.js
+  init_native();
   var LS_UPDATE_CACHE = "sc_update_cache";
   var GH_RELEASES_API = "https://api.github.com/repos/spudzareneat/grindhouse-tv/releases/latest";
   var GH_RELEASES_PAGE = "https://github.com/spudzareneat/grindhouse-tv/releases/latest";
@@ -4011,126 +4711,6 @@
       checkForUpdate(false).catch(() => {
       });
     }, 4e3);
-  }
-
-  // src/parse.js
-  function parseMovieFilename(raw) {
-    let s = raw.replace(/\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|divx|xvid|ogv)$/i, "");
-    let year = null;
-    const yearMatch = s.match(/[\[(](\d{4})[\])]/);
-    if (yearMatch) {
-      year = yearMatch[1];
-      s = s.slice(0, yearMatch.index);
-    }
-    s = s.replace(/[._]+/g, " ");
-    s = s.replace(/[\[(][^\])]*/g, "").replace(/[\])]/, "");
-    s = s.replace(/\s+/g, " ").trim();
-    return { title: s, year };
-  }
-  var YT_NOISE = [
-    "full movie",
-    "full length movie",
-    "full length feature",
-    "full length film",
-    "full length",
-    "complete movie",
-    "complete film",
-    "the complete movie",
-    "entire movie",
-    "free movie",
-    "free film",
-    "free online",
-    "free to watch",
-    "watch online",
-    "watch free",
-    "watch now",
-    "online free",
-    "free with ads",
-    "with ads",
-    "no ads",
-    "ad free",
-    "official movie",
-    "official film",
-    "official",
-    "exclusive",
-    "premiere",
-    "world premiere",
-    "remastered",
-    "restored",
-    "colou?ri[sz]ed",
-    "subtitle[sd]?",
-    "subbed",
-    "dubbed",
-    "eng sub",
-    "hd",
-    "fhd",
-    "uhd",
-    "4k",
-    "2k",
-    "1080p",
-    "720p",
-    "480p",
-    "high definition",
-    "blu-?ray",
-    "dvd",
-    "web-?dl",
-    "uncut",
-    "extended",
-    "director.?s cut",
-    "special edition",
-    "classic movie",
-    "classic film",
-    "cult classic",
-    "b-?movie",
-    "feature film",
-    "feature",
-    "cinema",
-    "blockbuster",
-    "must watch",
-    "in english",
-    "english movie"
-  ];
-  var YT_GENRES = [
-    "action",
-    "thriller",
-    "horror",
-    "comedy",
-    "drama",
-    "sci-?fi",
-    "science fiction",
-    "western",
-    "romance",
-    "crime",
-    "mystery",
-    "adventure",
-    "fantasy",
-    "war",
-    "noir",
-    "slasher",
-    "martial arts",
-    "kung fu",
-    "documentary",
-    "family",
-    "musical",
-    "animation"
-  ];
-  function parseYouTubeTitle(raw) {
-    let s = " " + raw + " ";
-    let year = null;
-    const ym = s.match(/\b(19\d{2}|20\d{2})\b/);
-    if (ym) year = ym[1];
-    s = s.replace(/[\[({][^\])}]*[\])}]/g, " ");
-    if (year) s = s.replace(new RegExp("\\b" + year + "\\b", "g"), " ");
-    [...YT_NOISE, ...YT_GENRES].forEach((n) => {
-      s = s.replace(new RegExp("\\b" + n + "\\b", "gi"), " ");
-    });
-    s = s.replace(/[^\w\s&':!.,-]/g, " ");
-    const segs = s.split(/\s[|–—•:_-]+\s/).map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length >= 2);
-    let title = segs.sort(
-      (a, b) => (b.match(/[a-z]/gi) || []).length - (a.match(/[a-z]/gi) || []).length
-    )[0] || s;
-    title = title.replace(/\s+/g, " ").replace(/^[\s'":.,-]+|[\s'":.,-]+$/g, "").trim();
-    return { title, year };
   }
 
   // src/titleinject.js
@@ -4279,6 +4859,7 @@
   }
 
   // src/player/drive.js
+  init_native();
   function initGoogleDrive() {
     const ITAG_QMAP = { 37: 1080, 46: 1080, 22: 720, 45: 720, 59: 480, 44: 480, 35: 480, 18: 360, 43: 360, 34: 360 };
     const ITAG_CMAP = {
@@ -6199,6 +6780,174 @@
             body.sc-tv #sc-trivia-close { width: 44px !important; height: 44px !important; font-size: 20px !important; }
             body.sc-tv .sc-trivia-item { font-size: 20px !important; padding: 16px 0 !important; }
 
+            /* ── TONIGHT'S LINEUP (full-screen TV schedule, day tabs + sections) ─── */
+            #sc-lineup-screen {
+                position: fixed !important; inset: 0 !important;
+                z-index: 20500 !important; /* below #sc-np-card (21000) so OK on a film covers this */
+                background: rgba(6,4,9,0.97) !important;
+                display: none !important; flex-direction: column !important;
+                align-items: flex-start !important; justify-content: flex-start !important;
+                font-family: 'Inter','Roboto',system-ui,sans-serif !important;
+                padding: 2vh 4vw !important; box-sizing: border-box !important;
+                overflow: hidden !important; /* one section fills the remaining space -- no scrolling */
+            }
+            #sc-lineup-screen.sc-lineup-visible { display: flex !important; }
+            #sc-lineup-header {
+                color: #fff !important; font-size: 14px !important; font-weight: 700 !important;
+                line-height: 1.25 !important; margin-bottom: 4px !important;
+            }
+            #sc-lineup-subtitle {
+                color: rgba(255,255,255,0.45) !important; font-size: 11px !important;
+                margin-bottom: 12px !important;
+            }
+            body.sc-tv #sc-lineup-header { font-size: 15px !important; }
+            body.sc-tv #sc-lineup-subtitle { font-size: 12px !important; }
+            #sc-lineup-body {
+                width: 100% !important; display: flex !important; flex-direction: column !important;
+                /* Holds exactly one .sc-lineup-section at a time (a Netflix-row-style pager,
+                   not a scrollable stack) -- Up/Down PAGES between sections via
+                   stepLineupSection() in screen.js rather than scrolling through them. flex:1
+                   fills whatever height #sc-lineup-screen has left after the header/tabs. */
+                flex: 1 1 auto !important; min-height: 0 !important;
+            }
+
+            /* Day tabs — plain button row, same shape as settings.js's tab pattern; the whole-
+               page geometric scorer handles Left/Right across tabs and Up/Down into the first
+               section on its own (no special-case nav code needed, see tvnav.js). */
+            #sc-lineup-daytabs {
+                display: flex !important; gap: 10px !important; margin-bottom: 6px !important;
+            }
+            .sc-lineup-daytab {
+                background: rgba(255,255,255,0.08) !important; border: none !important;
+                color: rgba(255,255,255,0.65) !important; font-weight: 700 !important;
+                font-size: 13px !important; letter-spacing: 0.06em !important;
+                padding: 8px 18px !important; border-radius: 999px !important; cursor: pointer !important;
+            }
+            .sc-lineup-daytab-active { background: var(--np-accent, #ff5b73) !important; color: #fff !important; }
+            body.sc-tv .sc-lineup-daytab { font-size: 15px !important; padding: 10px 22px !important; }
+            body.sc-tv .sc-lineup-daytab.sc-tv-focus {
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+            }
+
+            /* The one currently-shown section: fills #sc-lineup-body's full height (not just its
+               content's natural size), a background gradient washed with that section's own
+               theme color (see sectionThemes.js -- --sc-lineup-wash is set per-instance in
+               screen.js) tying its header and its row of posters together, content vertically
+               centered within whatever space is available so it reads as "this grouping fits
+               the screen" rather than pinned to one edge. */
+            .sc-lineup-section {
+                position: relative !important; width: 100% !important; height: 100% !important;
+                border-radius: 10px !important; overflow: hidden !important;
+                background: linear-gradient(160deg, var(--sc-lineup-wash, #14141a) 0%, #0a080d 78%) !important;
+                display: flex !important; flex-direction: column !important; justify-content: center !important;
+                padding: 14px 0 16px !important; box-sizing: border-box !important;
+            }
+            .sc-lineup-section-fallback { background: none !important; padding: 0 !important; }
+            .sc-lineup-section-name {
+                font-weight: 700 !important; font-size: 24px !important;
+                padding: 0 24px 14px !important; text-shadow: 0 2px 10px rgba(0,0,0,0.55) !important;
+                /* color/font-family are set per-instance in screen.js (each section's theme) --
+                   these are just safety defaults for before that runs. letter-spacing/uppercase
+                   deliberately omitted: these are expressive display fonts (Creepster, Monoton,
+                   Vast Shadow, ...), forcing tracking/case on them fights their own design. */
+                color: #fff !important;
+            }
+            body.sc-tv .sc-lineup-section-name { font-size: 30px !important; }
+            /* Position within the day's groupings (e.g. "2 / 3") -- the only orientation cue
+               now that sections page instead of stacking where the next one could peek into view.
+               Deliberately NOT the decorative theme font/color -- a plain utility label. */
+            .sc-lineup-section-count {
+                margin-left: 12px !important; font-weight: 600 !important; letter-spacing: 0.04em !important;
+                font-family: 'Inter','Roboto',system-ui,sans-serif !important;
+                font-size: 13px !important; color: rgba(255,255,255,0.55) !important;
+            }
+            body.sc-tv .sc-lineup-section-count { font-size: 15px !important; }
+
+            .sc-lineup-rail {
+                position: relative !important;
+                display: flex !important; gap: 22px !important; width: 100% !important;
+                overflow-x: auto !important; overflow-y: hidden !important;
+                padding: 8px 24px 14px !important;
+                /* Snap fully to each item so paging Left/Right (and scrolling back) always
+                   settles on a whole poster — without this, scrollIntoView({inline:'nearest'})
+                   can leave a partially-scrolled position that chops a poster's edge. */
+                scroll-snap-type: x mandatory !important;
+                /* Mandatory snap otherwise ignores the container's own padding as reserved
+                   space and skips past it — this keeps the first/last item's snap position
+                   inside the padding instead of flush with the unpadded scrollport edge. */
+                scroll-padding: 8px 24px 14px !important;
+                scrollbar-width: thin !important;
+                scrollbar-color: rgba(255,255,255,0.28) transparent !important;
+            }
+            .sc-lineup-rail::-webkit-scrollbar { height: 8px !important; }
+            .sc-lineup-rail::-webkit-scrollbar-track { background: rgba(255,255,255,0.05) !important; border-radius: 10px !important; }
+            .sc-lineup-rail::-webkit-scrollbar-thumb {
+                background: rgba(255,255,255,0.28) !important; border-radius: 10px !important;
+                border: 2px solid transparent !important; background-clip: padding-box !important;
+            }
+            .sc-lineup-rail::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.45) !important; background-clip: padding-box !important; }
+            body.sc-tv .sc-lineup-rail::-webkit-scrollbar { height: 10px !important; }
+            #sc-lineup-loading { color: rgba(255,255,255,0.6) !important; font-size: 18px !important; }
+            .sc-lineup-item {
+                flex: 0 0 185px !important; background: transparent !important; border: none !important;
+                color: #fff !important; cursor: pointer !important; text-align: left !important;
+                padding: 0 !important; display: flex !important; flex-direction: column !important; gap: 10px !important;
+                scroll-snap-align: start !important;
+            }
+            .sc-lineup-poster {
+                position: relative !important; /* anchors the eta badge + no-art fallback title below */
+                width: 185px !important; height: 278px !important; border-radius: 8px !important;
+                background-color: rgba(255,255,255,0.08) !important;
+                background-size: contain !important; background-repeat: no-repeat !important;
+                background-position: center !important;
+                box-shadow: 0 6px 14px rgba(0,0,0,0.45) !important;
+                flex-shrink: 0 !important; /* keep the box exact regardless of available space */
+            }
+            .sc-lineup-item-current .sc-lineup-poster {
+                box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 6px 14px rgba(0,0,0,0.45) !important;
+            }
+            .sc-lineup-title { font-size: 15px !important; font-weight: 600 !important; line-height: 1.3 !important; }
+            /* No TMDB match at all -- the poster box shows the movie's own title/year instead of
+               sitting empty; the item's external .sc-lineup-title is omitted in this case (see
+               screen.js) so the name isn't shown twice. */
+            .sc-lineup-poster-fallback {
+                position: absolute !important; inset: 0 !important; display: flex !important;
+                align-items: center !important; justify-content: center !important; text-align: center !important;
+                padding: 14px !important; box-sizing: border-box !important;
+                color: rgba(255,255,255,0.85) !important; font-size: 14px !important; font-weight: 600 !important;
+                line-height: 1.35 !important;
+            }
+            /* Start-time estimate, overlaid directly on the poster art (a caption bar pinned to
+               its bottom edge) instead of a separate line below -- readable over any art via the
+               gradient backing, regardless of NOW PLAYING/estimated/blank state. */
+            .sc-lineup-eta {
+                position: absolute !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+                padding: 18px 10px 8px !important; box-sizing: border-box !important;
+                background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.75) 60%, rgba(0,0,0,0.85) 100%) !important;
+                border-radius: 0 0 8px 8px !important;
+                font-size: 13px !important; font-weight: 700 !important; color: rgba(255,255,255,0.85) !important;
+                text-align: center !important;
+            }
+            .sc-lineup-item-current .sc-lineup-eta { color: var(--np-accent, #ff5b73) !important; }
+            /* D-pad focus ring highlights just the poster art (not the whole tile — title/eta
+               stay plain), matching how the "now playing" marker above is scoped. Overrides
+               the generic body.sc-tv .sc-tv-focus rule via higher selector specificity. */
+            body.sc-tv .sc-lineup-item.sc-tv-focus { outline: none !important; box-shadow: none !important; }
+            body.sc-tv .sc-lineup-item.sc-tv-focus .sc-lineup-poster {
+                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(224,112,26,0.32), 0 6px 14px rgba(0,0,0,0.45) !important;
+            }
+            /* Display-only fallback items (Coming Attractions art with no real title/time data)
+               get a gray focus ring instead of orange, signaling there's nothing to select. */
+            body.sc-tv .sc-lineup-item-static.sc-tv-focus .sc-lineup-poster {
+                outline: 3px solid #888 !important; outline-offset: 2px !important;
+                box-shadow: 0 0 0 5px rgba(136,136,136,0.32), 0 6px 14px rgba(0,0,0,0.45) !important;
+            }
+            body.sc-tv .sc-lineup-item { flex-basis: 190px !important; }
+            body.sc-tv .sc-lineup-poster { width: 190px !important; height: 285px !important; }
+            body.sc-tv .sc-lineup-title { font-size: 16px !important; }
+            body.sc-tv .sc-lineup-eta { font-size: 14px !important; }
+
             /* Vertical phones (if enabled there): stack poster above text */
             body.sc-vertical #sc-np-content { flex-direction: column !important; align-items: flex-start !important; gap: 18px !important; bottom: 8% !important; }
             body.sc-vertical #sc-np-poster { width: 130px !important; }
@@ -6236,6 +6985,7 @@
             html body.sc-pip #sc-desync-btn, html body.sc-pip #sc-settings-btn,
             html body.sc-pip #sc-users-panel, html body.sc-pip #sc-poll-panel,
             html body.sc-pip #sc-np-card, html body.sc-pip #sc-trivia-card,
+            html body.sc-pip #sc-lineup-screen,
             html body.sc-pip #sc-mobile-input-row, html body.sc-pip .video-js .vjs-control-bar {
                 display: none !important;
             }

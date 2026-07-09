@@ -1,23 +1,17 @@
 import { usernameToColor } from './usercolors.js';
 import { chromeState } from './chrome/state.js';
 import { onSocket } from './socket.js';
+import { isTv } from './tvdetect.js';
+import { showLineupScreen } from './lineup/screen.js';
+import { getMotdPosterImages } from './motd.js';
 
 /* ==========================================================
    POSTER STRIP — toggle show/hide the MOTD poster images
 ========================================================== */
 
 export function initPosterStrip() {
-    const motd = document.getElementById('motdrow');
-    if (!motd) return;
-
     // Build the poster strip container from MOTD images
-    const imgs = [...motd.querySelectorAll('img')].filter(img => {
-        // Read HTML attributes (not rendered dimensions — motdrow is hidden so rendered = 0)
-        const w = parseInt(img.getAttribute('width') || 0);
-        const h = parseInt(img.getAttribute('height') || 0);
-        // Poster images in the MOTD are 125x175 — keep portrait-ish images, skip wide banners
-        return h >= 100 && w <= 200;
-    });
+    const imgs = getMotdPosterImages();
     if (!imgs.length) return;
 
     // Create our strip outside of #motdrow so we control it fully
@@ -147,6 +141,10 @@ export function initPosterStrip() {
     toggleBtn.title = 'Show/hide weekend lineup';
     toggleBtn.dataset.noTvCaption = '1'; // button text is self-explanatory; no remote caption
     toggleBtn.addEventListener('click', () => {
+        // TV: skip the small strip + hover-zoom entirely, open the full-screen Lineup
+        // rail directly — one press, no intermediate zoom step. Phone behavior (toggle
+        // the small strip) is completely unchanged.
+        if (isTv) { showLineupScreen(); return; }
         const visible = strip.classList.toggle('sc-poster-visible');
         toggleBtn.classList.toggle('sc-poster-toggle-active', visible);
         // Tell the top bar system whether strip is open
