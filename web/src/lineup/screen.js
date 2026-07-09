@@ -43,10 +43,14 @@ function itemButton(item) {
     btn.className = 'sc-lineup-item'
         + (item.isNowPlaying ? ' sc-lineup-item-current' : '')
         + (item.clickable === false ? ' sc-lineup-item-static' : '');
+    const titleText = `${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ''}`;
+    const etaText = item.isNowPlaying ? 'NOW PLAYING' : (item.etaLabel || '');
     btn.innerHTML = `
-        <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ''}"></div>
-        <div class="sc-lineup-title">${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ''}</div>
-        <div class="sc-lineup-eta">${item.isNowPlaying ? 'NOW PLAYING' : (item.etaLabel || '')}</div>`;
+        <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ''}">
+            ${!item.poster ? `<div class="sc-lineup-poster-fallback">${titleText}</div>` : ''}
+            ${etaText ? `<div class="sc-lineup-eta">${etaText}</div>` : ''}
+        </div>
+        ${item.poster ? `<div class="sc-lineup-title">${titleText}</div>` : ''}`;
     // Static Coming Attractions fallback posters are display-only (item.clickable === false)
     // -- they have no real title/overview to show, so OK does nothing for them.
     if (item.clickable !== false) {

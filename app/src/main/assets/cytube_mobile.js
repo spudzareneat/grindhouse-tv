@@ -1471,10 +1471,14 @@
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "sc-lineup-item" + (item.isNowPlaying ? " sc-lineup-item-current" : "") + (item.clickable === false ? " sc-lineup-item-static" : "");
+    const titleText = `${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ""}`;
+    const etaText = item.isNowPlaying ? "NOW PLAYING" : item.etaLabel || "";
     btn.innerHTML = `
-        <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ""}"></div>
-        <div class="sc-lineup-title">${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ""}</div>
-        <div class="sc-lineup-eta">${item.isNowPlaying ? "NOW PLAYING" : item.etaLabel || ""}</div>`;
+        <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ""}">
+            ${!item.poster ? `<div class="sc-lineup-poster-fallback">${titleText}</div>` : ""}
+            ${etaText ? `<div class="sc-lineup-eta">${etaText}</div>` : ""}
+        </div>
+        ${item.poster ? `<div class="sc-lineup-title">${titleText}</div>` : ""}`;
     if (item.clickable !== false) {
       btn.addEventListener("click", () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
     }
@@ -5070,6 +5074,13 @@
                 overflow: hidden !important; background-size: cover !important; background-position: center !important;
                 background-color: rgba(255,255,255,0.04) !important;
                 padding: 14px 0 16px !important;
+                /* #sc-lineup-body's default flex-shrink:1 would otherwise proportionally squash
+                   each stacked section to fit whatever space is left, clipping poster art against
+                   this element's own overflow:hidden well before the body's overflow-y:auto ever
+                   kicks in (confirmed on-device: posters were rendering ~40% of their real height,
+                   silently cropped). flex-shrink:0 keeps every section at its natural height, so
+                   the body's own scroll takes over instead of the flex box quietly shrinking. */
+                flex-shrink: 0 !important;
             }
             .sc-lineup-section::before {
                 content: '' !important; position: absolute !important; inset: 0 !important;
@@ -5116,6 +5127,7 @@
                 scroll-snap-align: start !important;
             }
             .sc-lineup-poster {
+                position: relative !important; /* anchors the eta badge + no-art fallback title below */
                 width: 220px !important; height: 308px !important; border-radius: 8px !important;
                 background-color: rgba(255,255,255,0.08) !important;
                 background-size: contain !important; background-repeat: no-repeat !important;
@@ -5127,8 +5139,28 @@
                 box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 6px 14px rgba(0,0,0,0.45) !important;
             }
             .sc-lineup-title { font-size: 15px !important; font-weight: 600 !important; line-height: 1.3 !important; }
-            .sc-lineup-eta { font-size: 13px !important; color: rgba(255,255,255,0.6) !important; }
-            .sc-lineup-item-current .sc-lineup-eta { color: var(--np-accent, #ff5b73) !important; font-weight: 700 !important; }
+            /* No TMDB match at all -- the poster box shows the movie's own title/year instead of
+               sitting empty; the item's external .sc-lineup-title is omitted in this case (see
+               screen.js) so the name isn't shown twice. */
+            .sc-lineup-poster-fallback {
+                position: absolute !important; inset: 0 !important; display: flex !important;
+                align-items: center !important; justify-content: center !important; text-align: center !important;
+                padding: 14px !important; box-sizing: border-box !important;
+                color: rgba(255,255,255,0.85) !important; font-size: 14px !important; font-weight: 600 !important;
+                line-height: 1.35 !important;
+            }
+            /* Start-time estimate, overlaid directly on the poster art (a caption bar pinned to
+               its bottom edge) instead of a separate line below -- readable over any art via the
+               gradient backing, regardless of NOW PLAYING/estimated/blank state. */
+            .sc-lineup-eta {
+                position: absolute !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+                padding: 18px 10px 8px !important; box-sizing: border-box !important;
+                background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.75) 60%, rgba(0,0,0,0.85) 100%) !important;
+                border-radius: 0 0 8px 8px !important;
+                font-size: 13px !important; font-weight: 700 !important; color: rgba(255,255,255,0.85) !important;
+                text-align: center !important;
+            }
+            .sc-lineup-item-current .sc-lineup-eta { color: var(--np-accent, #ff5b73) !important; }
             /* D-pad focus ring highlights just the poster art (not the whole tile — title/eta
                stay plain), matching how the "now playing" marker above is scoped. Overrides
                the generic body.sc-tv .sc-tv-focus rule via higher selector specificity. */
