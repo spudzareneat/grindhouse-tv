@@ -1453,7 +1453,7 @@
     "psychedelic-saturday": { font: "'Rubik Wet Paint'", color: "#a855f7", wash: "#200c2b" },
     "saturday-prime-time-drive-in": { font: "Monoton", color: "#22d3ee", wash: "#06232a" },
     "red-light-saturday-night": { font: "'Vast Shadow'", color: "#ef4444", wash: "#2b0a0a" },
-    "the-sunday-classics": { font: "Cinzel", color: "#9f2b4a", wash: "#200810" },
+    "the-sunday-classics": { font: "Cinzel", color: "#b8b8b8", wash: "#1c1c1c" },
     "sunday-slop-o-rama": { font: "Eater", color: "#a3b125", wash: "#1c1f08" },
     "last-call-sunday-night": { font: "'Bungee Shade'", color: "#6366f1", wash: "#12102b" }
   };
@@ -5172,14 +5172,14 @@
             body.sc-tv .sc-lineup-rail::-webkit-scrollbar { height: 10px !important; }
             #sc-lineup-loading { color: rgba(255,255,255,0.6) !important; font-size: 18px !important; }
             .sc-lineup-item {
-                flex: 0 0 220px !important; background: transparent !important; border: none !important;
+                flex: 0 0 185px !important; background: transparent !important; border: none !important;
                 color: #fff !important; cursor: pointer !important; text-align: left !important;
                 padding: 0 !important; display: flex !important; flex-direction: column !important; gap: 10px !important;
                 scroll-snap-align: start !important;
             }
             .sc-lineup-poster {
                 position: relative !important; /* anchors the eta badge + no-art fallback title below */
-                width: 220px !important; height: 308px !important; border-radius: 8px !important;
+                width: 185px !important; height: 278px !important; border-radius: 8px !important;
                 background-color: rgba(255,255,255,0.08) !important;
                 background-size: contain !important; background-repeat: no-repeat !important;
                 background-position: center !important;
@@ -5226,8 +5226,8 @@
                 outline: 3px solid #888 !important; outline-offset: 2px !important;
                 box-shadow: 0 0 0 5px rgba(136,136,136,0.32), 0 6px 14px rgba(0,0,0,0.45) !important;
             }
-            body.sc-tv .sc-lineup-item { flex-basis: 226px !important; }
-            body.sc-tv .sc-lineup-poster { width: 226px !important; height: 339px !important; }
+            body.sc-tv .sc-lineup-item { flex-basis: 190px !important; }
+            body.sc-tv .sc-lineup-poster { width: 190px !important; height: 285px !important; }
             body.sc-tv .sc-lineup-title { font-size: 16px !important; }
             body.sc-tv .sc-lineup-eta { font-size: 14px !important; }
 
