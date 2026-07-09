@@ -688,26 +688,81 @@
     { key: "letterboxd", label: "Letterboxd", color: "#2c4a2e", fg: "#00e054", char: "L" },
     { key: "wiki", label: "Wikipedia", color: "#444", fg: "#eee", char: "W" }
   ];
+  var LS_MOVIE_CACHE = "sc_movie_cache_v1";
+  var MOVIE_CACHE_MAX_AGE_MS = 9 * 24 * 60 * 60 * 1e3;
+  var MOVIE_CACHE_MAX_ENTRIES = 300;
+  var LS_KILLCOUNT_CACHE = "sc_killcount_cache_v1";
+  var KILLCOUNT_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
+  var _movieCacheTimestamps = {};
+  function loadMovieCache() {
+    try {
+      const raw = localStorage.getItem(LS_MOVIE_CACHE);
+      if (!raw) return;
+      const stored = JSON.parse(raw);
+      const now = Date.now();
+      for (const [key, entry] of Object.entries(stored)) {
+        if (entry && now - entry.ts < MOVIE_CACHE_MAX_AGE_MS) {
+          movieState.movieLinkCache[key] = entry.result;
+          _movieCacheTimestamps[key] = entry.ts;
+        }
+      }
+    } catch (e) {
+    }
+  }
+  function persistMovieCache() {
+    try {
+      const keys = Object.keys(movieState.movieLinkCache);
+      if (keys.length > MOVIE_CACHE_MAX_ENTRIES) {
+        const oldestFirst = keys.sort((a, b) => (_movieCacheTimestamps[a] || 0) - (_movieCacheTimestamps[b] || 0));
+        for (const k of oldestFirst.slice(0, keys.length - MOVIE_CACHE_MAX_ENTRIES)) {
+          delete movieState.movieLinkCache[k];
+          delete _movieCacheTimestamps[k];
+        }
+      }
+      const out = {};
+      for (const key of Object.keys(movieState.movieLinkCache)) {
+        out[key] = { result: movieState.movieLinkCache[key], ts: _movieCacheTimestamps[key] || Date.now() };
+      }
+      localStorage.setItem(LS_MOVIE_CACHE, JSON.stringify(out));
+    } catch (e) {
+    }
+  }
   var movieState = {
     lastMovieTitle: "",
     movieLinkCache: {}
     // cache by raw title to avoid repeat lookups
   };
+  loadMovieCache();
   var killCountDb = null;
+  function loadKillCountCache() {
+    try {
+      const raw = localStorage.getItem(LS_KILLCOUNT_CACHE);
+      if (!raw) return null;
+      const { data, ts } = JSON.parse(raw);
+      if (data && Date.now() - ts < KILLCOUNT_CACHE_MAX_AGE_MS) return data;
+    } catch (e) {
+    }
+    return null;
+  }
+  function saveKillCountCache(data) {
+    try {
+      localStorage.setItem(LS_KILLCOUNT_CACHE, JSON.stringify({ data, ts: Date.now() }));
+    } catch (e) {
+    }
+  }
   async function getKillCountDb() {
     if (killCountDb !== null) return killCountDb;
+    const cached = loadKillCountCache();
+    if (cached) {
+      killCountDb = cached;
+      return killCountDb;
+    }
     killCountDb = {};
     try {
-      const text = await new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({
-          method: "GET",
-          url: "https://raw.githubusercontent.com/lklynet/Kill-Count/main/killcounts.jsonl",
-          onload: (r) => r.status === 200 ? resolve(r.responseText) : reject(new Error(`HTTP ${r.status}`)),
-          onerror: reject
-        });
-      });
+      const res = await nativeHttpGet("https://raw.githubusercontent.com/lklynet/Kill-Count/main/killcounts.jsonl");
+      if (!res || res.status !== 200) throw new Error("HTTP " + (res && res.status));
       let loaded = 0;
-      for (const line of text.split("\n")) {
+      for (const line of res.body.split("\n")) {
         const s = line.trim();
         if (!s) continue;
         try {
@@ -719,6 +774,7 @@
         } catch (e) {
         }
       }
+      saveKillCountCache(killCountDb);
     } catch (e) {
       console.warn("[CyTube SC] Kill count DB failed to load:", e);
     }
@@ -827,6 +883,8 @@
       genres: (tmdbResult == null ? void 0 : tmdbResult.genres) || []
     };
     movieState.movieLinkCache[cacheKey] = result;
+    _movieCacheTimestamps[cacheKey] = Date.now();
+    persistMovieCache();
     return result;
   }
 
