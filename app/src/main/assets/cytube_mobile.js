@@ -1908,14 +1908,30 @@
         }
       }
       const lineupScreen = document.getElementById("sc-lineup-screen");
-      if (lineupScreen && lineupScreen.classList.contains("sc-lineup-visible") && (dir === "left" || dir === "right")) {
+      if (lineupScreen && lineupScreen.classList.contains("sc-lineup-visible")) {
         const rail = focusEl && focusEl.closest(".sc-lineup-rail");
-        if (rail) {
+        if (rail && (dir === "left" || dir === "right")) {
           const items = [...rail.querySelectorAll(".sc-lineup-item")];
           const i = items.indexOf(focusEl);
           const ni = dir === "right" ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
           setFocus(items[ni]);
           return;
+        }
+        const body = document.getElementById("sc-lineup-body");
+        const firstRail = body && body.querySelector(".sc-lineup-section:first-child .sc-lineup-rail");
+        if (dir === "up" && rail && rail === firstRail) {
+          const activeTab = document.querySelector(".sc-lineup-daytab-active");
+          if (activeTab) {
+            setFocus(activeTab);
+            return;
+          }
+        }
+        if (dir === "down" && focusEl && focusEl.classList.contains("sc-lineup-daytab")) {
+          const firstItem = firstRail && firstRail.querySelector(".sc-lineup-item");
+          if (firstItem) {
+            setFocus(firstItem);
+            return;
+          }
         }
       }
       const { scope, list } = candidates();
@@ -1931,7 +1947,7 @@
         return;
       }
       if (dir === "up" || dir === "down") {
-        const sc = scope.querySelector && scope.querySelector("#sc-trivia-list, #sc-settings-modal, #messagebuffer") || document.getElementById("messagebuffer");
+        const sc = scope.querySelector && scope.querySelector("#sc-trivia-list, #sc-settings-modal, #messagebuffer, #sc-lineup-body") || document.getElementById("messagebuffer");
         if (sc && sc.scrollHeight > sc.clientHeight) sc.scrollTop += dir === "down" ? 140 : -140;
       }
     }
@@ -4767,8 +4783,9 @@
                 align-items: flex-start !important; justify-content: flex-start !important;
                 font-family: 'Inter','Roboto',system-ui,sans-serif !important;
                 padding: 2vh 4vw !important; box-sizing: border-box !important;
-                overflow-y: auto !important; /* safety net: never let content become unreachable
-                                                 on an especially short screen */
+                /* The screen itself does NOT scroll — header/tabs stay pinned while
+                   #sc-lineup-body (below) scrolls beneath them. Three stacked sections are
+                   almost always taller than a TV's viewport. */
             }
             #sc-lineup-screen.sc-lineup-visible { display: flex !important; }
             #sc-lineup-header {
@@ -4781,7 +4798,14 @@
             }
             body.sc-tv #sc-lineup-header { font-size: 15px !important; }
             body.sc-tv #sc-lineup-subtitle { font-size: 12px !important; }
-            #sc-lineup-body { width: 100% !important; display: flex !important; flex-direction: column !important; gap: 22px !important; }
+            #sc-lineup-body {
+                width: 100% !important; display: flex !important; flex-direction: column !important; gap: 22px !important;
+                /* The actual scroll region: flex:1 fills whatever height #sc-lineup-screen has
+                   left after the header/tabs; min-height:0 is required for a flex child to
+                   shrink and scroll internally instead of pushing its parent taller. */
+                flex: 1 1 auto !important; min-height: 0 !important; overflow-y: auto !important;
+                padding-bottom: 8px !important;
+            }
 
             /* Day tabs — plain button row, same shape as settings.js's tab pattern; the whole-
                page geometric scorer handles Left/Right across tabs and Up/Down into the first

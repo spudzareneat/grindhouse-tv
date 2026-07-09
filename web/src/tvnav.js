@@ -370,15 +370,29 @@ export function initTvNav() {
         // falls through to the generic geometric scorer below, same as it does in Settings' tab
         // row (there's no need to special-case a plain 3-button horizontal row).
         const lineupScreen = document.getElementById('sc-lineup-screen');
-        if (lineupScreen && lineupScreen.classList.contains('sc-lineup-visible') &&
-            (dir === 'left' || dir === 'right')) {
+        if (lineupScreen && lineupScreen.classList.contains('sc-lineup-visible')) {
             const rail = focusEl && focusEl.closest('.sc-lineup-rail');
-            if (rail) {
+            if (rail && (dir === 'left' || dir === 'right')) {
                 const items = [...rail.querySelectorAll('.sc-lineup-item')];
                 const i = items.indexOf(focusEl);
                 const ni = dir === 'right' ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
                 setFocus(items[ni]);
                 return;
+            }
+            // The topmost section's rail sits directly under the day-tab row, but its cards
+            // (226px) are much wider than a tab pill — confirmed on-device that the geometric
+            // scorer's center-to-center distance picks the WRONG tab once focus is more than
+            // roughly half a card off-center. Steer this one boundary explicitly instead,
+            // mirroring the Coming Attractions strip's own toggle<->reel special case above.
+            const body = document.getElementById('sc-lineup-body');
+            const firstRail = body && body.querySelector('.sc-lineup-section:first-child .sc-lineup-rail');
+            if (dir === 'up' && rail && rail === firstRail) {
+                const activeTab = document.querySelector('.sc-lineup-daytab-active');
+                if (activeTab) { setFocus(activeTab); return; }
+            }
+            if (dir === 'down' && focusEl && focusEl.classList.contains('sc-lineup-daytab')) {
+                const firstItem = firstRail && firstRail.querySelector('.sc-lineup-item');
+                if (firstItem) { setFocus(firstItem); return; }
             }
         }
 
@@ -391,7 +405,7 @@ export function initTvNav() {
         if (idx !== -1) { setFocus(list[idx]); return; }
         // No neighbour that way — scroll a scrollable region if we're in one
         if (dir === 'up' || dir === 'down') {
-            const sc = (scope.querySelector && scope.querySelector('#sc-trivia-list, #sc-settings-modal, #messagebuffer')) ||
+            const sc = (scope.querySelector && scope.querySelector('#sc-trivia-list, #sc-settings-modal, #messagebuffer, #sc-lineup-body')) ||
                        document.getElementById('messagebuffer');
             if (sc && sc.scrollHeight > sc.clientHeight) sc.scrollTop += (dir === 'down' ? 140 : -140);
         }
