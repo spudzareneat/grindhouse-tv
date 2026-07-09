@@ -145,7 +145,7 @@ function buildBase(info, title, year) {
 
 // Flattens a day's sections into one ordered list (for locating "now" and walking ETAs
 // across section boundaries), then re-nests the built items back into their sections.
-function buildDaySections(day, isTodayFlag, isFirstDay, infosByKey) {
+function buildDaySections(day, isTodayFlag, infosByKey) {
     const flat = [];
     day.sections.forEach((section, si) => {
         section.items.forEach(item => flat.push({ section, si, item }));
@@ -157,12 +157,12 @@ function buildDaySections(day, isTodayFlag, isFirstDay, infosByKey) {
         ? flat.findIndex(f => f.item.title.toLowerCase() === currentTitle.toLowerCase())
         : -1;
 
-    // Pre-show cold start: the very first film of the whole weekend (Friday's first item),
-    // shown before anything has aired -- one coarse "starts around then" guess, anchored on
-    // this day's real Noon-Pacific showtime, rather than the running-order-only blank every
-    // other not-yet-started item gets (never display precision the data can't support).
+    // Pre-show cold start: the first film of ANY day that hasn't started yet gets one coarse
+    // "starts around then" guess, anchored on that day's own real Noon-Pacific showtime --
+    // rather than the running-order-only blank every other not-yet-started item gets (never
+    // display precision the data can't support).
     const anchor = dayAnchorPacific(day.date);
-    const isColdStart = isFirstDay && currentFlatIndex === -1 && Date.now() < anchor.getTime();
+    const isColdStart = currentFlatIndex === -1 && Date.now() < anchor.getTime();
 
     const learnedGap = medianGapSeconds(_observedGapSeconds) ?? 600; // 10-min cold-start default
     let cumulative = currentFlatIndex !== -1
@@ -205,9 +205,9 @@ export async function getTonightsLineup() {
     const infosByKey = new Map(allItems.map((item, i) => [item.title + '|' + item.year, infos[i]]));
 
     const todayStr = pacificDateString();
-    const days = _scheduleCache.days.map((day, di) => ({
+    const days = _scheduleCache.days.map((day) => ({
         day: day.day, date: day.date, isToday: day.date === todayStr,
-        sections: buildDaySections(day, day.date === todayStr, di === 0, infosByKey),
+        sections: buildDaySections(day, day.date === todayStr, infosByKey),
     }));
     return { listTitle: _scheduleCache.title || FALLBACK_LIST_TITLE, fallback: false, days };
 }

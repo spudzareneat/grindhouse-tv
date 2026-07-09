@@ -379,19 +379,34 @@ export function initTvNav() {
                 setFocus(items[ni]);
                 return;
             }
-            // The topmost section's rail sits directly under the day-tab row, but its cards
-            // (226px) are much wider than a tab pill — confirmed on-device that the geometric
-            // scorer's center-to-center distance picks the WRONG tab once focus is more than
-            // roughly half a card off-center. Steer this one boundary explicitly instead,
-            // mirroring the Coming Attractions strip's own toggle<->reel special case above.
             const body = document.getElementById('sc-lineup-body');
-            const firstRail = body && body.querySelector('.sc-lineup-section:first-child .sc-lineup-rail');
-            if (dir === 'up' && rail && rail === firstRail) {
-                const activeTab = document.querySelector('.sc-lineup-daytab-active');
-                if (activeTab) { setFocus(activeTab); return; }
+            const rails = body ? [...body.querySelectorAll('.sc-lineup-rail')] : [];
+            // Up/Down between stacked section rails is stepped explicitly by index (clamped to
+            // the target rail's length), same column-first, rather than left to the generic
+            // geometric scorer — confirmed on-device that the day-tab row (pinned outside
+            // #sc-lineup-body's scroll, so it's ALWAYS isVisible()) out-competes the rail that's
+            // actually above/below, especially while the real target is still scrolled out of
+            // view: Up from row 2 or row 3 jumped straight to a day tab instead of row 1/2.
+            if (rail && (dir === 'up' || dir === 'down')) {
+                const items = [...rail.querySelectorAll('.sc-lineup-item')];
+                const myIndex = items.indexOf(focusEl);
+                const railIdx = rails.indexOf(rail);
+                const targetRail = dir === 'down' ? rails[railIdx + 1] : rails[railIdx - 1];
+                if (targetRail) {
+                    const targetItems = [...targetRail.querySelectorAll('.sc-lineup-item')];
+                    setFocus(targetItems[Math.min(myIndex, targetItems.length - 1)]);
+                    return;
+                }
+                if (dir === 'up') {
+                    // No rail above — topmost section, steer to the active day tab (mirrors the
+                    // Coming Attractions strip's own toggle<->reel special case above).
+                    const activeTab = document.querySelector('.sc-lineup-daytab-active');
+                    if (activeTab) { setFocus(activeTab); return; }
+                }
+                // dir === 'down' with no rail below (last section): nothing to do, fall through.
             }
             if (dir === 'down' && focusEl && focusEl.classList.contains('sc-lineup-daytab')) {
-                const firstItem = firstRail && firstRail.querySelector('.sc-lineup-item');
+                const firstItem = rails[0] && rails[0].querySelector('.sc-lineup-item');
                 if (firstItem) { setFocus(firstItem); return; }
             }
         }

@@ -1148,7 +1148,7 @@
       imdbId: info.imdbId || null
     };
   }
-  function buildDaySections(day, isTodayFlag, isFirstDay, infosByKey) {
+  function buildDaySections(day, isTodayFlag, infosByKey) {
     var _a;
     const flat = [];
     day.sections.forEach((section, si) => {
@@ -1157,7 +1157,7 @@
     const currentTitle = isTodayFlag && movieState.lastMovieTitle ? parseMovieFilename(movieState.lastMovieTitle).title : "";
     const currentFlatIndex = currentTitle ? flat.findIndex((f) => f.item.title.toLowerCase() === currentTitle.toLowerCase()) : -1;
     const anchor = dayAnchorPacific(day.date);
-    const isColdStart = isFirstDay && currentFlatIndex === -1 && Date.now() < anchor.getTime();
+    const isColdStart = currentFlatIndex === -1 && Date.now() < anchor.getTime();
     const learnedGap = (_a = medianGapSeconds(_observedGapSeconds)) != null ? _a : 600;
     let cumulative = currentFlatIndex !== -1 ? Math.max(0, getCurrentMediaSeconds() - getCurrentPlaybackSeconds()) : 0;
     const builtFlat = flat.map((f, idx) => {
@@ -1194,11 +1194,11 @@
     const infos = await Promise.all(allItems.map(({ title, year }) => lookupMovie(title, year)));
     const infosByKey = new Map(allItems.map((item, i) => [item.title + "|" + item.year, infos[i]]));
     const todayStr = pacificDateString();
-    const days = _scheduleCache.days.map((day, di) => ({
+    const days = _scheduleCache.days.map((day) => ({
       day: day.day,
       date: day.date,
       isToday: day.date === todayStr,
-      sections: buildDaySections(day, day.date === todayStr, di === 0, infosByKey)
+      sections: buildDaySections(day, day.date === todayStr, infosByKey)
     }));
     return { listTitle: _scheduleCache.title || FALLBACK_LIST_TITLE, fallback: false, days };
   }
@@ -1477,8 +1477,7 @@
         <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ""}">
             ${!item.poster ? `<div class="sc-lineup-poster-fallback">${titleText}</div>` : ""}
             ${etaText ? `<div class="sc-lineup-eta">${etaText}</div>` : ""}
-        </div>
-        ${item.poster ? `<div class="sc-lineup-title">${titleText}</div>` : ""}`;
+        </div>`;
     if (item.clickable !== false) {
       btn.addEventListener("click", () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
     }
@@ -2275,16 +2274,27 @@
           return;
         }
         const body = document.getElementById("sc-lineup-body");
-        const firstRail = body && body.querySelector(".sc-lineup-section:first-child .sc-lineup-rail");
-        if (dir === "up" && rail && rail === firstRail) {
-          const activeTab = document.querySelector(".sc-lineup-daytab-active");
-          if (activeTab) {
-            setFocus(activeTab);
+        const rails = body ? [...body.querySelectorAll(".sc-lineup-rail")] : [];
+        if (rail && (dir === "up" || dir === "down")) {
+          const items = [...rail.querySelectorAll(".sc-lineup-item")];
+          const myIndex = items.indexOf(focusEl);
+          const railIdx = rails.indexOf(rail);
+          const targetRail = dir === "down" ? rails[railIdx + 1] : rails[railIdx - 1];
+          if (targetRail) {
+            const targetItems = [...targetRail.querySelectorAll(".sc-lineup-item")];
+            setFocus(targetItems[Math.min(myIndex, targetItems.length - 1)]);
             return;
+          }
+          if (dir === "up") {
+            const activeTab = document.querySelector(".sc-lineup-daytab-active");
+            if (activeTab) {
+              setFocus(activeTab);
+              return;
+            }
           }
         }
         if (dir === "down" && focusEl && focusEl.classList.contains("sc-lineup-daytab")) {
-          const firstItem = firstRail && firstRail.querySelector(".sc-lineup-item");
+          const firstItem = rails[0] && rails[0].querySelector(".sc-lineup-item");
           if (firstItem) {
             setFocus(firstItem);
             return;
