@@ -529,6 +529,36 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Whether this app is currently allowed to install other APKs (Android 8+ per-app "unknown sources"). */
+    fun canInstallUpdates(): Boolean = packageManager.canRequestPackageInstalls()
+
+    /** Open the system "Allow installs from this source" screen for this app — a one-time OS toggle. */
+    fun requestInstallPermission() {
+        try {
+            startActivity(
+                android.content.Intent(
+                    android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    android.net.Uri.parse("package:$packageName")
+                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (e: Exception) { /* screen unavailable on this device — nothing else to do */ }
+    }
+
+    /** Launch the system package installer for a downloaded update APK via a FileProvider URI. */
+    fun installApk(file: java.io.File): Boolean {
+        return try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            startActivity(
+                android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            )
+            true
+        } catch (e: Exception) { false /* installer unavailable on this device */ }
+    }
+
     /** Back with no overlay open → background the app (Netflix-style), don't exit hard. */
     fun tvBackground() {
         runOnUiThread { moveTaskToBack(true) }
@@ -749,7 +779,11 @@ class MainActivity : AppCompatActivity() {
             if (stoppedAtMs > 0L) {
                 stoppedAtMs = 0L
                 webView.post {
-                    webView.evaluateJavascript("window.__scStaleResync && window.__scStaleResync()", null)
+                    webView.evaluateJavascript(
+                        "window.__scStaleResync && window.__scStaleResync();" +
+                            "window.__scAppResumed && window.__scAppResumed();",
+                        null
+                    )
                 }
             }
             // While backgrounded the chat textarea keeps DOM focus, so on wake Chromium

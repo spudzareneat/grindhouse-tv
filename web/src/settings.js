@@ -14,7 +14,7 @@ import {
 } from './chat/modes.js';
 import { initDesyncButton, addFloatingButtons, addCastButton } from './chrome/buttons.js';
 import { usernameToColor } from './usercolors.js';
-import { nativeHttpGet } from './native.js';
+import { nativeHttpGet, canInstallUpdates, requestInstallPermission, nativeDownloadAndInstall } from './native.js';
 import { initPhoneKeyboard } from './chat/keyboard.js';
 import { renderQrToCanvas } from './vendor/qr.js';
 import { _appVersion, checkForUpdate, initUpdateCheck, _updateInfo, GH_RELEASES_PAGE } from './update.js';
@@ -604,7 +604,11 @@ import tvCss from './styles/tv.css';
                         <div class="sc-settings-input-row">
                             <button id="sc-update-check" class="sc-settings-test" type="button">Check now</button>
                         </div>
-                        <button id="sc-update-download" class="sc-settings-btn-wide sc-hidden" type="button">Get the update on GitHub ↗</button>
+                        <div id="sc-update-progress-wrap" class="sc-update-progress-wrap sc-hidden">
+                            <div id="sc-update-progress-fill" class="sc-update-progress-fill"></div>
+                        </div>
+                        <button id="sc-update-action" class="sc-settings-btn-wide sc-hidden" type="button">Update Now</button>
+                        <button id="sc-update-github-link" class="sc-update-github-link sc-hidden" type="button">View release on GitHub ↗</button>
                     </div>
                 </div>
 
@@ -775,39 +779,103 @@ import tvCss from './styles/tv.css';
             }
         });
 
-        // ── App update check / release notes ─────────────────────────────────
+        // ── App update check / release notes / in-app install ────────────────
         (function wireUpdateSection() {
-            const statusEl = document.getElementById('sc-update-status');
-            const notesEl  = document.getElementById('sc-update-notes');
-            const dlBtn    = document.getElementById('sc-update-download');
-            const checkBtn = document.getElementById('sc-update-check');
-            if (!statusEl || !dlBtn || !checkBtn) return;
+            const statusEl  = document.getElementById('sc-update-status');
+            const notesEl   = document.getElementById('sc-update-notes');
+            const actionBtn = document.getElementById('sc-update-action');
+            const checkBtn  = document.getElementById('sc-update-check');
+            const ghLink    = document.getElementById('sc-update-github-link');
+            const progWrap  = document.getElementById('sc-update-progress-wrap');
+            const progFill  = document.getElementById('sc-update-progress-fill');
+            if (!statusEl || !actionBtn || !checkBtn || !ghLink || !progWrap || !progFill) return;
+
+            let phase = 'idle'; // 'idle' | 'downloading' | 'installing' | 'error'
+
+            const fmtSize = (bytes) => (typeof bytes === 'number' && bytes > 0)
+                ? ' (' + (bytes / (1024 * 1024)).toFixed(1) + ' MB)' : '';
+
+            const renderAction = () => {
+                progWrap.classList.add('sc-hidden');
+                actionBtn.classList.add('sc-hidden');
+                checkBtn.disabled = (phase === 'downloading' || phase === 'installing');
+                if (phase === 'downloading') { progWrap.classList.remove('sc-hidden'); return; }
+                if (phase === 'installing') { return; }
+                if (!_updateInfo || !_updateInfo.available) return;
+                actionBtn.classList.remove('sc-hidden');
+                actionBtn.textContent = canInstallUpdates()
+                    ? 'Update Now' + fmtSize(_updateInfo.apkSize)
+                    : 'Allow installs from Grindhouse →';
+            };
 
             const render = (info) => {
                 statusEl.className = 'sc-settings-note';
                 notesEl.classList.add('sc-hidden');
-                dlBtn.classList.add('sc-hidden');
-                if (!info) { statusEl.textContent = 'Checking for updates…'; return; }
+                ghLink.classList.add('sc-hidden');
+                if (!info) { statusEl.textContent = 'Checking for updates…'; renderAction(); return; }
                 if (info.available) {
                     statusEl.classList.add('sc-update-yes');
                     statusEl.textContent = 'Update available: ' + info.latest;
                     if (info.notes) { notesEl.textContent = info.notes; notesEl.classList.remove('sc-hidden'); }
-                    dlBtn.classList.remove('sc-hidden');
+                    ghLink.classList.remove('sc-hidden');
                 } else {
                     statusEl.classList.add('sc-update-no');
                     statusEl.textContent = info.latest ? '✓ You’re on the latest version (' + info.latest + ')' : '✓ You’re on the latest version';
                 }
+                renderAction();
             };
 
-            if (_updateInfo) render(_updateInfo);  // show what we already know instantly
+            // Re-check install permission when the app resumes (covers returning from the
+            // system "allow installs from this source" screen, which doesn't rebuild this
+            // modal). document/visibilitychange doesn't fire reliably here — this WebView's
+            // JS timers are frozen for the whole time another Activity is in front (see
+            // MainActivity.onStop's webView.pauseTimers()), so use the same native
+            // resume hook the stale-player resync already relies on instead.
+            window.__scAppResumed = () => {
+                if (overlay.isConnected) renderAction();
+            };
+
+            if (_updateInfo) render(_updateInfo);
             checkForUpdate(false).then(render).catch(() => {
                 if (!_updateInfo) statusEl.textContent = 'Couldn’t reach GitHub to check.';
             });
 
-            dlBtn.addEventListener('click', () => {
+            actionBtn.addEventListener('click', () => {
+                if (!canInstallUpdates()) { requestInstallPermission(); return; }
+                if (!_updateInfo || !_updateInfo.apkUrl) {
+                    phase = 'error';
+                    statusEl.className = 'sc-settings-note';
+                    statusEl.textContent = 'No installable update found — use the GitHub link below';
+                    renderAction();
+                    return;
+                }
+                phase = 'downloading';
+                progFill.style.width = '0%';
+                statusEl.className = 'sc-settings-note';
+                statusEl.textContent = 'Downloading… 0%';
+                renderAction();
+                nativeDownloadAndInstall(_updateInfo.apkUrl, _updateInfo.apkSize, (tick) => {
+                    if (tick.phase === 'downloading') {
+                        progFill.style.width = tick.pct + '%';
+                        statusEl.textContent = 'Downloading… ' + tick.pct + '%';
+                    } else if (tick.phase === 'installing') {
+                        phase = 'installing';
+                        statusEl.textContent = 'Opening installer…';
+                        renderAction();
+                    }
+                }).catch(() => {
+                    phase = 'error';
+                    statusEl.className = 'sc-settings-note';
+                    statusEl.textContent = 'Download failed — check connection';
+                    renderAction();
+                });
+            });
+
+            ghLink.addEventListener('click', () => {
                 const url = (_updateInfo && _updateInfo.url) || GH_RELEASES_PAGE;
                 try { if (window.CytubeNative && CytubeNative.openExternal) CytubeNative.openExternal(url); else window.open(url, '_blank'); } catch (e) {}
             });
+
             checkBtn.addEventListener('click', async () => {
                 statusEl.className = 'sc-settings-note';
                 statusEl.textContent = 'Checking…';
