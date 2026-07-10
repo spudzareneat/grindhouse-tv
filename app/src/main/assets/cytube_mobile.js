@@ -860,6 +860,39 @@
       if (tick && (tick.phase === "installing" || tick.phase === "error")) delete _scUpdateCbs[id];
     };
   }
+  function canInstallUpdates() {
+    try {
+      return !!(window.CytubeNative && CytubeNative.canInstallUpdates && CytubeNative.canInstallUpdates());
+    } catch (e) {
+      return false;
+    }
+  }
+  function requestInstallPermission() {
+    try {
+      if (window.CytubeNative && CytubeNative.requestInstallPermission) CytubeNative.requestInstallPermission();
+    } catch (e) {
+    }
+  }
+  function nativeDownloadAndInstall(url, onProgress) {
+    return new Promise((resolve, reject) => {
+      if (!(window.CytubeNative && typeof CytubeNative.downloadAndInstallUpdate === "function")) {
+        reject(new Error("native update install unavailable"));
+        return;
+      }
+      const id = "u" + Math.random().toString(36).slice(2);
+      _scUpdateCbs[id] = (tick) => {
+        if (onProgress) onProgress(tick);
+        if (tick.phase === "installing") resolve(tick);
+        else if (tick.phase === "error") reject(new Error(tick.error || "download failed"));
+      };
+      try {
+        CytubeNative.downloadAndInstallUpdate(id, url);
+      } catch (e) {
+        delete _scUpdateCbs[id];
+        reject(e);
+      }
+    });
+  }
 
   // src/metadata/imdb.js
   var IMDB_GQL = "https://caching.graphql.imdb.com/";
@@ -3846,12 +3879,28 @@
                 background: rgba(255,255,255,0.05) !important; border-radius: 6px !important;\r
                 font-size: 12px !important; line-height: 1.45 !important; color: rgba(255,255,255,0.78) !important;\r
             }\r
-            #sc-update-notes.sc-hidden, #sc-update-download.sc-hidden { display: none !important; }\r
+            #sc-update-notes.sc-hidden, #sc-update-action.sc-hidden, #sc-update-github-link.sc-hidden,\r
+            #sc-update-progress-wrap.sc-hidden { display: none !important; }\r
             #sc-update-status.sc-update-yes { color: #7dffa0 !important; font-weight: 600 !important; }\r
             #sc-update-status.sc-update-no  { color: rgba(255,255,255,0.5) !important; }\r
-            #sc-update-download { margin-top: 8px !important; background: rgba(125,255,160,0.16) !important;\r
+            #sc-update-action { margin-top: 8px !important; background: rgba(125,255,160,0.16) !important;\r
                 color: #7dffa0 !important; border-color: rgba(125,255,160,0.4) !important; }\r
-            #sc-update-download:hover { background: rgba(125,255,160,0.28) !important; }\r
+            #sc-update-action:hover { background: rgba(125,255,160,0.28) !important; }\r
+            .sc-update-github-link {\r
+                display: block !important; margin-top: 8px !important; width: 100% !important;\r
+                background: transparent !important; border: none !important; cursor: pointer !important;\r
+                text-align: center !important; font-size: 12px !important;\r
+                color: rgba(255,255,255,0.5) !important; text-decoration: none !important;\r
+            }\r
+            .sc-update-github-link:hover { color: rgba(255,255,255,0.75) !important; }\r
+            .sc-update-progress-wrap {\r
+                margin-top: 8px !important; height: 8px !important; border-radius: 999px !important;\r
+                background: rgba(255,255,255,0.08) !important; overflow: hidden !important;\r
+            }\r
+            .sc-update-progress-fill {\r
+                height: 100% !important; width: 0% !important; background: #7dffa0 !important;\r
+                border-radius: 999px !important; transition: width 0.2s ease !important;\r
+            }\r
             #sc-settings-actions {\r
                 display: flex !important; gap: 10px !important; justify-content: flex-end !important;\r
                 margin-top: 4px !important;\r
@@ -5304,7 +5353,11 @@
                         <div class="sc-settings-input-row">
                             <button id="sc-update-check" class="sc-settings-test" type="button">Check now</button>
                         </div>
-                        <button id="sc-update-download" class="sc-settings-btn-wide sc-hidden" type="button">Get the update on GitHub ↗</button>
+                        <div id="sc-update-progress-wrap" class="sc-update-progress-wrap sc-hidden">
+                            <div id="sc-update-progress-fill" class="sc-update-progress-fill"></div>
+                        </div>
+                        <button id="sc-update-action" class="sc-settings-btn-wide sc-hidden" type="button">Update Now</button>
+                        <button id="sc-update-github-link" class="sc-update-github-link sc-hidden" type="button">View release on GitHub ↗</button>
                     </div>
                 </div>
 
@@ -5435,15 +5488,35 @@
       (function wireUpdateSection() {
         const statusEl = document.getElementById("sc-update-status");
         const notesEl = document.getElementById("sc-update-notes");
-        const dlBtn = document.getElementById("sc-update-download");
+        const actionBtn = document.getElementById("sc-update-action");
         const checkBtn = document.getElementById("sc-update-check");
-        if (!statusEl || !dlBtn || !checkBtn) return;
+        const ghLink = document.getElementById("sc-update-github-link");
+        const progWrap = document.getElementById("sc-update-progress-wrap");
+        const progFill = document.getElementById("sc-update-progress-fill");
+        if (!statusEl || !actionBtn || !checkBtn || !ghLink || !progWrap || !progFill) return;
+        let phase = "idle";
+        const fmtSize = (bytes) => typeof bytes === "number" && bytes > 0 ? " (" + (bytes / (1024 * 1024)).toFixed(1) + " MB)" : "";
+        const renderAction = () => {
+          progWrap.classList.add("sc-hidden");
+          actionBtn.classList.add("sc-hidden");
+          if (phase === "downloading") {
+            progWrap.classList.remove("sc-hidden");
+            return;
+          }
+          if (phase === "installing") {
+            return;
+          }
+          if (!_updateInfo || !_updateInfo.available) return;
+          actionBtn.classList.remove("sc-hidden");
+          actionBtn.textContent = canInstallUpdates() ? "Update Now" + fmtSize(_updateInfo.apkSize) : "Allow installs from Grindhouse →";
+        };
         const render = (info) => {
           statusEl.className = "sc-settings-note";
           notesEl.classList.add("sc-hidden");
-          dlBtn.classList.add("sc-hidden");
+          ghLink.classList.add("sc-hidden");
           if (!info) {
             statusEl.textContent = "Checking for updates…";
+            renderAction();
             return;
           }
           if (info.available) {
@@ -5453,17 +5526,59 @@
               notesEl.textContent = info.notes;
               notesEl.classList.remove("sc-hidden");
             }
-            dlBtn.classList.remove("sc-hidden");
+            ghLink.classList.remove("sc-hidden");
           } else {
             statusEl.classList.add("sc-update-no");
             statusEl.textContent = info.latest ? "✓ You’re on the latest version (" + info.latest + ")" : "✓ You’re on the latest version";
           }
+          renderAction();
         };
+        const onVisible = () => {
+          if (!overlay.isConnected) {
+            document.removeEventListener("visibilitychange", onVisible);
+            return;
+          }
+          if (!document.hidden) renderAction();
+        };
+        document.addEventListener("visibilitychange", onVisible);
         if (_updateInfo) render(_updateInfo);
         checkForUpdate(false).then(render).catch(() => {
           if (!_updateInfo) statusEl.textContent = "Couldn’t reach GitHub to check.";
         });
-        dlBtn.addEventListener("click", () => {
+        actionBtn.addEventListener("click", () => {
+          if (!canInstallUpdates()) {
+            requestInstallPermission();
+            return;
+          }
+          if (!_updateInfo || !_updateInfo.apkUrl) {
+            phase = "error";
+            statusEl.className = "sc-settings-note";
+            statusEl.textContent = "No installable update found — use the GitHub link below";
+            renderAction();
+            return;
+          }
+          phase = "downloading";
+          progFill.style.width = "0%";
+          statusEl.className = "sc-settings-note";
+          statusEl.textContent = "Downloading… 0%";
+          renderAction();
+          nativeDownloadAndInstall(_updateInfo.apkUrl, (tick) => {
+            if (tick.phase === "downloading") {
+              progFill.style.width = tick.pct + "%";
+              statusEl.textContent = "Downloading… " + tick.pct + "%";
+            } else if (tick.phase === "installing") {
+              phase = "installing";
+              statusEl.textContent = "Opening installer…";
+              renderAction();
+            }
+          }).catch(() => {
+            phase = "error";
+            statusEl.className = "sc-settings-note";
+            statusEl.textContent = "Download failed — check connection";
+            renderAction();
+          });
+        });
+        ghLink.addEventListener("click", () => {
           const url = _updateInfo && _updateInfo.url || GH_RELEASES_PAGE;
           try {
             if (window.CytubeNative && CytubeNative.openExternal) CytubeNative.openExternal(url);

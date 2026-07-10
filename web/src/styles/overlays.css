@@ -275,12 +275,28 @@
                 background: rgba(255,255,255,0.05) !important; border-radius: 6px !important;
                 font-size: 12px !important; line-height: 1.45 !important; color: rgba(255,255,255,0.78) !important;
             }
-            #sc-update-notes.sc-hidden, #sc-update-download.sc-hidden { display: none !important; }
+            #sc-update-notes.sc-hidden, #sc-update-action.sc-hidden, #sc-update-github-link.sc-hidden,
+            #sc-update-progress-wrap.sc-hidden { display: none !important; }
             #sc-update-status.sc-update-yes { color: #7dffa0 !important; font-weight: 600 !important; }
             #sc-update-status.sc-update-no  { color: rgba(255,255,255,0.5) !important; }
-            #sc-update-download { margin-top: 8px !important; background: rgba(125,255,160,0.16) !important;
+            #sc-update-action { margin-top: 8px !important; background: rgba(125,255,160,0.16) !important;
                 color: #7dffa0 !important; border-color: rgba(125,255,160,0.4) !important; }
-            #sc-update-download:hover { background: rgba(125,255,160,0.28) !important; }
+            #sc-update-action:hover { background: rgba(125,255,160,0.28) !important; }
+            .sc-update-github-link {
+                display: block !important; margin-top: 8px !important; width: 100% !important;
+                background: transparent !important; border: none !important; cursor: pointer !important;
+                text-align: center !important; font-size: 12px !important;
+                color: rgba(255,255,255,0.5) !important; text-decoration: none !important;
+            }
+            .sc-update-github-link:hover { color: rgba(255,255,255,0.75) !important; }
+            .sc-update-progress-wrap {
+                margin-top: 8px !important; height: 8px !important; border-radius: 999px !important;
+                background: rgba(255,255,255,0.08) !important; overflow: hidden !important;
+            }
+            .sc-update-progress-fill {
+                height: 100% !important; width: 0% !important; background: #7dffa0 !important;
+                border-radius: 999px !important; transition: width 0.2s ease !important;
+            }
             #sc-settings-actions {
                 display: flex !important; gap: 10px !important; justify-content: flex-end !important;
                 margin-top: 4px !important;
