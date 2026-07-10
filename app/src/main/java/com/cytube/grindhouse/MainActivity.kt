@@ -513,8 +513,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Launch the system package installer for a downloaded update APK via a FileProvider URI. */
-    fun installApk(file: java.io.File) {
-        try {
+    fun installApk(file: java.io.File): Boolean {
+        return try {
             val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
             startActivity(
                 android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
@@ -523,7 +523,8 @@ class MainActivity : AppCompatActivity() {
                     addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
             )
-        } catch (e: Exception) { /* installer unavailable on this device — nothing else to do */ }
+            true
+        } catch (e: Exception) { false /* installer unavailable on this device */ }
     }
 
     /** Back with no overlay open → background the app (Netflix-style), don't exit hard. */

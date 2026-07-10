@@ -188,7 +188,9 @@ class CytubeJsBridge(
                 }
                 conn.disconnect()
                 post("installing", 100, null)
-                activity.runOnUiThread { activity.installApk(file) }
+                activity.runOnUiThread {
+                    if (!activity.installApk(file)) post("error", 0, "installer unavailable")
+                }
             } catch (e: Exception) {
                 post("error", 0, e.message ?: "download failed")
             }

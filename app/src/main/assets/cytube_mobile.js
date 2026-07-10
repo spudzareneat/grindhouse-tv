@@ -5499,6 +5499,7 @@
         const renderAction = () => {
           progWrap.classList.add("sc-hidden");
           actionBtn.classList.add("sc-hidden");
+          checkBtn.disabled = phase === "downloading" || phase === "installing";
           if (phase === "downloading") {
             progWrap.classList.remove("sc-hidden");
             return;

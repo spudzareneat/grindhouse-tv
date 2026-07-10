@@ -753,6 +753,7 @@ import tvCss from './styles/tv.css';
             const renderAction = () => {
                 progWrap.classList.add('sc-hidden');
                 actionBtn.classList.add('sc-hidden');
+                checkBtn.disabled = (phase === 'downloading' || phase === 'installing');
                 if (phase === 'downloading') { progWrap.classList.remove('sc-hidden'); return; }
                 if (phase === 'installing') { return; }
                 if (!_updateInfo || !_updateInfo.available) return;
