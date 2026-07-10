@@ -533,8 +533,6 @@
   var chromeState = {
     topBarWake: null,
     // wake fn set by initTopBar; called to un-dim the top bar
-    topBarIsOpen: false,
-    // true while the poster strip (or similar) holds the bar open
     leftZoneReveal: null,
     // expose so video-tap can trigger both chrome systems together
     rightZoneReveal: null,
@@ -574,15 +572,6 @@
   function onSocket(event, handler) {
     whenSocket((s) => s.on(event, handler));
   }
-
-  // src/tvdetect.js
-  var isTv = function() {
-    try {
-      if (window.CytubeNative && typeof CytubeNative.isTv === "function") return !!CytubeNative.isTv();
-    } catch (e) {
-    }
-    return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
-  }();
 
   // src/lineup/reddit.js
   var FEED_URL = "https://www.reddit.com/r/420Grindhouse/.rss";
@@ -1307,6 +1296,15 @@
     return { listTitle: _scheduleCache.title || FALLBACK_LIST_TITLE, fallback: false, days };
   }
 
+  // src/tvdetect.js
+  var isTv = function() {
+    try {
+      if (window.CytubeNative && typeof CytubeNative.isTv === "function") return !!CytubeNative.isTv();
+    } catch (e) {
+    }
+    return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
+  }();
+
   // src/cards/trivia.js
   function _escHtml(s) {
     return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -1587,10 +1585,12 @@
     screen2 = document.createElement("div");
     screen2.id = "sc-lineup-screen";
     screen2.innerHTML = `
+        <button id="sc-lineup-close" type="button">✕</button>
         <div id="sc-lineup-header"></div>
         <div id="sc-lineup-subtitle">Titles/times may be subject to change.</div>
         <nav id="sc-lineup-daytabs"></nav>
         <div id="sc-lineup-body"></div>`;
+    screen2.querySelector("#sc-lineup-close").addEventListener("click", hideLineupScreen);
     document.body.appendChild(screen2);
     return screen2;
   }
@@ -1653,8 +1653,12 @@
       body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
       return;
     }
-    if (_activeSectionIndex >= day.sections.length) _activeSectionIndex = 0;
-    body.appendChild(sectionEl(day.sections[_activeSectionIndex], _activeSectionIndex, day.sections.length));
+    if (isTv) {
+      if (_activeSectionIndex >= day.sections.length) _activeSectionIndex = 0;
+      body.appendChild(sectionEl(day.sections[_activeSectionIndex], _activeSectionIndex, day.sections.length));
+    } else {
+      day.sections.forEach((section, i) => body.appendChild(sectionEl(section, i, day.sections.length)));
+    }
   }
   function showDay(screen2, day) {
     _activeDay = day;
@@ -1724,114 +1728,13 @@
 
   // src/posters.js
   function initPosterStrip() {
-    const imgs = getMotdPosterImages();
-    if (!imgs.length) return;
-    const strip = document.createElement("div");
-    strip.id = "sc-poster-strip";
-    let zoomEl = document.getElementById("sc-poster-zoom");
-    if (!zoomEl) {
-      zoomEl = document.createElement("img");
-      zoomEl.id = "sc-poster-zoom";
-      document.body.appendChild(zoomEl);
-    }
-    const ZOOM_H = 300;
-    const calcZoomTarget = (thumb) => {
-      const rect = thumb.getBoundingClientRect();
-      const attrW = parseInt(thumb.getAttribute("width") || 125);
-      const attrH = parseInt(thumb.getAttribute("height") || 175);
-      const zoomW = Math.round(ZOOM_H * (attrW / attrH));
-      let left = rect.left + rect.width / 2 - zoomW / 2;
-      left = Math.max(8, Math.min(left, window.innerWidth - zoomW - 8));
-      let top;
-      if (rect.top >= ZOOM_H + 8) {
-        top = rect.top - ZOOM_H;
-      } else {
-        top = rect.bottom - ZOOM_H;
-        top = Math.max(8, top);
-      }
-      return { left, top, width: zoomW, height: ZOOM_H };
-    };
-    const positionZoom = (thumb) => {
-      const rect = thumb.getBoundingClientRect();
-      const target = calcZoomTarget(thumb);
-      zoomEl.classList.remove("sc-zoom-expanded");
-      zoomEl.style.transition = "none";
-      zoomEl.style.left = rect.left + "px";
-      zoomEl.style.top = rect.top + "px";
-      zoomEl.style.width = rect.width + "px";
-      zoomEl.style.height = rect.height + "px";
-      zoomEl.style.display = "block";
-      zoomEl.getBoundingClientRect();
-      zoomEl._collapsing = false;
-      zoomEl.style.transition = "";
-      zoomEl.style.left = target.left + "px";
-      zoomEl.style.top = target.top + "px";
-      zoomEl.style.width = target.width + "px";
-      zoomEl.style.height = target.height + "px";
-      zoomEl.classList.add("sc-zoom-expanded");
-    };
-    imgs.forEach((img) => {
-      const thumb = document.createElement("img");
-      thumb.src = img.src;
-      thumb.className = "sc-poster-thumb";
-      thumb.title = img.title || img.alt || "";
-      thumb.setAttribute("width", img.getAttribute("width") || "125");
-      thumb.setAttribute("height", img.getAttribute("height") || "175");
-      thumb.addEventListener("mouseenter", () => {
-        zoomEl._collapsing = false;
-        zoomEl.src = thumb.src;
-        zoomEl._activeThumb = thumb;
-        positionZoom(thumb);
-      });
-      thumb.addEventListener("mouseleave", () => {
-        zoomEl._collapsing = true;
-        const rect = thumb.getBoundingClientRect();
-        zoomEl.classList.remove("sc-zoom-expanded");
-        zoomEl.style.left = rect.left + "px";
-        zoomEl.style.top = rect.top + "px";
-        zoomEl.style.width = rect.width + "px";
-        zoomEl.style.height = rect.height + "px";
-        const onEnd = () => {
-          zoomEl.removeEventListener("transitionend", onEnd);
-          if (zoomEl._collapsing) {
-            zoomEl.style.display = "none";
-            zoomEl.src = "";
-            zoomEl._collapsing = false;
-          }
-        };
-        zoomEl.addEventListener("transitionend", onEnd);
-      });
-      const wrap = document.createElement("a");
-      wrap.appendChild(thumb);
-      strip.appendChild(wrap);
-    });
-    document.body.appendChild(strip);
-    if (!document.body._scPosterDismiss) {
-      document.body._scPosterDismiss = true;
-      document.addEventListener("click", (e) => {
-        if (zoomEl.style.display !== "block" || zoomEl._collapsing) return;
-        if (e.target && e.target.classList && e.target.classList.contains("sc-poster-thumb")) return;
-        const active = zoomEl._activeThumb;
-        if (active) active.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
-      });
-    }
+    if (document.getElementById("sc-poster-toggle")) return;
     const toggleBtn = document.createElement("button");
     toggleBtn.id = "sc-poster-toggle";
     toggleBtn.textContent = "Coming Attractions";
-    toggleBtn.title = "Show/hide weekend lineup";
+    toggleBtn.title = "Show tonight's lineup";
     toggleBtn.dataset.noTvCaption = "1";
-    toggleBtn.addEventListener("click", () => {
-      if (isTv) {
-        showLineupScreen();
-        return;
-      }
-      const visible = strip.classList.toggle("sc-poster-visible");
-      toggleBtn.classList.toggle("sc-poster-toggle-active", visible);
-      chromeState.topBarIsOpen = visible;
-      if (visible && chromeState.topBarWake) {
-        chromeState.topBarWake();
-      }
-    });
+    toggleBtn.addEventListener("click", () => showLineupScreen());
     document.body.appendChild(toggleBtn);
   }
   function initPollWatcher() {
@@ -2348,17 +2251,6 @@
         }
       }
     }
-    const posterZoom = (a, on) => {
-      const img = a && a.querySelector("img");
-      if (img) img.dispatchEvent(new MouseEvent(on ? "mouseenter" : "mouseleave", { bubbles: true }));
-    };
-    function setPosterFocus(a, thumbs) {
-      thumbs.forEach((t) => {
-        if (t !== a) posterZoom(t, false);
-      });
-      setFocus(a);
-      posterZoom(a, true);
-    }
     function move(dir) {
       if (focusEl && focusEl.classList && focusEl.classList.contains("vjs-progress-control") && (dir === "left" || dir === "right")) {
         if (isDesynced()) seekBy(dir === "right" ? 10 : -10);
@@ -2384,28 +2276,6 @@
         focusEl.value = Math.max(min, Math.min(max, v));
         focusEl.dispatchEvent(new Event("input", { bubbles: true }));
         return;
-      }
-      const strip = document.getElementById("sc-poster-strip");
-      if (strip && strip.classList.contains("sc-poster-visible")) {
-        const toggle = document.getElementById("sc-poster-toggle");
-        const thumbs = [...strip.querySelectorAll("a")];
-        if (thumbs.length) {
-          if (focusEl === toggle && dir === "down") {
-            setPosterFocus(thumbs[0], thumbs);
-            return;
-          }
-          if (strip.contains(focusEl)) {
-            if (dir === "left" || dir === "right") {
-              const i = thumbs.indexOf(focusEl);
-              const ni = dir === "right" ? Math.min(thumbs.length - 1, i + 1) : Math.max(0, i - 1);
-              setPosterFocus(thumbs[ni], thumbs);
-              return;
-            }
-            posterZoom(focusEl, false);
-            if (toggle) setFocus(toggle);
-            return;
-          }
-        }
       }
       const lineupScreen = document.getElementById("sc-lineup-screen");
       if (lineupScreen && lineupScreen.classList.contains("sc-lineup-visible")) {
@@ -2557,14 +2427,6 @@
           restoreFocusAfterOverlayClose();
           return true;
         }
-      }
-      const poster = document.getElementById("sc-poster-strip");
-      if (poster && poster.classList.contains("sc-poster-visible")) {
-        const t = document.getElementById("sc-poster-toggle");
-        if (t) t.click();
-        else poster.classList.remove("sc-poster-visible");
-        clearFocus();
-        return true;
       }
       return false;
     }
@@ -5500,9 +5362,6 @@
                 /* stays tap-targetable so the first tap can wake the bar, not act */
             }
             #sc-poster-toggle:hover { color: rgba(255,255,255,0.9) !important; }
-            #sc-poster-toggle.sc-poster-toggle-active {
-                color: rgba(255,255,255,0.9) !important;
-            }
             /* Pull the control bar out of embed-responsive's constrained box
                and pin it as a fixed element flush to the bottom of the screen.
                Right edge stops just before the settings button. */
@@ -5617,70 +5476,6 @@
 
             /* ===== MOTD — keep hidden, we extract images ourselves ===== */
             #motdrow { display: none !important; }
-
-            /* ===== POSTER STRIP ===== */
-            #sc-poster-strip {
-                display: none !important; /* hidden by default */
-                position: fixed !important;
-                top: 20px !important;   /* drops down from the header bar */
-                left: 0 !important;
-                z-index: 19500 !important;
-                width: 80vw !important;
-                background: rgba(0,0,0,0.93) !important;
-                padding: 8px 12px !important;
-                overflow-x: auto !important;
-                overflow-y: hidden !important;
-                white-space: nowrap !important;
-                border-bottom: 1px solid rgba(255,255,255,0.12) !important;
-                scrollbar-width: thin !important;
-                scrollbar-color: rgba(255,255,255,0.2) transparent !important;
-            }
-            body.sc-vertical #sc-poster-strip {
-                width: 100vw !important;
-                top: 20px !important;
-                bottom: auto !important;
-            }
-            #sc-poster-strip.sc-poster-visible {
-                display: block !important;
-            }
-            .sc-poster-thumb {
-                height: 110px !important;
-                width: auto !important;
-                border-radius: 4px !important;
-                margin-right: 6px !important;
-                opacity: 0.82 !important;
-                transition: opacity 0.15s !important;
-                vertical-align: top !important;
-                cursor: pointer !important;
-                display: inline-block !important;
-                flex-shrink: 0 !important;
-            }
-            .sc-poster-thumb:hover { opacity: 1 !important; }
-
-            #sc-poster-zoom {
-                display: none;
-                position: fixed !important;
-                z-index: 99990 !important;
-                pointer-events: none !important;
-                border-radius: 4px !important;
-                box-shadow: 0 0 0 rgba(0,0,0,0) !important;
-                border: 1px solid rgba(255,255,255,0.0) !important;
-                /* transition animates position, size, shadow, border together */
-                transition:
-                    top 0.22s cubic-bezier(0.22, 1, 0.36, 1),
-                    left 0.22s cubic-bezier(0.22, 1, 0.36, 1),
-                    width 0.22s cubic-bezier(0.22, 1, 0.36, 1),
-                    height 0.22s cubic-bezier(0.22, 1, 0.36, 1),
-                    box-shadow 0.22s ease,
-                    border-color 0.22s ease,
-                    border-radius 0.22s ease !important;
-            }
-            #sc-poster-zoom.sc-zoom-expanded {
-                box-shadow: 0 12px 48px rgba(0,0,0,0.92) !important;
-                border-color: rgba(255,255,255,0.2) !important;
-                border-radius: 6px !important;
-            }
-
 
             /* Toggle button — right side of the header bar, same line as the title */
             #sc-poster-toggle {
@@ -6935,12 +6730,20 @@
                 align-items: flex-start !important; justify-content: flex-start !important;
                 font-family: 'Inter','Roboto',system-ui,sans-serif !important;
                 padding: 2vh 4vw !important; box-sizing: border-box !important;
-                overflow: hidden !important; /* one section fills the remaining space -- no scrolling */
             }
             #sc-lineup-screen.sc-lineup-visible { display: flex !important; }
+            #sc-lineup-close {
+                position: absolute !important; top: 16px !important; right: 16px !important;
+                background: rgba(255,255,255,0.1) !important; border: none !important; color: #fff !important;
+                width: 32px !important; height: 32px !important; border-radius: 50% !important;
+                cursor: pointer !important; font-size: 14px !important; z-index: 1 !important;
+            }
+            #sc-lineup-close:hover { background: rgba(255,255,255,0.2) !important; }
+            body.sc-tv #sc-lineup-close { width: 44px !important; height: 44px !important; font-size: 20px !important; }
             #sc-lineup-header {
                 color: #fff !important; font-size: 14px !important; font-weight: 700 !important;
                 line-height: 1.25 !important; margin-bottom: 4px !important;
+                max-width: calc(100% - 50px) !important; /* clear the close button */
             }
             #sc-lineup-subtitle {
                 color: rgba(255,255,255,0.45) !important; font-size: 11px !important;
@@ -6949,19 +6752,25 @@
             body.sc-tv #sc-lineup-header { font-size: 15px !important; }
             body.sc-tv #sc-lineup-subtitle { font-size: 12px !important; }
             #sc-lineup-body {
-                width: 100% !important; display: flex !important; flex-direction: column !important;
-                /* Holds exactly one .sc-lineup-section at a time (a Netflix-row-style pager,
-                   not a scrollable stack) -- Up/Down PAGES between sections via
-                   stepLineupSection() in screen.js rather than scrolling through them. flex:1
-                   fills whatever height #sc-lineup-screen has left after the header/tabs. */
+                width: 100% !important; display: flex !important; flex-direction: column !important; gap: 20px !important;
                 flex: 1 1 auto !important; min-height: 0 !important;
+                /* Phone/tablet (base): every section in the active day stacks here, each sized to
+                   its own content -- native touch-scroll moves between them, no swipe/gesture
+                   code (this codebase has none). TV overrides below: stepLineupSection() in
+                   screen.js swaps in exactly one (full-height) section at a time instead (a
+                   Netflix-row-style pager), so there's nothing to scroll there. */
+                overflow-y: auto !important;
+                -webkit-overflow-scrolling: touch !important;
             }
+            body.sc-tv #sc-lineup-body { overflow: hidden !important; gap: 0 !important; }
 
             /* Day tabs — plain button row, same shape as settings.js's tab pattern; the whole-
                page geometric scorer handles Left/Right across tabs and Up/Down into the first
                section on its own (no special-case nav code needed, see tvnav.js). */
             #sc-lineup-daytabs {
                 display: flex !important; gap: 10px !important; margin-bottom: 6px !important;
+                flex-shrink: 0 !important; /* never squashed by #sc-lineup-body's flex sibling */
+                overflow-x: auto !important; /* safety net on very narrow phones -- scrolls rather than breaking */
             }
             .sc-lineup-daytab {
                 background: rgba(255,255,255,0.08) !important; border: none !important;
@@ -6975,19 +6784,28 @@
                 outline: 3px solid #e0701a !important; outline-offset: 2px !important;
             }
 
-            /* The one currently-shown section: fills #sc-lineup-body's full height (not just its
-               content's natural size), a background gradient washed with that section's own
-               theme color (see sectionThemes.js -- --sc-lineup-wash is set per-instance in
-               screen.js) tying its header and its row of posters together, content vertically
-               centered within whatever space is available so it reads as "this grouping fits
-               the screen" rather than pinned to one edge. */
+            /* Base (phone/tablet): each section sizes to its own content and several stack in
+               normal flow -- native scroll moves between them, so there's no reason to pad one
+               out to a full screenful (confirmed on a tall tablet: forcing height:100% there
+               left huge empty gradient space above/below a single 3-poster row). TV overrides
+               to height:100% below: there's only ever one section at a time (the pager's
+               current one), and filling the screen is exactly the point there. Background is a
+               gradient washed with the section's own theme color (see sectionThemes.js --
+               --sc-lineup-wash is set per-instance in screen.js) tying its header and its row of
+               posters together. */
             .sc-lineup-section {
-                position: relative !important; width: 100% !important; height: 100% !important;
+                position: relative !important; width: 100% !important;
+                flex-shrink: 0 !important;
                 border-radius: 10px !important; overflow: hidden !important;
                 background: linear-gradient(160deg, var(--sc-lineup-wash, #14141a) 0%, #0a080d 78%) !important;
                 display: flex !important; flex-direction: column !important; justify-content: center !important;
                 padding: 14px 0 16px !important; box-sizing: border-box !important;
             }
+            /* TV pager: the single current section fills the screen (flex-shrink:0 keeps it at
+               that full height instead of being proportionally squashed -- confirmed during the
+               original TV build: without this, poster art rendered at ~40% height, silently
+               clipped by this element's own overflow:hidden). */
+            body.sc-tv .sc-lineup-section { height: 100% !important; }
             .sc-lineup-section-fallback { background: none !important; padding: 0 !important; }
             .sc-lineup-section-name {
                 font-weight: 700 !important; font-size: 24px !important;
@@ -6999,6 +6817,9 @@
                 color: #fff !important;
             }
             body.sc-tv .sc-lineup-section-name { font-size: 30px !important; }
+            /* Narrower portrait phones: shrink slightly so the wider display fonts (Boogaloo,
+               Vast Shadow, ...) wrap cleanly instead of running close to the edge. */
+            body.sc-vertical:not(.sc-tv) .sc-lineup-section-name { font-size: 20px !important; }
             /* Position within the day's groupings (e.g. "2 / 3") -- the only orientation cue
                now that sections page instead of stacking where the next one could peek into view.
                Deliberately NOT the decorative theme font/color -- a plain utility label. */
@@ -7052,6 +6873,11 @@
             .sc-lineup-item-current .sc-lineup-poster {
                 box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 6px 14px rgba(0,0,0,0.45) !important;
             }
+            /* Narrower portrait phones: smaller posters so more of the next one peeks in as a
+               "there's more, scroll me" hint (the rail already scrolls horizontally regardless
+               of size -- this is purely a fit/affordance tweak, still an exact 2:3 ratio). */
+            body.sc-vertical:not(.sc-tv) .sc-lineup-item { flex-basis: 150px !important; }
+            body.sc-vertical:not(.sc-tv) .sc-lineup-poster { width: 150px !important; height: 225px !important; }
             .sc-lineup-title { font-size: 15px !important; font-weight: 600 !important; line-height: 1.3 !important; }
             /* No TMDB match at all -- the poster box shows the movie's own title/year instead of
                sitting empty; the item's external .sc-lineup-title is omitted in this case (see
@@ -7126,7 +6952,7 @@
             }
             html body.sc-pip #chatwrap, html body.sc-pip #sc-chat-header, html body.sc-pip #sc-ambient,
             html body.sc-pip #sc-top-bar, html body.sc-pip #videowrap-header, html body.sc-pip #sc-movie-links,
-            html body.sc-pip #sc-movie-stats, html body.sc-pip #sc-poster-toggle, html body.sc-pip #sc-poster-strip,
+            html body.sc-pip #sc-movie-stats, html body.sc-pip #sc-poster-toggle,
             html body.sc-pip #sc-trivia-btn, html body.sc-pip #sc-chatmode-btn, html body.sc-pip #sc-cluster-grip,
             html body.sc-pip #sc-desync-btn, html body.sc-pip #sc-settings-btn,
             html body.sc-pip #sc-users-panel, html body.sc-pip #sc-poll-panel,
@@ -7231,11 +7057,6 @@
             /* The send button is visible in cast mode, so push the emote icon left of it
                (back into the chat area) the same way portrait does — otherwise they overlap. */
             html body.sc-cast #sc-emote-proxy { right: calc(44px + 14px) !important; }
-            /* Coming Attractions reel: full width, dropping just below the 40px cast bar
-               (normally it's 80vw and tucked under a 20px header). */
-            html body.sc-cast #sc-poster-strip {
-                width: 100vw !important; top: 40px !important; bottom: auto !important;
-            }
             /* Hide video-only chrome that isn't relocated into the bar (the pop-up panels
                triggered from the bar — users/poll/trivia/now-playing — stay available). */
             html body.sc-cast #sc-chatmode-btn,
@@ -7264,7 +7085,7 @@
             body.sc-chat-hidden #chatwrap, body.sc-chat-hidden #sc-chat-header,
             body.sc-chat-hidden #sc-users-panel, body.sc-chat-hidden #sc-poll-panel,
             body.sc-chat-hidden #sc-top-bar, body.sc-chat-hidden #videowrap-header,
-            body.sc-chat-hidden #sc-poster-toggle, body.sc-chat-hidden #sc-poster-strip,
+            body.sc-chat-hidden #sc-poster-toggle,
             body.sc-chat-hidden #sc-movie-links { display: none !important; }
             body.sc-chat-hidden.sc-horizontal #videowrap,
             body.sc-chat-hidden.sc-horizontal #videowrap .embed-responsive,
@@ -7308,7 +7129,6 @@
             body.sc-chat-chatonly #sc-movie-links,
             body.sc-chat-chatonly #sc-movie-stats,
             body.sc-chat-chatonly #sc-poster-toggle,
-            body.sc-chat-chatonly #sc-poster-strip,
             body.sc-chat-chatonly #sc-trivia-btn,
             body.sc-chat-chatonly #sc-desync-btn,
             body.sc-chat-chatonly #fs-toggle-btn,
@@ -7393,7 +7213,6 @@
             body.sc-chat-overlay.sc-horizontal #sc-movie-links,
             body.sc-chat-overlay.sc-horizontal #sc-movie-stats,
             body.sc-chat-overlay.sc-horizontal #sc-poster-toggle,
-            body.sc-chat-overlay.sc-horizontal #sc-poster-strip,
             body.sc-chat-overlay.sc-horizontal #sc-chat-header { display: none !important; }
 
             /* Chat = small top-right corner panel, dark transparent, no borders */
@@ -8220,7 +8039,7 @@
         document.getElementById("sc-movie-links")
       ].filter(Boolean);
       const dim = () => {
-        if (chromeState.topBarIsOpen || !playing) return;
+        if (!playing) return;
         getDimEls().forEach((el) => el.classList.add("sc-bar-dim"));
         document.body.classList.add("sc-video-dimmed");
       };
@@ -8228,7 +8047,7 @@
         getDimEls().forEach((el) => el.classList.remove("sc-bar-dim"));
         document.body.classList.remove("sc-video-dimmed");
         clearTimeout(idleTimer);
-        if (!chromeState.topBarIsOpen && playing) idleTimer = setTimeout(dim, 3500);
+        if (playing) idleTimer = setTimeout(dim, 3500);
       };
       chromeState.topBarWake = wake;
       const onVideoPlay = () => {
@@ -8336,20 +8155,7 @@
       if (!localStorage.getItem(LS_ONBOARDED)) {
         setTimeout(openSettingsModal, 1200);
       }
-      if (document.querySelector("#motdrow img")) {
-        initPosterStrip();
-      } else {
-        const motdObserver = new MutationObserver(() => {
-          if (document.querySelector("#motdrow img")) {
-            motdObserver.disconnect();
-            initPosterStrip();
-          }
-        });
-        motdObserver.observe(document.body, { childList: true, subtree: true });
-        setTimeout(() => {
-          if (!document.getElementById("sc-poster-strip")) initPosterStrip();
-        }, 2e3);
-      }
+      initPosterStrip();
       const style = document.createElement("style");
       style.textContent = base_default + overlays_default;
       document.head.appendChild(style);

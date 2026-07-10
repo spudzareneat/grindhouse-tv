@@ -284,18 +284,6 @@ export function initTvNav() {
         if (v) { try { v.currentTime = Math.max(0, v.currentTime + delta); wakeVideoControls(); } catch (e) {} }
     }
 
-    // Coming Attractions strip: a horizontal poster reel. Drive the existing hover-zoom
-    // off the focused poster so the remote gets the same preview the mouse does.
-    const posterZoom = (a, on) => {
-        const img = a && a.querySelector('img');
-        if (img) img.dispatchEvent(new MouseEvent(on ? 'mouseenter' : 'mouseleave', { bubbles: true }));
-    };
-    function setPosterFocus(a, thumbs) {
-        thumbs.forEach(t => { if (t !== a) posterZoom(t, false); });
-        setFocus(a);
-        posterZoom(a, true);
-    }
-
     function move(dir) {
         // Scrubber focused + free-watch on: Left/Right steps through the movie
         // (±10s) instead of moving focus. candidates() only offers the scrubber
@@ -333,32 +321,6 @@ export function initTvNav() {
             focusEl.value = Math.max(min, Math.min(max, v));
             focusEl.dispatchEvent(new Event('input', { bubbles: true }));
             return;
-        }
-
-        // Coming Attractions: enter the open strip with Down from its toggle, scroll it
-        // with Left/Right, and leave with Up/Down. The strip isn't an OVERLAY (that would
-        // trap focus), so we steer it explicitly here.
-        const strip = document.getElementById('sc-poster-strip');
-        if (strip && strip.classList.contains('sc-poster-visible')) {
-            const toggle = document.getElementById('sc-poster-toggle');
-            // All reel links — NOT isVisible-filtered: posters scrolled past the strip's
-            // edge are off-viewport but still valid targets we scroll into view.
-            const thumbs = [...strip.querySelectorAll('a')];
-            if (thumbs.length) {
-                if (focusEl === toggle && dir === 'down') { setPosterFocus(thumbs[0], thumbs); return; }
-                if (strip.contains(focusEl)) {
-                    if (dir === 'left' || dir === 'right') {
-                        const i = thumbs.indexOf(focusEl);
-                        const ni = dir === 'right' ? Math.min(thumbs.length - 1, i + 1) : Math.max(0, i - 1);
-                        setPosterFocus(thumbs[ni], thumbs);
-                        return;
-                    }
-                    // up / down → step back out of the reel onto the toggle
-                    posterZoom(focusEl, false);
-                    if (toggle) setFocus(toggle);
-                    return;
-                }
-            }
         }
 
         // Tonight's Lineup: a single themed section is shown at a time (a Netflix-row-style
@@ -487,11 +449,6 @@ export function initTvNav() {
         for (const id of ['sc-users-panel', 'sc-poll-panel']) {
             const p = document.getElementById(id);
             if (p && isVisible(p)) { p.style.display = 'none'; restoreFocusAfterOverlayClose(); return true; }
-        }
-        const poster = document.getElementById('sc-poster-strip');
-        if (poster && poster.classList.contains('sc-poster-visible')) {
-            const t = document.getElementById('sc-poster-toggle'); if (t) t.click(); else poster.classList.remove('sc-poster-visible');
-            clearFocus(); return true;
         }
         return false;
     }

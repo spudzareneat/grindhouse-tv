@@ -527,12 +527,20 @@
                 align-items: flex-start !important; justify-content: flex-start !important;
                 font-family: 'Inter','Roboto',system-ui,sans-serif !important;
                 padding: 2vh 4vw !important; box-sizing: border-box !important;
-                overflow: hidden !important; /* one section fills the remaining space -- no scrolling */
             }
             #sc-lineup-screen.sc-lineup-visible { display: flex !important; }
+            #sc-lineup-close {
+                position: absolute !important; top: 16px !important; right: 16px !important;
+                background: rgba(255,255,255,0.1) !important; border: none !important; color: #fff !important;
+                width: 32px !important; height: 32px !important; border-radius: 50% !important;
+                cursor: pointer !important; font-size: 14px !important; z-index: 1 !important;
+            }
+            #sc-lineup-close:hover { background: rgba(255,255,255,0.2) !important; }
+            body.sc-tv #sc-lineup-close { width: 44px !important; height: 44px !important; font-size: 20px !important; }
             #sc-lineup-header {
                 color: #fff !important; font-size: 14px !important; font-weight: 700 !important;
                 line-height: 1.25 !important; margin-bottom: 4px !important;
+                max-width: calc(100% - 50px) !important; /* clear the close button */
             }
             #sc-lineup-subtitle {
                 color: rgba(255,255,255,0.45) !important; font-size: 11px !important;
@@ -541,19 +549,25 @@
             body.sc-tv #sc-lineup-header { font-size: 15px !important; }
             body.sc-tv #sc-lineup-subtitle { font-size: 12px !important; }
             #sc-lineup-body {
-                width: 100% !important; display: flex !important; flex-direction: column !important;
-                /* Holds exactly one .sc-lineup-section at a time (a Netflix-row-style pager,
-                   not a scrollable stack) -- Up/Down PAGES between sections via
-                   stepLineupSection() in screen.js rather than scrolling through them. flex:1
-                   fills whatever height #sc-lineup-screen has left after the header/tabs. */
+                width: 100% !important; display: flex !important; flex-direction: column !important; gap: 20px !important;
                 flex: 1 1 auto !important; min-height: 0 !important;
+                /* Phone/tablet (base): every section in the active day stacks here, each sized to
+                   its own content -- native touch-scroll moves between them, no swipe/gesture
+                   code (this codebase has none). TV overrides below: stepLineupSection() in
+                   screen.js swaps in exactly one (full-height) section at a time instead (a
+                   Netflix-row-style pager), so there's nothing to scroll there. */
+                overflow-y: auto !important;
+                -webkit-overflow-scrolling: touch !important;
             }
+            body.sc-tv #sc-lineup-body { overflow: hidden !important; gap: 0 !important; }
 
             /* Day tabs — plain button row, same shape as settings.js's tab pattern; the whole-
                page geometric scorer handles Left/Right across tabs and Up/Down into the first
                section on its own (no special-case nav code needed, see tvnav.js). */
             #sc-lineup-daytabs {
                 display: flex !important; gap: 10px !important; margin-bottom: 6px !important;
+                flex-shrink: 0 !important; /* never squashed by #sc-lineup-body's flex sibling */
+                overflow-x: auto !important; /* safety net on very narrow phones -- scrolls rather than breaking */
             }
             .sc-lineup-daytab {
                 background: rgba(255,255,255,0.08) !important; border: none !important;
@@ -567,19 +581,28 @@
                 outline: 3px solid #e0701a !important; outline-offset: 2px !important;
             }
 
-            /* The one currently-shown section: fills #sc-lineup-body's full height (not just its
-               content's natural size), a background gradient washed with that section's own
-               theme color (see sectionThemes.js -- --sc-lineup-wash is set per-instance in
-               screen.js) tying its header and its row of posters together, content vertically
-               centered within whatever space is available so it reads as "this grouping fits
-               the screen" rather than pinned to one edge. */
+            /* Base (phone/tablet): each section sizes to its own content and several stack in
+               normal flow -- native scroll moves between them, so there's no reason to pad one
+               out to a full screenful (confirmed on a tall tablet: forcing height:100% there
+               left huge empty gradient space above/below a single 3-poster row). TV overrides
+               to height:100% below: there's only ever one section at a time (the pager's
+               current one), and filling the screen is exactly the point there. Background is a
+               gradient washed with the section's own theme color (see sectionThemes.js --
+               --sc-lineup-wash is set per-instance in screen.js) tying its header and its row of
+               posters together. */
             .sc-lineup-section {
-                position: relative !important; width: 100% !important; height: 100% !important;
+                position: relative !important; width: 100% !important;
+                flex-shrink: 0 !important;
                 border-radius: 10px !important; overflow: hidden !important;
                 background: linear-gradient(160deg, var(--sc-lineup-wash, #14141a) 0%, #0a080d 78%) !important;
                 display: flex !important; flex-direction: column !important; justify-content: center !important;
                 padding: 14px 0 16px !important; box-sizing: border-box !important;
             }
+            /* TV pager: the single current section fills the screen (flex-shrink:0 keeps it at
+               that full height instead of being proportionally squashed -- confirmed during the
+               original TV build: without this, poster art rendered at ~40% height, silently
+               clipped by this element's own overflow:hidden). */
+            body.sc-tv .sc-lineup-section { height: 100% !important; }
             .sc-lineup-section-fallback { background: none !important; padding: 0 !important; }
             .sc-lineup-section-name {
                 font-weight: 700 !important; font-size: 24px !important;
@@ -591,6 +614,9 @@
                 color: #fff !important;
             }
             body.sc-tv .sc-lineup-section-name { font-size: 30px !important; }
+            /* Narrower portrait phones: shrink slightly so the wider display fonts (Boogaloo,
+               Vast Shadow, ...) wrap cleanly instead of running close to the edge. */
+            body.sc-vertical:not(.sc-tv) .sc-lineup-section-name { font-size: 20px !important; }
             /* Position within the day's groupings (e.g. "2 / 3") -- the only orientation cue
                now that sections page instead of stacking where the next one could peek into view.
                Deliberately NOT the decorative theme font/color -- a plain utility label. */
@@ -644,6 +670,11 @@
             .sc-lineup-item-current .sc-lineup-poster {
                 box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 6px 14px rgba(0,0,0,0.45) !important;
             }
+            /* Narrower portrait phones: smaller posters so more of the next one peeks in as a
+               "there's more, scroll me" hint (the rail already scrolls horizontally regardless
+               of size -- this is purely a fit/affordance tweak, still an exact 2:3 ratio). */
+            body.sc-vertical:not(.sc-tv) .sc-lineup-item { flex-basis: 150px !important; }
+            body.sc-vertical:not(.sc-tv) .sc-lineup-poster { width: 150px !important; height: 225px !important; }
             .sc-lineup-title { font-size: 15px !important; font-weight: 600 !important; line-height: 1.3 !important; }
             /* No TMDB match at all -- the poster box shows the movie's own title/year instead of
                sitting empty; the item's external .sc-lineup-title is omitted in this case (see
@@ -718,7 +749,7 @@
             }
             html body.sc-pip #chatwrap, html body.sc-pip #sc-chat-header, html body.sc-pip #sc-ambient,
             html body.sc-pip #sc-top-bar, html body.sc-pip #videowrap-header, html body.sc-pip #sc-movie-links,
-            html body.sc-pip #sc-movie-stats, html body.sc-pip #sc-poster-toggle, html body.sc-pip #sc-poster-strip,
+            html body.sc-pip #sc-movie-stats, html body.sc-pip #sc-poster-toggle,
             html body.sc-pip #sc-trivia-btn, html body.sc-pip #sc-chatmode-btn, html body.sc-pip #sc-cluster-grip,
             html body.sc-pip #sc-desync-btn, html body.sc-pip #sc-settings-btn,
             html body.sc-pip #sc-users-panel, html body.sc-pip #sc-poll-panel,
@@ -823,11 +854,6 @@
             /* The send button is visible in cast mode, so push the emote icon left of it
                (back into the chat area) the same way portrait does — otherwise they overlap. */
             html body.sc-cast #sc-emote-proxy { right: calc(44px + 14px) !important; }
-            /* Coming Attractions reel: full width, dropping just below the 40px cast bar
-               (normally it's 80vw and tucked under a 20px header). */
-            html body.sc-cast #sc-poster-strip {
-                width: 100vw !important; top: 40px !important; bottom: auto !important;
-            }
             /* Hide video-only chrome that isn't relocated into the bar (the pop-up panels
                triggered from the bar — users/poll/trivia/now-playing — stay available). */
             html body.sc-cast #sc-chatmode-btn,
@@ -856,7 +882,7 @@
             body.sc-chat-hidden #chatwrap, body.sc-chat-hidden #sc-chat-header,
             body.sc-chat-hidden #sc-users-panel, body.sc-chat-hidden #sc-poll-panel,
             body.sc-chat-hidden #sc-top-bar, body.sc-chat-hidden #videowrap-header,
-            body.sc-chat-hidden #sc-poster-toggle, body.sc-chat-hidden #sc-poster-strip,
+            body.sc-chat-hidden #sc-poster-toggle,
             body.sc-chat-hidden #sc-movie-links { display: none !important; }
             body.sc-chat-hidden.sc-horizontal #videowrap,
             body.sc-chat-hidden.sc-horizontal #videowrap .embed-responsive,
@@ -900,7 +926,6 @@
             body.sc-chat-chatonly #sc-movie-links,
             body.sc-chat-chatonly #sc-movie-stats,
             body.sc-chat-chatonly #sc-poster-toggle,
-            body.sc-chat-chatonly #sc-poster-strip,
             body.sc-chat-chatonly #sc-trivia-btn,
             body.sc-chat-chatonly #sc-desync-btn,
             body.sc-chat-chatonly #fs-toggle-btn,
@@ -985,7 +1010,6 @@
             body.sc-chat-overlay.sc-horizontal #sc-movie-links,
             body.sc-chat-overlay.sc-horizontal #sc-movie-stats,
             body.sc-chat-overlay.sc-horizontal #sc-poster-toggle,
-            body.sc-chat-overlay.sc-horizontal #sc-poster-strip,
             body.sc-chat-overlay.sc-horizontal #sc-chat-header { display: none !important; }
 
             /* Chat = small top-right corner panel, dark transparent, no borders */

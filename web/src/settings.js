@@ -899,10 +899,11 @@ import tvCss from './styles/tv.css';
     }
 
     /* ==========================================================
-       POSTER STRIP — toggle show/hide the MOTD poster images
+       TOP BAR — auto-dim/wake for the video chrome
     ========================================================== */
 
-    // Global wake/dim control — exposed so initPosterStrip can call wake()
+    // Global wake/dim control — exposed via chromeState.topBarWake for other
+    // modules (chat, tvnav) to un-dim the bar on activity.
     function initTopBar() {
         // Gradient overlay — pointer-events:none so it never blocks clicks
         const bar = document.createElement('div');
@@ -922,7 +923,7 @@ import tvCss from './styles/tv.css';
         ].filter(Boolean);
 
         const dim = () => {
-            if (chromeState.topBarIsOpen || !playing) return;
+            if (!playing) return;
             getDimEls().forEach(el => el.classList.add('sc-bar-dim'));
             document.body.classList.add('sc-video-dimmed');
         };
@@ -931,7 +932,7 @@ import tvCss from './styles/tv.css';
             getDimEls().forEach(el => el.classList.remove('sc-bar-dim'));
             document.body.classList.remove('sc-video-dimmed');
             clearTimeout(idleTimer);
-            if (!chromeState.topBarIsOpen && playing) idleTimer = setTimeout(dim, 3500);
+            if (playing) idleTimer = setTimeout(dim, 3500);
         };
         chromeState.topBarWake = wake;
 
@@ -1084,22 +1085,11 @@ import tvCss from './styles/tv.css';
             setTimeout(openSettingsModal, 1200);
         }
 
-        // Run immediately if #motdrow already has images, otherwise watch for it
-        if (document.querySelector('#motdrow img')) {
-            initPosterStrip();
-        } else {
-            const motdObserver = new MutationObserver(() => {
-                if (document.querySelector('#motdrow img')) {
-                    motdObserver.disconnect();
-                    initPosterStrip();
-                }
-            });
-            motdObserver.observe(document.body, { childList: true, subtree: true });
-            // Hard fallback — if observer never fires, try once after 2s
-            setTimeout(() => {
-                if (!document.getElementById('sc-poster-strip')) initPosterStrip();
-            }, 2000);
-        }
+        // The Coming Attractions toggle opens Tonight's Lineup, whose real schedule comes
+        // from Reddit (see lineup/reddit.js) -- unlike the old MOTD-poster hover-zoom strip
+        // this used to open, it doesn't depend on MOTD content at all, so no need to wait
+        // for #motdrow images before creating the button.
+        initPosterStrip();
 
         const style = document.createElement('style');
         style.textContent = baseCss + overlaysCss;
