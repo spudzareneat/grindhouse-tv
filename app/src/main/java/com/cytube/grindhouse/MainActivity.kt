@@ -747,7 +747,11 @@ class MainActivity : AppCompatActivity() {
             if (stoppedAtMs > 0L) {
                 stoppedAtMs = 0L
                 webView.post {
-                    webView.evaluateJavascript("window.__scStaleResync && window.__scStaleResync()", null)
+                    webView.evaluateJavascript(
+                        "window.__scStaleResync && window.__scStaleResync();" +
+                            "window.__scAppResumed && window.__scAppResumed();",
+                        null
+                    )
                 }
             }
             // While backgrounded the chat textarea keeps DOM focus, so on wake Chromium

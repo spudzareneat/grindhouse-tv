@@ -780,14 +780,15 @@ import tvCss from './styles/tv.css';
                 renderAction();
             };
 
-            // Re-check install permission when the app regains focus (covers returning from
-            // the system "allow installs from this source" screen, which doesn't rebuild this
-            // modal). Self-unregisters once the modal has closed.
-            const onVisible = () => {
-                if (!overlay.isConnected) { document.removeEventListener('visibilitychange', onVisible); return; }
-                if (!document.hidden) renderAction();
+            // Re-check install permission when the app resumes (covers returning from the
+            // system "allow installs from this source" screen, which doesn't rebuild this
+            // modal). document/visibilitychange doesn't fire reliably here — this WebView's
+            // JS timers are frozen for the whole time another Activity is in front (see
+            // MainActivity.onStop's webView.pauseTimers()), so use the same native
+            // resume hook the stale-player resync already relies on instead.
+            window.__scAppResumed = () => {
+                if (overlay.isConnected) renderAction();
             };
-            document.addEventListener('visibilitychange', onVisible);
 
             if (_updateInfo) render(_updateInfo);
             checkForUpdate(false).then(render).catch(() => {

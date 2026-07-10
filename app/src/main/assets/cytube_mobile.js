@@ -5534,14 +5534,9 @@
           }
           renderAction();
         };
-        const onVisible = () => {
-          if (!overlay.isConnected) {
-            document.removeEventListener("visibilitychange", onVisible);
-            return;
-          }
-          if (!document.hidden) renderAction();
+        window.__scAppResumed = () => {
+          if (overlay.isConnected) renderAction();
         };
-        document.addEventListener("visibilitychange", onVisible);
         if (_updateInfo) render(_updateInfo);
         checkForUpdate(false).then(render).catch(() => {
           if (!_updateInfo) statusEl.textContent = "Couldn’t reach GitHub to check.";
