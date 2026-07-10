@@ -818,13 +818,15 @@
 
   // src/native.js
   var _scHttpCbs = {};
-  window.__scHttpResolve = function(id, res) {
-    const cb = _scHttpCbs[id];
-    if (cb) {
-      delete _scHttpCbs[id];
-      cb(res);
-    }
-  };
+  if (typeof window !== "undefined") {
+    window.__scHttpResolve = function(id, res) {
+      const cb = _scHttpCbs[id];
+      if (cb) {
+        delete _scHttpCbs[id];
+        cb(res);
+      }
+    };
+  }
   function nativeHttpGet(url, headers = {}) {
     return new Promise((resolve, reject) => {
       if (!(window.CytubeNative && typeof CytubeNative.httpGet === "function")) {
@@ -851,11 +853,13 @@
     });
   }
   var _scUpdateCbs = {};
-  window.__scUpdateProgress = function(id, tick) {
-    const cb = _scUpdateCbs[id];
-    if (cb) cb(tick);
-    if (tick && (tick.phase === "installing" || tick.phase === "error")) delete _scUpdateCbs[id];
-  };
+  if (typeof window !== "undefined") {
+    window.__scUpdateProgress = function(id, tick) {
+      const cb = _scUpdateCbs[id];
+      if (cb) cb(tick);
+      if (tick && (tick.phase === "installing" || tick.phase === "error")) delete _scUpdateCbs[id];
+    };
+  }
 
   // src/metadata/imdb.js
   var IMDB_GQL = "https://caching.graphql.imdb.com/";
@@ -2238,6 +2242,15 @@
     }
     return false;
   }
+  function _pickApkAsset(assets) {
+    const list = Array.isArray(assets) ? assets : [];
+    const found = list.find((a) => a && typeof a.name === "string" && a.name.endsWith(".apk"));
+    if (!found) return null;
+    return {
+      url: found.browser_download_url || null,
+      size: typeof found.size === "number" ? found.size : null
+    };
+  }
   function _markUpdateAvailable(on) {
     const btn = document.getElementById("sc-settings-btn");
     if (!btn) return;
@@ -2263,7 +2276,15 @@
       try {
         const c = JSON.parse(localStorage.getItem(LS_UPDATE_CACHE) || "null");
         if (c && c.ts && Date.now() - c.ts < 6 * 3600 * 1e3) {
-          _updateInfo = { available: _verNewer(c.tag, current), current, latest: c.tag, notes: c.notes || "", url: c.url || GH_RELEASES_PAGE };
+          _updateInfo = {
+            available: _verNewer(c.tag, current),
+            current,
+            latest: c.tag,
+            notes: c.notes || "",
+            url: c.url || GH_RELEASES_PAGE,
+            apkUrl: c.apkUrl || null,
+            apkSize: c.apkSize || null
+          };
           _markUpdateAvailable(_updateInfo.available);
           return _updateInfo;
         }
@@ -2279,11 +2300,14 @@
     const tag = rel.tag_name || rel.name || "";
     const notes = rel.body || "";
     const url = rel.html_url || GH_RELEASES_PAGE;
+    const apkAsset = _pickApkAsset(rel.assets);
+    const apkUrl = apkAsset && apkAsset.url;
+    const apkSize = apkAsset && apkAsset.size;
     try {
-      localStorage.setItem(LS_UPDATE_CACHE, JSON.stringify({ ts: Date.now(), tag, notes, url }));
+      localStorage.setItem(LS_UPDATE_CACHE, JSON.stringify({ ts: Date.now(), tag, notes, url, apkUrl, apkSize }));
     } catch (e) {
     }
-    _updateInfo = { available: _verNewer(tag, current), current, latest: tag, notes, url };
+    _updateInfo = { available: _verNewer(tag, current), current, latest: tag, notes, url, apkUrl, apkSize };
     _markUpdateAvailable(_updateInfo.available);
     return _updateInfo;
   }

@@ -4,10 +4,12 @@
    when the native bridge isn't present.
 ========================================================== */
 const _scHttpCbs = {};
-window.__scHttpResolve = function (id, res) {
-    const cb = _scHttpCbs[id];
-    if (cb) { delete _scHttpCbs[id]; cb(res); }
-};
+if (typeof window !== 'undefined') {
+    window.__scHttpResolve = function (id, res) {
+        const cb = _scHttpCbs[id];
+        if (cb) { delete _scHttpCbs[id]; cb(res); }
+    };
+}
 export function nativeHttpGet(url, headers = {}) {
     return new Promise((resolve, reject) => {
         if (!(window.CytubeNative && typeof CytubeNative.httpGet === 'function')) {
@@ -34,11 +36,13 @@ export function nativeHttpGet(url, headers = {}) {
    single resolve) via window.__scUpdateProgress.
 ========================================================== */
 const _scUpdateCbs = {};
-window.__scUpdateProgress = function (id, tick) {
-    const cb = _scUpdateCbs[id];
-    if (cb) cb(tick);
-    if (tick && (tick.phase === 'installing' || tick.phase === 'error')) delete _scUpdateCbs[id];
-};
+if (typeof window !== 'undefined') {
+    window.__scUpdateProgress = function (id, tick) {
+        const cb = _scUpdateCbs[id];
+        if (cb) cb(tick);
+        if (tick && (tick.phase === 'installing' || tick.phase === 'error')) delete _scUpdateCbs[id];
+    };
+}
 
 export function canInstallUpdates() {
     try { return !!(window.CytubeNative && CytubeNative.canInstallUpdates && CytubeNative.canInstallUpdates()); }

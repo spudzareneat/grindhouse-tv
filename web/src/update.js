@@ -27,6 +27,18 @@ function _verNewer(a, b) { // true if a is strictly newer than b
     for (let i = 0; i < 3; i++) { if (x[i] !== y[i]) return x[i] > y[i]; }
     return false;
 }
+// Pick the release's installable APK out of its GitHub asset list (every Grindhouse
+// release carries exactly one, named grindhouse-v<version>.apk — see CLAUDE.md's
+// release recap). Returns null if no .apk asset is present.
+export function _pickApkAsset(assets) {
+    const list = Array.isArray(assets) ? assets : [];
+    const found = list.find(a => a && typeof a.name === 'string' && a.name.endsWith('.apk'));
+    if (!found) return null;
+    return {
+        url: found.browser_download_url || null,
+        size: typeof found.size === 'number' ? found.size : null,
+    };
+}
 function _markUpdateAvailable(on) {
     const btn = document.getElementById('sc-settings-btn');
     if (!btn) return;
@@ -55,7 +67,10 @@ export async function checkForUpdate(force) {
         try {
             const c = JSON.parse(localStorage.getItem(LS_UPDATE_CACHE) || 'null');
             if (c && c.ts && (Date.now() - c.ts) < 6 * 3600 * 1000) {
-                _updateInfo = { available: _verNewer(c.tag, current), current, latest: c.tag, notes: c.notes || '', url: c.url || GH_RELEASES_PAGE };
+                _updateInfo = {
+                    available: _verNewer(c.tag, current), current, latest: c.tag, notes: c.notes || '',
+                    url: c.url || GH_RELEASES_PAGE, apkUrl: c.apkUrl || null, apkSize: c.apkSize || null,
+                };
                 _markUpdateAvailable(_updateInfo.available);
                 return _updateInfo;
             }
@@ -70,8 +85,11 @@ export async function checkForUpdate(force) {
     const tag = rel.tag_name || rel.name || '';
     const notes = rel.body || '';
     const url = rel.html_url || GH_RELEASES_PAGE;
-    try { localStorage.setItem(LS_UPDATE_CACHE, JSON.stringify({ ts: Date.now(), tag, notes, url })); } catch (e) {}
-    _updateInfo = { available: _verNewer(tag, current), current, latest: tag, notes, url };
+    const apkAsset = _pickApkAsset(rel.assets);
+    const apkUrl = apkAsset && apkAsset.url;
+    const apkSize = apkAsset && apkAsset.size;
+    try { localStorage.setItem(LS_UPDATE_CACHE, JSON.stringify({ ts: Date.now(), tag, notes, url, apkUrl, apkSize })); } catch (e) {}
+    _updateInfo = { available: _verNewer(tag, current), current, latest: tag, notes, url, apkUrl, apkSize };
     _markUpdateAvailable(_updateInfo.available);
     return _updateInfo;
 }
