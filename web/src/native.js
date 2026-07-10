@@ -54,7 +54,7 @@ export function requestInstallPermission() {
     catch (e) {}
 }
 
-export function nativeDownloadAndInstall(url, onProgress) {
+export function nativeDownloadAndInstall(url, knownSize, onProgress) {
     return new Promise((resolve, reject) => {
         if (!(window.CytubeNative && typeof CytubeNative.downloadAndInstallUpdate === 'function')) {
             reject(new Error('native update install unavailable'));
@@ -66,7 +66,7 @@ export function nativeDownloadAndInstall(url, onProgress) {
             if (tick.phase === 'installing') resolve(tick);
             else if (tick.phase === 'error') reject(new Error(tick.error || 'download failed'));
         };
-        try { CytubeNative.downloadAndInstallUpdate(id, url); }
+        try { CytubeNative.downloadAndInstallUpdate(id, url, knownSize || 0); }
         catch (e) { delete _scUpdateCbs[id]; reject(e); }
     });
 }

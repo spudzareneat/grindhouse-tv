@@ -873,7 +873,7 @@
     } catch (e) {
     }
   }
-  function nativeDownloadAndInstall(url, onProgress) {
+  function nativeDownloadAndInstall(url, knownSize, onProgress) {
     return new Promise((resolve, reject) => {
       if (!(window.CytubeNative && typeof CytubeNative.downloadAndInstallUpdate === "function")) {
         reject(new Error("native update install unavailable"));
@@ -886,7 +886,7 @@
         else if (tick.phase === "error") reject(new Error(tick.error || "download failed"));
       };
       try {
-        CytubeNative.downloadAndInstallUpdate(id, url);
+        CytubeNative.downloadAndInstallUpdate(id, url, knownSize || 0);
       } catch (e) {
         delete _scUpdateCbs[id];
         reject(e);
@@ -5558,7 +5558,7 @@
           statusEl.className = "sc-settings-note";
           statusEl.textContent = "Downloading… 0%";
           renderAction();
-          nativeDownloadAndInstall(_updateInfo.apkUrl, (tick) => {
+          nativeDownloadAndInstall(_updateInfo.apkUrl, _updateInfo.apkSize, (tick) => {
             if (tick.phase === "downloading") {
               progFill.style.width = tick.pct + "%";
               statusEl.textContent = "Downloading… " + tick.pct + "%";

@@ -139,9 +139,16 @@ class CytubeJsBridge(
      * installer on success. Progress/result delivered via window.__scUpdateProgress(reqId, {...}).
      * There's no reliable way to observe the installer's own outcome afterward (installing over the
      * running app can kill this process mid-install), so this is fire-and-forget past that point.
+     *
+     * knownSize (bytes, from the GitHub release asset's own metadata, already known to JS before
+     * the download starts) is used as the progress-percentage denominator in preference to the
+     * HTTP response's Content-Length header — device testing showed HttpURLConnection doesn't
+     * reliably surface Content-Length across GitHub's release-asset redirect (github.com to
+     * release-assets.githubusercontent.com), which silently produced zero progress ticks. Falls
+     * back to the header if the caller doesn't have a known size.
      */
     @JavascriptInterface
-    fun downloadAndInstallUpdate(reqId: String, url: String) {
+    fun downloadAndInstallUpdate(reqId: String, url: String, knownSize: Long) {
         Thread {
             val dir = java.io.File(activity.cacheDir, "update").apply { mkdirs() }
             val file = java.io.File(dir, "grindhouse-update.apk")
@@ -164,7 +171,7 @@ class CytubeJsBridge(
                     readTimeout = 15000
                     instanceFollowRedirects = true
                 }
-                val total = conn.contentLengthLong
+                val total = if (knownSize > 0) knownSize else conn.contentLengthLong
                 var lastPct = -1
                 var lastTick = 0L
                 conn.inputStream.use { input ->

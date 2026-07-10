@@ -809,7 +809,7 @@ import tvCss from './styles/tv.css';
                 statusEl.className = 'sc-settings-note';
                 statusEl.textContent = 'Downloading… 0%';
                 renderAction();
-                nativeDownloadAndInstall(_updateInfo.apkUrl, (tick) => {
+                nativeDownloadAndInstall(_updateInfo.apkUrl, _updateInfo.apkSize, (tick) => {
                     if (tick.phase === 'downloading') {
                         progFill.style.width = tick.pct + '%';
                         statusEl.textContent = 'Downloading… ' + tick.pct + '%';
