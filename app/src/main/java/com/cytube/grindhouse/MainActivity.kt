@@ -529,6 +529,28 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Open a URL, preferring whatever app the OS resolves for it (IMDb, Letterboxd, Wikipedia
+     * apps if installed — same as tapping the link outside the WebView) over loading it inside
+     * our own WebView. Unlike [openExternalUrl] this does NOT pin to a specific browser package,
+     * so a native app can win the resolution.
+     */
+    fun openInPreferredApp(url: String) {
+        val uri = android.net.Uri.parse(url)
+        try {
+            startActivity(
+                android.content.Intent(android.content.Intent.ACTION_VIEW, uri).apply {
+                    addCategory(android.content.Intent.CATEGORY_BROWSABLE)
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(
+                this, "No app available to open this link", android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     /** Whether this app is currently allowed to install other APKs (Android 8+ per-app "unknown sources"). */
     fun canInstallUpdates(): Boolean = packageManager.canRequestPackageInstalls()
 

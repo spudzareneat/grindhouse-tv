@@ -4869,6 +4869,12 @@
           a.style.background = color;
           a.style.color = fg;
           a.textContent = char;
+          a.addEventListener("click", (e) => {
+            if (window.CytubeNative && typeof CytubeNative.openInApp === "function") {
+              e.preventDefault();
+              CytubeNative.openInApp(url);
+            }
+          });
           currentRow.appendChild(a);
         });
         if (!anyLink) currentRow.remove();

@@ -67,6 +67,12 @@ class CytubeJsBridge(
         activity.runOnUiThread { activity.openExternalUrl(url) }
     }
 
+    /** Open a URL in whatever app the OS prefers (e.g. IMDb/Letterboxd/Wikipedia apps) — used for movie info links. */
+    @JavascriptInterface
+    fun openInApp(url: String) {
+        activity.runOnUiThread { activity.openInPreferredApp(url) }
+    }
+
     /** Base URL of the localhost Drive media proxy — JS rewrites Drive stream URLs onto this. */
     @JavascriptInterface
     fun gdProxyBase(): String = activity.gdProxyBase()

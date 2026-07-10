@@ -113,6 +113,14 @@ function injectMovieLinks(titleEl) {
                 a.style.background = color;
                 a.style.color = fg;
                 a.textContent = char;
+                // Route through native so the OS can hand off to the IMDb/Letterboxd/Wikipedia
+                // app if installed, instead of the link navigating inside our WebView.
+                a.addEventListener('click', (e) => {
+                    if (window.CytubeNative && typeof CytubeNative.openInApp === 'function') {
+                        e.preventDefault();
+                        CytubeNative.openInApp(url);
+                    }
+                });
                 currentRow.appendChild(a);
             });
             if (!anyLink) currentRow.remove();
