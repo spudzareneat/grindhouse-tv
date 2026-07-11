@@ -51,6 +51,7 @@ function itemButton(item) {
     btn.type = 'button';
     btn.className = 'sc-lineup-item'
         + (item.isNowPlaying ? ' sc-lineup-item-current' : '')
+        + (item.played ? ' sc-lineup-item-played' : '')
         + (item.clickable === false ? ' sc-lineup-item-static' : '');
     const titleText = `${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ''}`;
     const etaText = item.isNowPlaying ? 'NOW PLAYING' : (item.etaLabel || '');

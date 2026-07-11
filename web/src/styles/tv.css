@@ -670,6 +670,13 @@
             .sc-lineup-item-current .sc-lineup-poster {
                 box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 6px 14px rgba(0,0,0,0.45) !important;
             }
+            /* Already-shown films tonight (and every film on a past day's tab) dim to
+               grayscale; the D-pad focus outline below still applies, so grayed posters
+               stay reachable/legible for the remote. */
+            .sc-lineup-item-played .sc-lineup-poster {
+                filter: grayscale(1) !important;
+                opacity: 0.45 !important;
+            }
             /* Narrower portrait phones: smaller posters so more of the next one peeks in as a
                "there's more, scroll me" hint (the rail already scrolls horizontally regardless
                of size -- this is purely a fit/affordance tweak, still an exact 2:3 ratio). */
