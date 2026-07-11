@@ -1656,7 +1656,7 @@
   function getSectionTheme(slug) {
     return THEMES[slug] || DEFAULT_THEME;
   }
-  var FONT_FAMILIES = ["Boogaloo", "Chewy", "Creepster", "Rubik+Wet+Paint", "Monoton", "Vast+Shadow", "Cinzel", "Eater", "Bungee+Shade"];
+  var FONT_FAMILIES = ["Boogaloo", "Chewy", "Creepster", "Rubik+Wet+Paint", "Monoton", "Vast+Shadow", "Cinzel", "Eater", "Bungee+Shade", "Bebas+Neue"];
   var FONTS_LINK_ID = "sc-lineup-theme-fonts";
   function ensureThemeFontsLoaded() {
     if (document.getElementById(FONTS_LINK_ID)) return;
@@ -1707,7 +1707,7 @@
     }
     return btn;
   }
-  function sectionEl(section, index, total) {
+  function sectionEl(section) {
     const el = document.createElement("div");
     el.className = "sc-lineup-section";
     const theme = getSectionTheme(section.slug);
@@ -1717,7 +1717,7 @@
       name.className = "sc-lineup-section-name";
       name.style.setProperty("color", theme.color, "important");
       if (theme.font) name.style.setProperty("font-family", `${theme.font}, cursive`, "important");
-      name.innerHTML = `${section.name}${total > 1 ? `<span class="sc-lineup-section-count">${index + 1} / ${total}</span>` : ""}`;
+      name.textContent = section.name;
       el.appendChild(name);
     }
     const rail = document.createElement("div");
@@ -1748,9 +1748,9 @@
     }
     if (isTv) {
       if (_activeSectionIndex >= day.sections.length) _activeSectionIndex = 0;
-      body.appendChild(sectionEl(day.sections[_activeSectionIndex], _activeSectionIndex, day.sections.length));
+      body.appendChild(sectionEl(day.sections[_activeSectionIndex]));
     } else {
-      day.sections.forEach((section, i) => body.appendChild(sectionEl(section, i, day.sections.length)));
+      day.sections.forEach((section) => body.appendChild(sectionEl(section)));
     }
   }
   function showDay(screen2, day) {
@@ -6924,16 +6924,6 @@
             /* Narrower portrait phones: shrink slightly so the wider display fonts (Boogaloo,
                Vast Shadow, ...) wrap cleanly instead of running close to the edge. */
             body.sc-vertical:not(.sc-tv) .sc-lineup-section-name { font-size: 20px !important; }
-            /* Position within the day's groupings (e.g. "2 / 3") -- the only orientation cue
-               now that sections page instead of stacking where the next one could peek into view.
-               Deliberately NOT the decorative theme font/color -- a plain utility label. */
-            .sc-lineup-section-count {
-                margin-left: 12px !important; font-weight: 600 !important; letter-spacing: 0.04em !important;
-                font-family: 'Inter','Roboto',system-ui,sans-serif !important;
-                font-size: 13px !important; color: rgba(255,255,255,0.55) !important;
-            }
-            body.sc-tv .sc-lineup-section-count { font-size: 15px !important; }
-
             .sc-lineup-rail {
                 position: relative !important;
                 display: flex !important; gap: 22px !important; width: 100% !important;
@@ -7002,13 +6992,17 @@
             }
             /* Start-time estimate, overlaid directly on the poster art (a caption bar pinned to
                its bottom edge) instead of a separate line below -- readable over any art via the
-               gradient backing, regardless of NOW PLAYING/estimated/blank state. */
+               gradient backing, regardless of NOW PLAYING/estimated/blank state. Bebas Neue is a
+               marquee-style condensed face (loaded with the theme fonts, see sectionThemes.js);
+               it runs visually small for its px size, hence 18px where the old face used 13px. */
             .sc-lineup-eta {
                 position: absolute !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
-                padding: 18px 10px 8px !important; box-sizing: border-box !important;
+                padding: 18px 10px 6px !important; box-sizing: border-box !important;
                 background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.75) 60%, rgba(0,0,0,0.85) 100%) !important;
                 border-radius: 0 0 8px 8px !important;
-                font-size: 13px !important; font-weight: 700 !important; color: rgba(255,255,255,0.85) !important;
+                font-family: 'Bebas Neue', 'Inter', 'Roboto', system-ui, sans-serif !important;
+                font-size: 18px !important; font-weight: 400 !important; letter-spacing: 0.06em !important;
+                color: rgba(255,255,255,0.85) !important;
                 text-align: center !important;
             }
             .sc-lineup-item-current .sc-lineup-eta { color: var(--np-accent, #ff5b73) !important; }
