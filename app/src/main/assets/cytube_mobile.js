@@ -5052,6 +5052,8 @@
       } catch (e) {
       }
     };
+    let _reconnectWaitAttempts = 0;
+    const MAX_RECONNECT_WAIT_ATTEMPTS = 6;
     const armStaleCheck = () => {
       if (typeof loadMediaPlayer !== "function") {
         location.reload();
@@ -5060,10 +5062,18 @@
       _resyncArmed = true;
       clearTimeout(_resyncTimer);
       _resyncTimer = setTimeout(() => {
-        if (_resyncArmed) {
-          _resyncArmed = false;
-          maybeRebuildIfStale();
+        if (!_resyncArmed) return;
+        if (socket.connected === false) {
+          if (++_reconnectWaitAttempts >= MAX_RECONNECT_WAIT_ATTEMPTS) {
+            location.reload();
+            return;
+          }
+          armStaleCheck();
+          return;
         }
+        _resyncArmed = false;
+        _reconnectWaitAttempts = 0;
+        maybeRebuildIfStale();
       }, 1e4);
     };
     window.__scStaleResync = armStaleCheck;
@@ -5073,6 +5083,7 @@
         if (data && typeof data.paused === "boolean") _roomPaused = data.paused;
         if (_resyncArmed) {
           _resyncArmed = false;
+          _reconnectWaitAttempts = 0;
           clearTimeout(_resyncTimer);
           setTimeout(maybeRebuildIfStale, 4e3);
         }

@@ -67,14 +67,32 @@ export function initMediaWatcher() {
     // return CyTube re-syncs chat + the title, but its PLAYER.load() no-ops against the dead
     // player so the OLD video plays forever. We arm a one-shot staleness check that runs once
     // the reconnect's fresh changeMedia has refreshed our notion of the room's current media,
-    // so we rebuild ONLY when the player is actually dead — never on a healthy resume. A
-    // safety timer runs the check even if no changeMedia arrives. Older builds without
-    // loadMediaPlayer fall back to a full reload so playback still recovers.
+    // so we rebuild ONLY when the player is actually dead — never on a healthy resume. Older
+    // builds without loadMediaPlayer fall back to a full reload so playback still recovers.
+    //
+    // The safety timer below is a fallback for "no changeMedia ever arrives" — but
+    // _lastChangeMediaData is only trustworthy once the socket has actually reconnected;
+    // firing early would rebuild against whatever was playing BEFORE the app backgrounded,
+    // i.e. restart an old movie the room has since moved past. So if the timer fires while
+    // still disconnected, re-arm instead of acting — up to a cap, past which something is
+    // genuinely wrong and a full reload is safer than trusting stale data indefinitely.
+    let _reconnectWaitAttempts = 0;
+    const MAX_RECONNECT_WAIT_ATTEMPTS = 6; // 6 * 10s = 60s of waiting for reconnect
     const armStaleCheck = () => {
         if (typeof loadMediaPlayer !== 'function') { location.reload(); return; }
         _resyncArmed = true;
         clearTimeout(_resyncTimer);
-        _resyncTimer = setTimeout(() => { if (_resyncArmed) { _resyncArmed = false; maybeRebuildIfStale(); } }, 10000);
+        _resyncTimer = setTimeout(() => {
+            if (!_resyncArmed) return;
+            if (socket.connected === false) {
+                if (++_reconnectWaitAttempts >= MAX_RECONNECT_WAIT_ATTEMPTS) { location.reload(); return; }
+                armStaleCheck();
+                return;
+            }
+            _resyncArmed = false;
+            _reconnectWaitAttempts = 0;
+            maybeRebuildIfStale();
+        }, 10000);
     };
     window.__scStaleResync = armStaleCheck;
 
@@ -86,6 +104,7 @@ export function initMediaWatcher() {
             // known. Give the player a few seconds to actually switch, then judge staleness.
             if (_resyncArmed) {
                 _resyncArmed = false;
+                _reconnectWaitAttempts = 0;
                 clearTimeout(_resyncTimer);
                 setTimeout(maybeRebuildIfStale, 4000);
             }
