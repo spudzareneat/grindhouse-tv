@@ -27,6 +27,17 @@ export function medianGapSeconds(observedGaps) {
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+// Friendly display rounding for an ETA instant: these are guesses, so don't show
+// oddly-specific minutes. 'approx' floors to the previous quarter-hour (4:39 -> 4:30 --
+// erring early beats telling someone a start time that's already passed); 'exact' has a
+// real live anchor behind it, so it only snaps to the nearest 5 minutes. Epoch flooring
+// lands on local :00/:15/:30/:45 because real UTC offsets are 15-minute multiples.
+export function roundEtaMs(etaMs, precision) {
+    const grid = precision === 'exact' ? 5 * 60000 : 15 * 60000;
+    const round = precision === 'exact' ? Math.round : Math.floor;
+    return round(etaMs / grid) * grid;
+}
+
 const MAX_ESTIMATED_AHEAD = 4; // live-anchored: how many upcoming films past "now" get ETAs
 const MAX_PRE_SHOW = 3;        // projection-only: how many films get a "starts around then" guess
 

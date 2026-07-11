@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { formatEta, medianGapSeconds, dayAnchorPacific, pacificDateString, estimateDayItems } from '../src/lineup/timing.js';
+import { formatEta, medianGapSeconds, dayAnchorPacific, pacificDateString, estimateDayItems, roundEtaMs } from '../src/lineup/timing.js';
 
 test('formatEta: exact precision uses the ≈ prefix', () => {
     assert.strictEqual(formatEta(21, 20, 'exact'), '≈ 9:20 PM');
@@ -155,4 +155,27 @@ test('estimateDayItems: missing runtime contributes zero minutes to the walk', (
         furthestPlayedIndex: -1, bumperStartMs: null,
     });
     assert.strictEqual(items[1].etaMs, ANCHOR + GAP_MS); // null runtime adds nothing
+});
+
+/* ---------- roundEtaMs ---------- */
+
+const T0 = Date.UTC(2026, 6, 11, 16, 0, 0); // an exact hour, arbitrary
+
+test('roundEtaMs: approx floors to the previous 15-minute mark (4:39 -> 4:30)', () => {
+    assert.strictEqual(roundEtaMs(T0 + 39 * MIN, 'approx'), T0 + 30 * MIN);
+});
+test('roundEtaMs: approx floors 19 past to quarter past (6:19 -> 6:15)', () => {
+    assert.strictEqual(roundEtaMs(T0 + 19 * MIN, 'approx'), T0 + 15 * MIN);
+});
+test('roundEtaMs: approx leaves an on-grid time alone', () => {
+    assert.strictEqual(roundEtaMs(T0 + 45 * MIN, 'approx'), T0 + 45 * MIN);
+});
+test('roundEtaMs: exact rounds to the nearest 5 minutes (9:38 -> 9:40)', () => {
+    assert.strictEqual(roundEtaMs(T0 + 38 * MIN, 'exact'), T0 + 40 * MIN);
+});
+test('roundEtaMs: exact rounds down when closer (9:52 -> 9:50)', () => {
+    assert.strictEqual(roundEtaMs(T0 + 52 * MIN, 'exact'), T0 + 50 * MIN);
+});
+test('roundEtaMs: exact can round up across the hour (9:58 -> 10:00)', () => {
+    assert.strictEqual(roundEtaMs(T0 + 58 * MIN, 'exact'), T0 + 60 * MIN);
 });

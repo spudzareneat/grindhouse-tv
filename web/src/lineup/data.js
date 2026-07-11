@@ -2,7 +2,7 @@ import { fetchTonightsSchedule } from './reddit.js';
 import { lookupMovie, movieState } from '../metadata/tmdb.js';
 import { onSocket } from '../socket.js';
 import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
-import { formatEta, dayAnchorPacific, pacificDateString, medianGapSeconds, estimateDayItems } from './timing.js';
+import { formatEta, dayAnchorPacific, pacificDateString, medianGapSeconds, estimateDayItems, roundEtaMs } from './timing.js';
 import { getMotdPosterImages } from '../motd.js';
 import { hasKey, LS_TMDB } from '../store.js';
 import { parseMovieFilename } from '../parse.js';
@@ -203,7 +203,7 @@ function buildDaySections(day, dayStatus, infosByKey) {
 
     const builtFlat = flat.map((f, idx) => {
         const est = estimates[idx];
-        const eta = est.etaMs != null ? new Date(est.etaMs) : null;
+        const eta = est.etaMs != null ? new Date(roundEtaMs(est.etaMs, est.precision)) : null;
         return {
             ...buildBase(infoFor(f), f.item.title, f.item.year),
             isNowPlaying: est.isNowPlaying,

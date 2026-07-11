@@ -967,6 +967,11 @@
     const mid = Math.floor(sorted.length / 2);
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
   }
+  function roundEtaMs(etaMs, precision) {
+    const grid = precision === "exact" ? 5 * 6e4 : 15 * 6e4;
+    const round = precision === "exact" ? Math.round : Math.floor;
+    return round(etaMs / grid) * grid;
+  }
   var MAX_ESTIMATED_AHEAD = 4;
   var MAX_PRE_SHOW = 3;
   function estimateDayItems({
@@ -1350,7 +1355,7 @@
     });
     const builtFlat = flat.map((f, idx) => {
       const est = estimates[idx];
-      const eta = est.etaMs != null ? new Date(est.etaMs) : null;
+      const eta = est.etaMs != null ? new Date(roundEtaMs(est.etaMs, est.precision)) : null;
       return {
         ...buildBase(infoFor(f), f.item.title, f.item.year),
         isNowPlaying: est.isNowPlaying,
