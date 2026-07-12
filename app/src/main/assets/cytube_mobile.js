@@ -621,11 +621,18 @@
     let lm;
     while (lm = liRe.exec(ulInnerHtml)) {
       const display = lm[1].replace(/<strong>[^<]*<\/strong>\s*/, "").replace(/<[^>]+>/g, "").trim();
-      const withoutAka = display.replace(/\s+aka\s+.+$/i, "");
-      const ym = withoutAka.match(/^(.*)\s\((\d{4})\)$/);
-      if (ym) items.push({ title: ym[1].trim(), year: ym[2], display });
+      const [primary, ...akaParts] = display.split(/\s+aka\s+/i);
+      const ym = primary.trim().match(/^(.*)\s\((\d{4})\)$/);
+      if (!ym) continue;
+      const akas = akaParts.map((a) => a.replace(/\s*\(\d{4}\)\s*$/, "").trim()).filter(Boolean);
+      items.push({ title: ym[1].trim(), year: ym[2], display, akas });
     }
     return items;
+  }
+  function itemMatchesTitle(item, title) {
+    const t = (title || "").toLowerCase();
+    if (item.title.toLowerCase() === t) return true;
+    return (item.akas || []).some((a) => a.toLowerCase() === t);
   }
   function parseSchedule(contentHtml) {
     const days = [];
@@ -967,10 +974,12 @@
     const mid = Math.floor(sorted.length / 2);
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
   }
-  function roundEtaMs(etaMs, precision) {
+  function roundEtaMs(etaMs, precision, nowMs) {
     const grid = precision === "exact" ? 5 * 6e4 : 15 * 6e4;
     const round = precision === "exact" ? Math.round : Math.floor;
-    return round(etaMs / grid) * grid;
+    const rounded = round(etaMs / grid) * grid;
+    if (nowMs != null && rounded < nowMs) return Math.ceil(nowMs / grid) * grid;
+    return rounded;
   }
   var MAX_ESTIMATED_AHEAD = 4;
   var MAX_PRE_SHOW = 3;
@@ -1202,11 +1211,13 @@
   var LS_LINEUP_PROGRESS = "sc_lineup_progress_v1";
   var CACHE_MAX_AGE_MS = 20 * 60 * 60 * 1e3;
   var FALLBACK_LIST_TITLE = "Coming Attractions";
+  var PROGRESS_CONFIRM_MS = 5 * 60 * 1e3;
   var _scheduleCache = null;
   var _fetchFailed = false;
   var _revalidating = false;
   var _observedGapSeconds = [];
   var _lastUnmatchedStart = null;
+  var _pendingProgress = null;
   function readCache() {
     try {
       const raw = localStorage.getItem(LS_LINEUP_CACHE);
@@ -1239,22 +1250,31 @@
     } catch (e) {
     }
   }
+  function commitConfirmedProgress() {
+    if (!_pendingProgress) return;
+    if (Date.now() - _pendingProgress.since >= PROGRESS_CONFIRM_MS) {
+      if (_pendingProgress.idx > readProgress()) writeProgress(_pendingProgress.idx);
+      _pendingProgress = null;
+    }
+  }
   onSocket("changeMedia", (d) => {
     const rawTitle = d && d.title;
     const title = rawTitle ? parseMovieFilename(rawTitle).title : null;
     const sched = _scheduleCache || readCache();
-    const matchesSchedule = !!(title && sched && allScheduleTitles(sched).some((s) => s.title.toLowerCase() === title.toLowerCase()));
+    const matchesSchedule = !!(title && sched && allScheduleTitles(sched).some((s) => itemMatchesTitle(s, title)));
     if (rawTitle && !matchesSchedule && sched) {
-      _lastUnmatchedStart = Date.now();
+      if (!_lastUnmatchedStart) _lastUnmatchedStart = Date.now();
     } else if (_lastUnmatchedStart) {
       _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1e3);
       _lastUnmatchedStart = null;
     }
+    commitConfirmedProgress();
+    _pendingProgress = null;
     if (matchesSchedule) {
       const today = sched.days.find((day) => day.date === pacificDateString());
       const flatItems = today ? today.sections.flatMap((s) => s.items) : [];
-      const idx = flatItems.findIndex((s) => s.title.toLowerCase() === title.toLowerCase());
-      if (idx !== -1 && idx > readProgress()) writeProgress(idx);
+      const idx = flatItems.findIndex((s) => itemMatchesTitle(s, title));
+      if (idx !== -1 && idx > readProgress()) _pendingProgress = { idx, since: Date.now() };
     }
   });
   async function refetchAndCache() {
@@ -1336,10 +1356,12 @@
     });
     const isToday = dayStatus === "today";
     const currentTitle = isToday && movieState.lastMovieTitle ? parseMovieFilename(movieState.lastMovieTitle).title : "";
-    const currentFlatIndex = currentTitle ? flat.findIndex((f) => f.item.title.toLowerCase() === currentTitle.toLowerCase()) : -1;
+    const currentFlatIndex = currentTitle ? flat.findIndex((f) => itemMatchesTitle(f.item, currentTitle)) : -1;
+    if (isToday) commitConfirmedProgress();
+    const nowMs = Date.now();
     const infoFor = (f) => infosByKey.get(f.item.title + "|" + f.item.year) || {};
     const estimates = estimateDayItems({
-      nowMs: Date.now(),
+      nowMs,
       anchorMs: dayAnchorPacific(day.date).getTime(),
       runtimesMin: flat.map((f) => {
         var _a2;
@@ -1355,7 +1377,7 @@
     });
     const builtFlat = flat.map((f, idx) => {
       const est = estimates[idx];
-      const eta = est.etaMs != null ? new Date(roundEtaMs(est.etaMs, est.precision)) : null;
+      const eta = est.etaMs != null ? new Date(roundEtaMs(est.etaMs, est.precision, nowMs)) : null;
       return {
         ...buildBase(infoFor(f), f.item.title, f.item.year),
         isNowPlaying: est.isNowPlaying,

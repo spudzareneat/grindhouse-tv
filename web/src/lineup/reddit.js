@@ -75,19 +75,34 @@ export function parseDateRange(title, publishedAt) {
 
 // Each <li> is "Title (Year)", sometimes with a leading bold label
 // ("<strong>420 Grindhouse Premiere:</strong> Sleepover Slaughter (2026)")
-// or a trailing "aka Other Title" -- stripped for the (title, year) pair used
-// for TMDB lookup/matching; `display` keeps the full original text.
+// or trailing "aka Other Title" name(s). The primary (title, year) pair drives
+// the TMDB lookup; akas become extra MATCH aliases (the stream sometimes plays
+// a film under the file's aka name -- seen live 2026-07-11); `display` keeps
+// the full original text.
 function parseListItems(ulInnerHtml) {
     const items = [];
     const liRe = /<li>([\s\S]*?)<\/li>/g;
     let lm;
     while ((lm = liRe.exec(ulInnerHtml))) {
         const display = lm[1].replace(/<strong>[^<]*<\/strong>\s*/, '').replace(/<[^>]+>/g, '').trim();
-        const withoutAka = display.replace(/\s+aka\s+.+$/i, '');
-        const ym = withoutAka.match(/^(.*)\s\((\d{4})\)$/);
-        if (ym) items.push({ title: ym[1].trim(), year: ym[2], display });
+        const [primary, ...akaParts] = display.split(/\s+aka\s+/i);
+        const ym = primary.trim().match(/^(.*)\s\((\d{4})\)$/);
+        if (!ym) continue;
+        const akas = akaParts
+            .map(a => a.replace(/\s*\(\d{4}\)\s*$/, '').trim())
+            .filter(Boolean);
+        items.push({ title: ym[1].trim(), year: ym[2], display, akas });
     }
     return items;
+}
+
+// Case-insensitive "is this schedule item the film called `title`?" -- checks the
+// primary title and every post-provided aka. Tolerates cached schedules written
+// before akas existed (no `akas` field).
+export function itemMatchesTitle(item, title) {
+    const t = (title || '').toLowerCase();
+    if (item.title.toLowerCase() === t) return true;
+    return (item.akas || []).some(a => a.toLowerCase() === t);
 }
 
 // Walks the post body in document order, assigning each <ul> of films to the

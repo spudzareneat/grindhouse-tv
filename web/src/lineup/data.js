@@ -1,4 +1,4 @@
-import { fetchTonightsSchedule } from './reddit.js';
+import { fetchTonightsSchedule, itemMatchesTitle } from './reddit.js';
 import { lookupMovie, movieState } from '../metadata/tmdb.js';
 import { onSocket } from '../socket.js';
 import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
@@ -27,11 +27,14 @@ const LS_LINEUP_PROGRESS = 'sc_lineup_progress_v1'; // furthest film observed pl
 const CACHE_MAX_AGE_MS = 20 * 60 * 60 * 1000; // background-revalidate if older than this
 const FALLBACK_LIST_TITLE = 'Coming Attractions';
 
+const PROGRESS_CONFIRM_MS = 5 * 60 * 1000; // a match this brief was a queue jump, not a showing
+
 let _scheduleCache = null;    // {postId, title, publishedAt, days, fetchedAt} or null
 let _fetchFailed = false;     // sticky for the session once Reddit is unreachable AND no cache at all
 let _revalidating = false;
-let _observedGapSeconds = []; // durations (s) of changeMedia items that didn't match the schedule
-let _lastUnmatchedStart = null; // Date.now() when the current unmatched (bumper) item started
+let _observedGapSeconds = []; // durations (s) of unmatched blocks between scheduled features
+let _lastUnmatchedStart = null; // Date.now() when the current unmatched (bumper) BLOCK started
+let _pendingProgress = null;  // {idx, since} -- a matched film not yet current long enough to count as played
 
 function readCache() {
     try {
@@ -63,29 +66,45 @@ function writeProgress(furthestIndex) {
     catch (e) { /* storage full/unavailable -- graying just degrades to clock projection */ }
 }
 
-// Learn bumper-gap duration live: a changeMedia title that doesn't match anything in
-// tonight's schedule is a bumper; the time between it starting and the next
-// (matched-or-not) changeMedia is one observed gap sample. Matched titles in TODAY's
-// day also advance the persisted played-progress marker. Reads the localStorage cache
-// directly (without assigning _scheduleCache, which stays ensureSchedule's job so
-// revalidation still happens) so both work before the lineup is first opened.
+// If a matched film has now been current long enough to be a real showing (not a
+// momentary queue jump -- seen live: the DJ skimming the queue fired changeMedia for
+// four scheduled titles in seconds, graying them a night early), commit it to the
+// persisted marker. Called when the next changeMedia arrives AND from buildDaySections,
+// so a still-playing film past the threshold counts even before it ends.
+function commitConfirmedProgress() {
+    if (!_pendingProgress) return;
+    if (Date.now() - _pendingProgress.since >= PROGRESS_CONFIRM_MS) {
+        if (_pendingProgress.idx > readProgress()) writeProgress(_pendingProgress.idx);
+        _pendingProgress = null;
+    }
+}
+
+// Learn bumper-gap duration live: the time from the FIRST unmatched changeMedia after a
+// feature to the next matched one is one observed gap sample -- the whole bumper block,
+// not just its last item (resetting per-item made the median absurdly small on multi-
+// bumper blocks, seen live 2026-07-11). Matched titles in TODAY's day also advance the
+// persisted played-progress marker, via the confirm-delay above. Reads the localStorage
+// cache directly (without assigning _scheduleCache, which stays ensureSchedule's job so
+// revalidation still happens) so all of this works before the lineup is first opened.
 onSocket('changeMedia', (d) => {
     const rawTitle = d && d.title;
     const title = rawTitle ? parseMovieFilename(rawTitle).title : null;
     const sched = _scheduleCache || readCache();
     const matchesSchedule = !!(title && sched &&
-        allScheduleTitles(sched).some(s => s.title.toLowerCase() === title.toLowerCase()));
+        allScheduleTitles(sched).some(s => itemMatchesTitle(s, title)));
     if (rawTitle && !matchesSchedule && sched) {
-        _lastUnmatchedStart = Date.now();
+        if (!_lastUnmatchedStart) _lastUnmatchedStart = Date.now();
     } else if (_lastUnmatchedStart) {
         _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1000);
         _lastUnmatchedStart = null;
     }
+    commitConfirmedProgress();
+    _pendingProgress = null; // whatever was pending either just committed or was a jump
     if (matchesSchedule) {
         const today = sched.days.find(day => day.date === pacificDateString());
         const flatItems = today ? today.sections.flatMap(s => s.items) : [];
-        const idx = flatItems.findIndex(s => s.title.toLowerCase() === title.toLowerCase());
-        if (idx !== -1 && idx > readProgress()) writeProgress(idx);
+        const idx = flatItems.findIndex(s => itemMatchesTitle(s, title));
+        if (idx !== -1 && idx > readProgress()) _pendingProgress = { idx, since: Date.now() };
     }
 });
 
@@ -184,12 +203,15 @@ function buildDaySections(day, dayStatus, infosByKey) {
     const currentTitle = isToday && movieState.lastMovieTitle
         ? parseMovieFilename(movieState.lastMovieTitle).title : '';
     const currentFlatIndex = currentTitle
-        ? flat.findIndex(f => f.item.title.toLowerCase() === currentTitle.toLowerCase())
+        ? flat.findIndex(f => itemMatchesTitle(f.item, currentTitle))
         : -1;
 
+    if (isToday) commitConfirmedProgress(); // a film past the confirm threshold counts as reached
+
+    const nowMs = Date.now();
     const infoFor = (f) => infosByKey.get(f.item.title + '|' + f.item.year) || {};
     const estimates = estimateDayItems({
-        nowMs: Date.now(),
+        nowMs,
         anchorMs: dayAnchorPacific(day.date).getTime(),
         runtimesMin: flat.map(f => infoFor(f).runtime ?? null),
         gapSeconds: medianGapSeconds(_observedGapSeconds) ?? 600, // 10-min cold-start default
@@ -203,7 +225,7 @@ function buildDaySections(day, dayStatus, infosByKey) {
 
     const builtFlat = flat.map((f, idx) => {
         const est = estimates[idx];
-        const eta = est.etaMs != null ? new Date(roundEtaMs(est.etaMs, est.precision)) : null;
+        const eta = est.etaMs != null ? new Date(roundEtaMs(est.etaMs, est.precision, nowMs)) : null;
         return {
             ...buildBase(infoFor(f), f.item.title, f.item.year),
             isNowPlaying: est.isNowPlaying,

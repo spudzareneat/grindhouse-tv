@@ -179,3 +179,21 @@ test('roundEtaMs: exact rounds down when closer (9:52 -> 9:50)', () => {
 test('roundEtaMs: exact can round up across the hour (9:58 -> 10:00)', () => {
     assert.strictEqual(roundEtaMs(T0 + 58 * MIN, 'exact'), T0 + 60 * MIN);
 });
+
+test('roundEtaMs: a floored time in the past clamps up to the next grid point after now', () => {
+    // estimate 4:52, now 4:57 -- floor would show 4:45 (already passed); clamp to 5:00
+    assert.strictEqual(roundEtaMs(T0 + 52 * MIN, 'approx', T0 + 57 * MIN), T0 + 60 * MIN);
+});
+test('roundEtaMs: an estimate wholly in the past clamps to the next grid point after now', () => {
+    assert.strictEqual(roundEtaMs(T0 + 10 * MIN, 'approx', T0 + 37 * MIN), T0 + 45 * MIN);
+});
+test('roundEtaMs: exact precision also clamps, on its 5-minute grid', () => {
+    // estimate 6:35, now 6:36 -- show 6:40, not a time one minute ago
+    assert.strictEqual(roundEtaMs(T0 + 35 * MIN, 'exact', T0 + 36 * MIN), T0 + 40 * MIN);
+});
+test('roundEtaMs: future estimates are unaffected by the clamp', () => {
+    assert.strictEqual(roundEtaMs(T0 + 39 * MIN, 'approx', T0 + 5 * MIN), T0 + 30 * MIN);
+});
+test('roundEtaMs: now exactly on the grid is an acceptable display time', () => {
+    assert.strictEqual(roundEtaMs(T0 + 29 * MIN, 'approx', T0 + 30 * MIN), T0 + 30 * MIN);
+});

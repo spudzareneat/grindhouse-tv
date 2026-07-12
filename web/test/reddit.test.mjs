@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { parseFirstEntry, parseDateRange, parseSchedule } from '../src/lineup/reddit.js';
+import { parseFirstEntry, parseDateRange, parseSchedule, itemMatchesTitle } from '../src/lineup/reddit.js';
 
 // A real captured feed fragment (r/420Grindhouse/.rss, 2026-07-09) -- one full <entry>
 // wrapped in a minimal <feed> with a second, unrelated entry after it, so parseFirstEntry's
@@ -51,7 +51,7 @@ test('parseSchedule: groups sections and films under the correct day, in documen
     assert.deepStrictEqual(days[0].sections.map(s => s.name),
         ['Funky Cheese Friday', 'Friday Grindhouse-A-Go-Go', 'Friday Night Freak Show']);
     assert.strictEqual(days[0].sections[0].items.length, 3);
-    assert.deepStrictEqual(days[0].sections[0].items[0], { title: 'The Legend of Gator Face', year: '1996', display: 'The Legend of Gator Face (1996)' });
+    assert.deepStrictEqual(days[0].sections[0].items[0], { title: 'The Legend of Gator Face', year: '1996', display: 'The Legend of Gator Face (1996)', akas: [] });
 });
 test('parseSchedule: each section carries a slugified name for the font/color theme lookup', () => {
     const entry = parseFirstEntry(FEED_FIXTURE);
@@ -62,13 +62,35 @@ test('parseSchedule: strips a leading bold label from an item ("420 Grindhouse P
     const entry = parseFirstEntry(FEED_FIXTURE);
     const days = parseSchedule(entry.contentHtml);
     const drivein = days[1].sections.find(s => s.name === 'Saturday Prime Time Drive-In');
-    assert.deepStrictEqual(drivein.items[1], { title: 'Sleepover Slaughter', year: '2026', display: 'Sleepover Slaughter (2026)' });
+    assert.deepStrictEqual(drivein.items[1], { title: 'Sleepover Slaughter', year: '2026', display: 'Sleepover Slaughter (2026)', akas: [] });
 });
-test('parseSchedule: strips a trailing "aka Other Title" for the matched (title, year), keeps it in display', () => {
+test('parseSchedule: a trailing "aka Other Title" is kept as a match alias, not just display text', () => {
     const entry = parseFirstEntry(FEED_FIXTURE);
     const days = parseSchedule(entry.contentHtml);
     const drivein = days[1].sections.find(s => s.name === 'Saturday Prime Time Drive-In');
-    assert.deepStrictEqual(drivein.items[3], { title: 'Black Demons', year: '1991', display: 'Black Demons (1991) aka Demons 3' });
+    assert.deepStrictEqual(drivein.items[3], { title: 'Black Demons', year: '1991', display: 'Black Demons (1991) aka Demons 3', akas: ['Demons 3'] });
+});
+test('parseSchedule: an aka with its own (year) is captured without the year', () => {
+    const days = parseSchedule('<p><strong>Friday</strong></p><p><strong>Sec</strong></p><ul><li>Treasure of the Living Dead (1982) aka Oasis of the Zombies (1982)</li></ul>');
+    assert.deepStrictEqual(days[0].sections[0].items[0].akas, ['Oasis of the Zombies']);
+});
+test('parseSchedule: multiple akas all become aliases', () => {
+    const days = parseSchedule('<p><strong>Friday</strong></p><p><strong>Sec</strong></p><ul><li>Some Film (1980) aka First Alias aka Second Alias</li></ul>');
+    assert.deepStrictEqual(days[0].sections[0].items[0].akas, ['First Alias', 'Second Alias']);
+});
+
+test('itemMatchesTitle: matches the primary title case-insensitively', () => {
+    assert.ok(itemMatchesTitle({ title: 'Black Demons', akas: ['Demons 3'] }, 'black demons'));
+});
+test('itemMatchesTitle: matches an aka case-insensitively', () => {
+    assert.ok(itemMatchesTitle({ title: 'Black Demons', akas: ['Demons 3'] }, 'DEMONS 3'));
+});
+test('itemMatchesTitle: rejects a non-matching title', () => {
+    assert.ok(!itemMatchesTitle({ title: 'Black Demons', akas: ['Demons 3'] }, 'Demons 2'));
+});
+test('itemMatchesTitle: tolerates cached items without an akas field', () => {
+    assert.ok(itemMatchesTitle({ title: 'Black Demons' }, 'Black Demons'));
+    assert.ok(!itemMatchesTitle({ title: 'Black Demons' }, 'Demons 3'));
 });
 test('parseSchedule: the intro paragraph and "Showtime starts..." line produce no spurious section', () => {
     const entry = parseFirstEntry(FEED_FIXTURE);
