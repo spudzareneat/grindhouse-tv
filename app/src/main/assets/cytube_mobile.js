@@ -6427,6 +6427,13 @@
             body.sc-kb-open.sc-vertical #ytapiplayer {
                 height: var(--sc-vid-h) !important;
             }
+            /* The tap-to-wake catcher is sized off a stale 55vh (see comment above) — without
+               this it still spans the pre-keyboard video height and, whenever the chrome has
+               auto-dimmed (pointer-events:auto), silently eats touch-scroll over the chat area
+               that's since been repositioned up above it. */
+            body.sc-kb-open.sc-vertical #sc-video-tap {
+                height: var(--sc-vid-h) !important;
+            }
             body.sc-kb-open.sc-vertical #chatwrap {
                 height: var(--sc-chat-h) !important;
                 bottom: var(--sc-kb-h) !important;
@@ -6447,6 +6454,11 @@
             body.sc-kb-open.sc-horizontal #videowrap,
             body.sc-kb-open.sc-horizontal #videowrap .embed-responsive,
             body.sc-kb-open.sc-horizontal #ytapiplayer {
+                height: var(--sc-vid-h) !important;
+            }
+            /* Same stale-height fix as vertical — matters when the chat-overlay layout
+               (100vw tap catcher) is active over a keyboard-shrunk chat area. */
+            body.sc-kb-open.sc-horizontal #sc-video-tap {
                 height: var(--sc-vid-h) !important;
             }
             body.sc-kb-open.sc-horizontal #chatwrap {
