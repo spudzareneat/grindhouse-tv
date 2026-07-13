@@ -621,11 +621,18 @@
     let lm;
     while (lm = liRe.exec(ulInnerHtml)) {
       const display = lm[1].replace(/<strong>[^<]*<\/strong>\s*/, "").replace(/<[^>]+>/g, "").trim();
-      const withoutAka = display.replace(/\s+aka\s+.+$/i, "");
-      const ym = withoutAka.match(/^(.*)\s\((\d{4})\)$/);
-      if (ym) items.push({ title: ym[1].trim(), year: ym[2], display });
+      const [primary, ...akaParts] = display.split(/\s+aka\s+/i);
+      const ym = primary.trim().match(/^(.*)\s\((\d{4})\)$/);
+      if (!ym) continue;
+      const akas = akaParts.map((a) => a.replace(/\s*\(\d{4}\)\s*$/, "").trim()).filter(Boolean);
+      items.push({ title: ym[1].trim(), year: ym[2], display, akas });
     }
     return items;
+  }
+  function itemMatchesTitle(item, title) {
+    const t = (title || "").toLowerCase();
+    if (item.title.toLowerCase() === t) return true;
+    return (item.akas || []).some((a) => a.toLowerCase() === t);
   }
   function parseSchedule(contentHtml) {
     const days = [];
@@ -967,6 +974,74 @@
     const mid = Math.floor(sorted.length / 2);
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
   }
+  function roundEtaMs(etaMs, precision, nowMs) {
+    const grid = precision === "exact" ? 5 * 6e4 : 15 * 6e4;
+    const round = precision === "exact" ? Math.round : Math.floor;
+    const rounded = round(etaMs / grid) * grid;
+    if (nowMs != null && rounded < nowMs) return Math.ceil(nowMs / grid) * grid;
+    return rounded;
+  }
+  var MAX_ESTIMATED_AHEAD = 4;
+  var MAX_PRE_SHOW = 3;
+  function estimateDayItems({
+    nowMs,
+    anchorMs,
+    runtimesMin,
+    gapSeconds,
+    dayStatus,
+    currentIndex,
+    remainingSec,
+    furthestPlayedIndex,
+    bumperStartMs
+  }) {
+    const gapMs = gapSeconds * 1e3;
+    const runtimeMs = (i) => runtimesMin[i] ? runtimesMin[i] * 6e4 : 0;
+    const blank = { played: false, isNowPlaying: false, etaMs: null, precision: "approx" };
+    if (dayStatus === "past") {
+      return runtimesMin.map(() => ({ ...blank, played: true }));
+    }
+    const projected = [];
+    let cursor = anchorMs;
+    runtimesMin.forEach((_, i) => {
+      projected.push({ startMs: cursor, endMs: cursor + runtimeMs(i) });
+      cursor += runtimeMs(i) + gapMs;
+    });
+    if (dayStatus === "today" && currentIndex >= 0) {
+      let cumulative = Math.max(0, remainingSec) * 1e3;
+      return runtimesMin.map((_, idx) => {
+        if (idx === currentIndex) return { ...blank, isNowPlaying: true };
+        if (idx < currentIndex || idx <= furthestPlayedIndex) return { ...blank, played: true };
+        const offset = idx - currentIndex;
+        cumulative += gapMs;
+        const withEta = offset <= MAX_ESTIMATED_AHEAD ? { ...blank, etaMs: nowMs + cumulative, precision: offset === 1 ? "exact" : "approx" } : { ...blank };
+        cumulative += runtimeMs(idx);
+        return withEta;
+      });
+    }
+    if (dayStatus === "today" && furthestPlayedIndex >= 0) {
+      let cumulative = (bumperStartMs != null ? bumperStartMs : nowMs) + gapMs;
+      return runtimesMin.map((_, idx) => {
+        if (idx <= furthestPlayedIndex) return { ...blank, played: true };
+        const offset = idx - furthestPlayedIndex;
+        const withEta = offset <= MAX_ESTIMATED_AHEAD ? { ...blank, etaMs: cumulative } : { ...blank };
+        cumulative += runtimeMs(idx) + gapMs;
+        return withEta;
+      });
+    }
+    let guesses = 0;
+    return runtimesMin.map((_, idx) => {
+      const p = projected[idx];
+      if (dayStatus === "today") {
+        if (p.endMs < nowMs) return { ...blank, played: true };
+        if (p.startMs <= nowMs) return { ...blank };
+      }
+      if (guesses < MAX_PRE_SHOW) {
+        guesses++;
+        return { ...blank, etaMs: p.startMs };
+      }
+      return { ...blank };
+    });
+  }
   function pacificOffsetMinutes(d) {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/Los_Angeles",
@@ -1133,14 +1208,16 @@
 
   // src/lineup/data.js
   var LS_LINEUP_CACHE = "sc_lineup_cache_v1";
+  var LS_LINEUP_PROGRESS = "sc_lineup_progress_v1";
   var CACHE_MAX_AGE_MS = 20 * 60 * 60 * 1e3;
   var FALLBACK_LIST_TITLE = "Coming Attractions";
-  var MAX_ESTIMATED_AHEAD = 4;
+  var PROGRESS_CONFIRM_MS = 5 * 60 * 1e3;
   var _scheduleCache = null;
   var _fetchFailed = false;
   var _revalidating = false;
   var _observedGapSeconds = [];
   var _lastUnmatchedStart = null;
+  var _pendingProgress = null;
   function readCache() {
     try {
       const raw = localStorage.getItem(LS_LINEUP_CACHE);
@@ -1155,19 +1232,49 @@
     } catch (e) {
     }
   }
-  function allScheduleTitles() {
-    if (!_scheduleCache) return [];
-    return _scheduleCache.days.flatMap((d) => d.sections.flatMap((s) => s.items));
+  function allScheduleTitles(sched = _scheduleCache) {
+    if (!sched) return [];
+    return sched.days.flatMap((d) => d.sections.flatMap((s) => s.items));
+  }
+  function readProgress() {
+    try {
+      const p = JSON.parse(localStorage.getItem(LS_LINEUP_PROGRESS));
+      return p && p.date === pacificDateString() && p.furthestIndex >= 0 ? p.furthestIndex : -1;
+    } catch (e) {
+      return -1;
+    }
+  }
+  function writeProgress(furthestIndex) {
+    try {
+      localStorage.setItem(LS_LINEUP_PROGRESS, JSON.stringify({ date: pacificDateString(), furthestIndex }));
+    } catch (e) {
+    }
+  }
+  function commitConfirmedProgress() {
+    if (!_pendingProgress) return;
+    if (Date.now() - _pendingProgress.since >= PROGRESS_CONFIRM_MS) {
+      if (_pendingProgress.idx > readProgress()) writeProgress(_pendingProgress.idx);
+      _pendingProgress = null;
+    }
   }
   onSocket("changeMedia", (d) => {
     const rawTitle = d && d.title;
     const title = rawTitle ? parseMovieFilename(rawTitle).title : null;
-    const matchesSchedule = !!(title && _scheduleCache && allScheduleTitles().some((s) => s.title.toLowerCase() === title.toLowerCase()));
-    if (rawTitle && !matchesSchedule && _scheduleCache) {
-      _lastUnmatchedStart = Date.now();
+    const sched = _scheduleCache || readCache();
+    const matchesSchedule = !!(title && sched && allScheduleTitles(sched).some((s) => itemMatchesTitle(s, title)));
+    if (rawTitle && !matchesSchedule && sched) {
+      if (!_lastUnmatchedStart) _lastUnmatchedStart = Date.now();
     } else if (_lastUnmatchedStart) {
       _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1e3);
       _lastUnmatchedStart = null;
+    }
+    commitConfirmedProgress();
+    _pendingProgress = null;
+    if (matchesSchedule) {
+      const today = sched.days.find((day) => day.date === pacificDateString());
+      const flatItems = today ? today.sections.flatMap((s) => s.items) : [];
+      const idx = flatItems.findIndex((s) => itemMatchesTitle(s, title));
+      if (idx !== -1 && idx > readProgress()) _pendingProgress = { idx, since: Date.now() };
     }
   });
   async function refetchAndCache() {
@@ -1241,38 +1348,42 @@
       imdbId: info.imdbId || null
     };
   }
-  function buildDaySections(day, isTodayFlag, infosByKey) {
+  function buildDaySections(day, dayStatus, infosByKey) {
     var _a;
     const flat = [];
     day.sections.forEach((section, si) => {
       section.items.forEach((item) => flat.push({ section, si, item }));
     });
-    const currentTitle = isTodayFlag && movieState.lastMovieTitle ? parseMovieFilename(movieState.lastMovieTitle).title : "";
-    const currentFlatIndex = currentTitle ? flat.findIndex((f) => f.item.title.toLowerCase() === currentTitle.toLowerCase()) : -1;
-    const anchor = dayAnchorPacific(day.date);
-    const isColdStart = currentFlatIndex === -1 && Date.now() < anchor.getTime();
-    const learnedGap = (_a = medianGapSeconds(_observedGapSeconds)) != null ? _a : 600;
-    let cumulative = currentFlatIndex !== -1 ? Math.max(0, getCurrentMediaSeconds() - getCurrentPlaybackSeconds()) : 0;
+    const isToday = dayStatus === "today";
+    const currentTitle = isToday && movieState.lastMovieTitle ? parseMovieFilename(movieState.lastMovieTitle).title : "";
+    const currentFlatIndex = currentTitle ? flat.findIndex((f) => itemMatchesTitle(f.item, currentTitle)) : -1;
+    if (isToday) commitConfirmedProgress();
+    const nowMs = Date.now();
+    const infoFor = (f) => infosByKey.get(f.item.title + "|" + f.item.year) || {};
+    const estimates = estimateDayItems({
+      nowMs,
+      anchorMs: dayAnchorPacific(day.date).getTime(),
+      runtimesMin: flat.map((f) => {
+        var _a2;
+        return (_a2 = infoFor(f).runtime) != null ? _a2 : null;
+      }),
+      gapSeconds: (_a = medianGapSeconds(_observedGapSeconds)) != null ? _a : 600,
+      // 10-min cold-start default
+      dayStatus,
+      currentIndex: currentFlatIndex,
+      remainingSec: currentFlatIndex !== -1 ? Math.max(0, getCurrentMediaSeconds() - getCurrentPlaybackSeconds()) : 0,
+      furthestPlayedIndex: isToday ? readProgress() : -1,
+      bumperStartMs: _lastUnmatchedStart
+    });
     const builtFlat = flat.map((f, idx) => {
-      const info = infosByKey.get(f.item.title + "|" + f.item.year) || {};
-      const base = buildBase(info, f.item.title, f.item.year);
-      if (idx === currentFlatIndex) return { ...base, isNowPlaying: true, etaLabel: "" };
-      if (isColdStart && idx === 0) {
-        return { ...base, isNowPlaying: false, etaLabel: formatEta(anchor.getHours(), anchor.getMinutes(), "approx") };
-      }
-      if (currentFlatIndex === -1 || idx < currentFlatIndex) {
-        return { ...base, isNowPlaying: false, etaLabel: "" };
-      }
-      const offset = idx - currentFlatIndex;
-      cumulative += learnedGap;
-      let etaLabel = "";
-      if (offset <= MAX_ESTIMATED_AHEAD) {
-        const precision = offset === 1 ? "exact" : "approx";
-        const eta = new Date(Date.now() + cumulative * 1e3);
-        etaLabel = formatEta(eta.getHours(), eta.getMinutes(), precision);
-      }
-      cumulative += info.runtime ? info.runtime * 60 : 0;
-      return { ...base, isNowPlaying: false, etaLabel };
+      const est = estimates[idx];
+      const eta = est.etaMs != null ? new Date(roundEtaMs(est.etaMs, est.precision, nowMs)) : null;
+      return {
+        ...buildBase(infoFor(f), f.item.title, f.item.year),
+        isNowPlaying: est.isNowPlaying,
+        played: est.played,
+        etaLabel: eta ? formatEta(eta.getHours(), eta.getMinutes(), est.precision) : ""
+      };
     });
     return day.sections.map((section, si) => ({
       name: section.name,
@@ -1291,7 +1402,11 @@
       day: day.day,
       date: day.date,
       isToday: day.date === todayStr,
-      sections: buildDaySections(day, day.date === todayStr, infosByKey)
+      sections: buildDaySections(
+        day,
+        day.date < todayStr ? "past" : day.date === todayStr ? "today" : "future",
+        infosByKey
+      )
     }));
     return { listTitle: _scheduleCache.title || FALLBACK_LIST_TITLE, fallback: false, days };
   }
@@ -1563,7 +1678,7 @@
   function getSectionTheme(slug) {
     return THEMES[slug] || DEFAULT_THEME;
   }
-  var FONT_FAMILIES = ["Boogaloo", "Chewy", "Creepster", "Rubik+Wet+Paint", "Monoton", "Vast+Shadow", "Cinzel", "Eater", "Bungee+Shade"];
+  var FONT_FAMILIES = ["Boogaloo", "Chewy", "Creepster", "Rubik+Wet+Paint", "Monoton", "Vast+Shadow", "Cinzel", "Eater", "Bungee+Shade", "Bebas+Neue"];
   var FONTS_LINK_ID = "sc-lineup-theme-fonts";
   function ensureThemeFontsLoaded() {
     if (document.getElementById(FONTS_LINK_ID)) return;
@@ -1601,7 +1716,7 @@
   function itemButton(item) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "sc-lineup-item" + (item.isNowPlaying ? " sc-lineup-item-current" : "") + (item.clickable === false ? " sc-lineup-item-static" : "");
+    btn.className = "sc-lineup-item" + (item.isNowPlaying ? " sc-lineup-item-current" : "") + (item.played ? " sc-lineup-item-played" : "") + (item.clickable === false ? " sc-lineup-item-static" : "");
     const titleText = `${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ""}`;
     const etaText = item.isNowPlaying ? "NOW PLAYING" : item.etaLabel || "";
     btn.innerHTML = `
@@ -1614,7 +1729,7 @@
     }
     return btn;
   }
-  function sectionEl(section, index, total) {
+  function sectionEl(section) {
     const el = document.createElement("div");
     el.className = "sc-lineup-section";
     const theme = getSectionTheme(section.slug);
@@ -1624,7 +1739,7 @@
       name.className = "sc-lineup-section-name";
       name.style.setProperty("color", theme.color, "important");
       if (theme.font) name.style.setProperty("font-family", `${theme.font}, cursive`, "important");
-      name.innerHTML = `${section.name}${total > 1 ? `<span class="sc-lineup-section-count">${index + 1} / ${total}</span>` : ""}`;
+      name.textContent = section.name;
       el.appendChild(name);
     }
     const rail = document.createElement("div");
@@ -1655,9 +1770,9 @@
     }
     if (isTv) {
       if (_activeSectionIndex >= day.sections.length) _activeSectionIndex = 0;
-      body.appendChild(sectionEl(day.sections[_activeSectionIndex], _activeSectionIndex, day.sections.length));
+      body.appendChild(sectionEl(day.sections[_activeSectionIndex]));
     } else {
-      day.sections.forEach((section, i) => body.appendChild(sectionEl(section, i, day.sections.length)));
+      day.sections.forEach((section) => body.appendChild(sectionEl(section)));
     }
   }
   function showDay(screen2, day) {
@@ -6831,16 +6946,6 @@
             /* Narrower portrait phones: shrink slightly so the wider display fonts (Boogaloo,
                Vast Shadow, ...) wrap cleanly instead of running close to the edge. */
             body.sc-vertical:not(.sc-tv) .sc-lineup-section-name { font-size: 20px !important; }
-            /* Position within the day's groupings (e.g. "2 / 3") -- the only orientation cue
-               now that sections page instead of stacking where the next one could peek into view.
-               Deliberately NOT the decorative theme font/color -- a plain utility label. */
-            .sc-lineup-section-count {
-                margin-left: 12px !important; font-weight: 600 !important; letter-spacing: 0.04em !important;
-                font-family: 'Inter','Roboto',system-ui,sans-serif !important;
-                font-size: 13px !important; color: rgba(255,255,255,0.55) !important;
-            }
-            body.sc-tv .sc-lineup-section-count { font-size: 15px !important; }
-
             .sc-lineup-rail {
                 position: relative !important;
                 display: flex !important; gap: 22px !important; width: 100% !important;
@@ -6884,6 +6989,13 @@
             .sc-lineup-item-current .sc-lineup-poster {
                 box-shadow: 0 0 0 3px var(--np-accent, #ff5b73), 0 6px 14px rgba(0,0,0,0.45) !important;
             }
+            /* Already-shown films tonight (and every film on a past day's tab) dim to
+               grayscale; the D-pad focus outline below still applies, so grayed posters
+               stay reachable/legible for the remote. */
+            .sc-lineup-item-played .sc-lineup-poster {
+                filter: grayscale(1) !important;
+                opacity: 0.45 !important;
+            }
             /* Narrower portrait phones: smaller posters so more of the next one peeks in as a
                "there's more, scroll me" hint (the rail already scrolls horizontally regardless
                of size -- this is purely a fit/affordance tweak, still an exact 2:3 ratio). */
@@ -6902,13 +7014,17 @@
             }
             /* Start-time estimate, overlaid directly on the poster art (a caption bar pinned to
                its bottom edge) instead of a separate line below -- readable over any art via the
-               gradient backing, regardless of NOW PLAYING/estimated/blank state. */
+               gradient backing, regardless of NOW PLAYING/estimated/blank state. Bebas Neue is a
+               marquee-style condensed face (loaded with the theme fonts, see sectionThemes.js);
+               it runs visually small for its px size, hence 18px where the old face used 13px. */
             .sc-lineup-eta {
                 position: absolute !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
-                padding: 18px 10px 8px !important; box-sizing: border-box !important;
+                padding: 18px 10px 6px !important; box-sizing: border-box !important;
                 background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.75) 60%, rgba(0,0,0,0.85) 100%) !important;
                 border-radius: 0 0 8px 8px !important;
-                font-size: 13px !important; font-weight: 700 !important; color: rgba(255,255,255,0.85) !important;
+                font-family: 'Bebas Neue', 'Inter', 'Roboto', system-ui, sans-serif !important;
+                font-size: 18px !important; font-weight: 400 !important; letter-spacing: 0.06em !important;
+                color: rgba(255,255,255,0.85) !important;
                 text-align: center !important;
             }
             .sc-lineup-item-current .sc-lineup-eta { color: var(--np-accent, #ff5b73) !important; }

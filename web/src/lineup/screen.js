@@ -51,6 +51,7 @@ function itemButton(item) {
     btn.type = 'button';
     btn.className = 'sc-lineup-item'
         + (item.isNowPlaying ? ' sc-lineup-item-current' : '')
+        + (item.played ? ' sc-lineup-item-played' : '')
         + (item.clickable === false ? ' sc-lineup-item-static' : '');
     const titleText = `${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ''}`;
     const etaText = item.isNowPlaying ? 'NOW PLAYING' : (item.etaLabel || '');
@@ -70,12 +71,10 @@ function itemButton(item) {
     return btn;
 }
 
-// One section's grouping, sized to fill the screen on its own -- position among the day's
-// other sections is shown as a small counter since only one grouping is visible at a time.
-// Named theme sections repeat every week (a slow-changing, closed set), so each gets its own
-// Google Font + accent color (see sectionThemes.js) tying its header and background together,
-// rather than per-section art.
-function sectionEl(section, index, total) {
+// One section's grouping, sized to fill the screen on its own. Named theme sections repeat
+// every week (a slow-changing, closed set), so each gets its own Google Font + accent color
+// (see sectionThemes.js) tying its header and background together, rather than per-section art.
+function sectionEl(section) {
     const el = document.createElement('div');
     el.className = 'sc-lineup-section';
     const theme = getSectionTheme(section.slug);
@@ -85,7 +84,7 @@ function sectionEl(section, index, total) {
         name.className = 'sc-lineup-section-name';
         name.style.setProperty('color', theme.color, 'important');
         if (theme.font) name.style.setProperty('font-family', `${theme.font}, cursive`, 'important');
-        name.innerHTML = `${section.name}${total > 1 ? `<span class="sc-lineup-section-count">${index + 1} / ${total}</span>` : ''}`;
+        name.textContent = section.name;
         el.appendChild(name);
     }
     const rail = document.createElement('div');
@@ -119,10 +118,10 @@ function renderBody(screen, days) {
     if (isTv) {
         // TV: one section fills the screen at a time (stepLineupSection() pages between them).
         if (_activeSectionIndex >= day.sections.length) _activeSectionIndex = 0;
-        body.appendChild(sectionEl(day.sections[_activeSectionIndex], _activeSectionIndex, day.sections.length));
+        body.appendChild(sectionEl(day.sections[_activeSectionIndex]));
     } else {
         // Phone/tablet: every section stacked, native scroll moves between them.
-        day.sections.forEach((section, i) => body.appendChild(sectionEl(section, i, day.sections.length)));
+        day.sections.forEach(section => body.appendChild(sectionEl(section)));
     }
 }
 

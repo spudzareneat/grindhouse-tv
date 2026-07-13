@@ -1,8 +1,8 @@
-import { fetchTonightsSchedule } from './reddit.js';
+import { fetchTonightsSchedule, itemMatchesTitle } from './reddit.js';
 import { lookupMovie, movieState } from '../metadata/tmdb.js';
 import { onSocket } from '../socket.js';
 import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
-import { formatEta, dayAnchorPacific, pacificDateString, medianGapSeconds } from './timing.js';
+import { formatEta, dayAnchorPacific, pacificDateString, medianGapSeconds, estimateDayItems, roundEtaMs } from './timing.js';
 import { getMotdPosterImages } from '../motd.js';
 import { hasKey, LS_TMDB } from '../store.js';
 import { parseMovieFilename } from '../parse.js';
@@ -12,23 +12,29 @@ import { parseMovieFilename } from '../parse.js';
    Fetches + caches the Reddit schedule post (see reddit.js) once per session
    (persisted to localStorage across app relaunches, keyed by the post's own
    id -- self-heals whenever the pinned post rolls over to next week's), locates
-   "now" within TODAY's day only, and projects the next MAX_ESTIMATED_AHEAD
-   upcoming films' ETA from TMDB runtimes plus a learned median bumper-gap,
-   anchored at that day's Noon-Pacific showtime start. Falls back to the
-   current title plus the static admin-curated Coming Attractions art if the
-   fetch fails and no usable cache exists.
+   "now" within TODAY's day only, and feeds the pure timing model
+   (timing.js estimateDayItems) each day's TMDB runtimes, the learned median
+   bumper-gap, the confirmed now-playing film, and the persisted furthest-played
+   marker -- yielding per-film ETAs (live-anchored, bumper-anchored, or projected
+   from that day's Noon-Pacific showtime start) plus a played flag that grays
+   already-shown posters. Falls back to the current title plus the static
+   admin-curated Coming Attractions art if the fetch fails and no usable cache
+   exists.
 ========================================================== */
 
 const LS_LINEUP_CACHE = 'sc_lineup_cache_v1';
+const LS_LINEUP_PROGRESS = 'sc_lineup_progress_v1'; // furthest film observed playing today
 const CACHE_MAX_AGE_MS = 20 * 60 * 60 * 1000; // background-revalidate if older than this
 const FALLBACK_LIST_TITLE = 'Coming Attractions';
-const MAX_ESTIMATED_AHEAD = 4; // only the next N upcoming films get any time estimate at all
+
+const PROGRESS_CONFIRM_MS = 5 * 60 * 1000; // a match this brief was a queue jump, not a showing
 
 let _scheduleCache = null;    // {postId, title, publishedAt, days, fetchedAt} or null
 let _fetchFailed = false;     // sticky for the session once Reddit is unreachable AND no cache at all
 let _revalidating = false;
-let _observedGapSeconds = []; // durations (s) of changeMedia items that didn't match the schedule
-let _lastUnmatchedStart = null; // Date.now() when the current unmatched (bumper) item started
+let _observedGapSeconds = []; // durations (s) of unmatched blocks between scheduled features
+let _lastUnmatchedStart = null; // Date.now() when the current unmatched (bumper) BLOCK started
+let _pendingProgress = null;  // {idx, since} -- a matched film not yet current long enough to count as played
 
 function readCache() {
     try {
@@ -41,24 +47,64 @@ function writeCache(schedule) {
     catch (e) { /* storage full/unavailable -- in-memory cache for this session still works */ }
 }
 
-function allScheduleTitles() {
-    if (!_scheduleCache) return [];
-    return _scheduleCache.days.flatMap(d => d.sections.flatMap(s => s.items));
+function allScheduleTitles(sched = _scheduleCache) {
+    if (!sched) return [];
+    return sched.days.flatMap(d => d.sections.flatMap(s => s.items));
 }
 
-// Learn bumper-gap duration live: a changeMedia title that doesn't match anything in
-// tonight's schedule is a bumper; the time between it starting and the next
-// (matched-or-not) changeMedia is one observed gap sample.
+// Furthest flat index within TODAY's day ever observed playing, persisted so grayed
+// "already played" posters survive an app relaunch mid-night. Self-resets when the
+// stored Pacific date isn't today's.
+function readProgress() {
+    try {
+        const p = JSON.parse(localStorage.getItem(LS_LINEUP_PROGRESS));
+        return p && p.date === pacificDateString() && p.furthestIndex >= 0 ? p.furthestIndex : -1;
+    } catch (e) { return -1; }
+}
+function writeProgress(furthestIndex) {
+    try { localStorage.setItem(LS_LINEUP_PROGRESS, JSON.stringify({ date: pacificDateString(), furthestIndex })); }
+    catch (e) { /* storage full/unavailable -- graying just degrades to clock projection */ }
+}
+
+// If a matched film has now been current long enough to be a real showing (not a
+// momentary queue jump -- seen live: the DJ skimming the queue fired changeMedia for
+// four scheduled titles in seconds, graying them a night early), commit it to the
+// persisted marker. Called when the next changeMedia arrives AND from buildDaySections,
+// so a still-playing film past the threshold counts even before it ends.
+function commitConfirmedProgress() {
+    if (!_pendingProgress) return;
+    if (Date.now() - _pendingProgress.since >= PROGRESS_CONFIRM_MS) {
+        if (_pendingProgress.idx > readProgress()) writeProgress(_pendingProgress.idx);
+        _pendingProgress = null;
+    }
+}
+
+// Learn bumper-gap duration live: the time from the FIRST unmatched changeMedia after a
+// feature to the next matched one is one observed gap sample -- the whole bumper block,
+// not just its last item (resetting per-item made the median absurdly small on multi-
+// bumper blocks, seen live 2026-07-11). Matched titles in TODAY's day also advance the
+// persisted played-progress marker, via the confirm-delay above. Reads the localStorage
+// cache directly (without assigning _scheduleCache, which stays ensureSchedule's job so
+// revalidation still happens) so all of this works before the lineup is first opened.
 onSocket('changeMedia', (d) => {
     const rawTitle = d && d.title;
     const title = rawTitle ? parseMovieFilename(rawTitle).title : null;
-    const matchesSchedule = !!(title && _scheduleCache &&
-        allScheduleTitles().some(s => s.title.toLowerCase() === title.toLowerCase()));
-    if (rawTitle && !matchesSchedule && _scheduleCache) {
-        _lastUnmatchedStart = Date.now();
+    const sched = _scheduleCache || readCache();
+    const matchesSchedule = !!(title && sched &&
+        allScheduleTitles(sched).some(s => itemMatchesTitle(s, title)));
+    if (rawTitle && !matchesSchedule && sched) {
+        if (!_lastUnmatchedStart) _lastUnmatchedStart = Date.now();
     } else if (_lastUnmatchedStart) {
         _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1000);
         _lastUnmatchedStart = null;
+    }
+    commitConfirmedProgress();
+    _pendingProgress = null; // whatever was pending either just committed or was a jump
+    if (matchesSchedule) {
+        const today = sched.days.find(day => day.date === pacificDateString());
+        const flatItems = today ? today.sections.flatMap(s => s.items) : [];
+        const idx = flatItems.findIndex(s => itemMatchesTitle(s, title));
+        if (idx !== -1 && idx > readProgress()) _pendingProgress = { idx, since: Date.now() };
     }
 });
 
@@ -144,50 +190,48 @@ function buildBase(info, title, year) {
 }
 
 // Flattens a day's sections into one ordered list (for locating "now" and walking ETAs
-// across section boundaries), then re-nests the built items back into their sections.
-function buildDaySections(day, isTodayFlag, infosByKey) {
+// across section boundaries), hands the timing model (estimateDayItems) the flat facts
+// -- runtimes, learned gap, confirmed now-playing, persisted played-progress, bumper
+// start -- then re-nests the built items back into their sections.
+function buildDaySections(day, dayStatus, infosByKey) {
     const flat = [];
     day.sections.forEach((section, si) => {
         section.items.forEach(item => flat.push({ section, si, item }));
     });
 
-    const currentTitle = isTodayFlag && movieState.lastMovieTitle
+    const isToday = dayStatus === 'today';
+    const currentTitle = isToday && movieState.lastMovieTitle
         ? parseMovieFilename(movieState.lastMovieTitle).title : '';
     const currentFlatIndex = currentTitle
-        ? flat.findIndex(f => f.item.title.toLowerCase() === currentTitle.toLowerCase())
+        ? flat.findIndex(f => itemMatchesTitle(f.item, currentTitle))
         : -1;
 
-    // Pre-show cold start: the first film of ANY day that hasn't started yet gets one coarse
-    // "starts around then" guess, anchored on that day's own real Noon-Pacific showtime --
-    // rather than the running-order-only blank every other not-yet-started item gets (never
-    // display precision the data can't support).
-    const anchor = dayAnchorPacific(day.date);
-    const isColdStart = currentFlatIndex === -1 && Date.now() < anchor.getTime();
+    if (isToday) commitConfirmedProgress(); // a film past the confirm threshold counts as reached
 
-    const learnedGap = medianGapSeconds(_observedGapSeconds) ?? 600; // 10-min cold-start default
-    let cumulative = currentFlatIndex !== -1
-        ? Math.max(0, getCurrentMediaSeconds() - getCurrentPlaybackSeconds()) : 0;
+    const nowMs = Date.now();
+    const infoFor = (f) => infosByKey.get(f.item.title + '|' + f.item.year) || {};
+    const estimates = estimateDayItems({
+        nowMs,
+        anchorMs: dayAnchorPacific(day.date).getTime(),
+        runtimesMin: flat.map(f => infoFor(f).runtime ?? null),
+        gapSeconds: medianGapSeconds(_observedGapSeconds) ?? 600, // 10-min cold-start default
+        dayStatus,
+        currentIndex: currentFlatIndex,
+        remainingSec: currentFlatIndex !== -1
+            ? Math.max(0, getCurrentMediaSeconds() - getCurrentPlaybackSeconds()) : 0,
+        furthestPlayedIndex: isToday ? readProgress() : -1,
+        bumperStartMs: _lastUnmatchedStart,
+    });
 
     const builtFlat = flat.map((f, idx) => {
-        const info = infosByKey.get(f.item.title + '|' + f.item.year) || {};
-        const base = buildBase(info, f.item.title, f.item.year);
-        if (idx === currentFlatIndex) return { ...base, isNowPlaying: true, etaLabel: '' };
-        if (isColdStart && idx === 0) {
-            return { ...base, isNowPlaying: false, etaLabel: formatEta(anchor.getHours(), anchor.getMinutes(), 'approx') };
-        }
-        if (currentFlatIndex === -1 || idx < currentFlatIndex) {
-            return { ...base, isNowPlaying: false, etaLabel: '' }; // no live anchor, or already aired earlier today
-        }
-        const offset = idx - currentFlatIndex;
-        cumulative += learnedGap; // a bumper precedes this feature
-        let etaLabel = '';
-        if (offset <= MAX_ESTIMATED_AHEAD) {
-            const precision = offset === 1 ? 'exact' : 'approx';
-            const eta = new Date(Date.now() + cumulative * 1000);
-            etaLabel = formatEta(eta.getHours(), eta.getMinutes(), precision);
-        }
-        cumulative += info.runtime ? info.runtime * 60 : 0;
-        return { ...base, isNowPlaying: false, etaLabel };
+        const est = estimates[idx];
+        const eta = est.etaMs != null ? new Date(roundEtaMs(est.etaMs, est.precision, nowMs)) : null;
+        return {
+            ...buildBase(infoFor(f), f.item.title, f.item.year),
+            isNowPlaying: est.isNowPlaying,
+            played: est.played,
+            etaLabel: eta ? formatEta(eta.getHours(), eta.getMinutes(), est.precision) : '',
+        };
     });
 
     return day.sections.map((section, si) => ({
@@ -204,10 +248,13 @@ export async function getTonightsLineup() {
     const infos = await Promise.all(allItems.map(({ title, year }) => lookupMovie(title, year)));
     const infosByKey = new Map(allItems.map((item, i) => [item.title + '|' + item.year, infos[i]]));
 
-    const todayStr = pacificDateString();
+    const todayStr = pacificDateString(); // ISO date strings order lexicographically
     const days = _scheduleCache.days.map((day) => ({
         day: day.day, date: day.date, isToday: day.date === todayStr,
-        sections: buildDaySections(day, day.date === todayStr, infosByKey),
+        sections: buildDaySections(
+            day,
+            day.date < todayStr ? 'past' : day.date === todayStr ? 'today' : 'future',
+            infosByKey),
     }));
     return { listTitle: _scheduleCache.title || FALLBACK_LIST_TITLE, fallback: false, days };
 }
