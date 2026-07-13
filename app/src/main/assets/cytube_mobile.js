@@ -6045,8 +6045,6 @@
             body.sc-vertical.sc-rightzone #sc-cast-btn {
                 opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
             }
-            /* Hide with the rest of the cluster while the keyboard is up */
-            body.sc-kb-open #sc-cast-btn { opacity: 0 !important; pointer-events: none !important; }
 
             /* ===== SETTINGS MODAL ===== */
             #sc-settings-overlay {
@@ -6438,6 +6436,7 @@
             body.sc-kb-open.sc-vertical #sc-chatmode-btn,
             body.sc-kb-open.sc-vertical #sc-desync-btn,
             body.sc-kb-open.sc-vertical #sc-settings-btn,
+            body.sc-kb-open.sc-vertical #sc-cast-btn,
             body.sc-kb-open #sc-top-bar,
             body.sc-kb-open #sc-chat-header {
                 opacity: 0 !important;
@@ -8386,7 +8385,8 @@
         root.setProperty("--sc-chat-h", chatH + "px");
         document.body.classList.add("sc-kb-open");
         const buf = document.getElementById("messagebuffer");
-        if (buf) setTimeout(() => {
+        const wasNearBottom = buf && buf.scrollHeight - buf.scrollTop - buf.clientHeight < 80;
+        if (buf && wasNearBottom) setTimeout(() => {
           buf.scrollTop = buf.scrollHeight;
         }, 120);
       };
