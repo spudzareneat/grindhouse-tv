@@ -162,6 +162,7 @@
     watchAlong: { key: "sc_watch_along", type: "onbool", def: false },
     castMute: { key: "sc_cast_fallback_mute", type: "onbool", def: false },
     chatMode: { key: "sc_chat_mode", type: "string", def: "sidebar" },
+    vertSplit: { key: "sc_vert_split", type: "number", def: 50 },
     updateCache: { key: "sc_update_cache", type: "json", def: null }
   };
   function getSetting(n) {
@@ -171,6 +172,10 @@
     if (d.type === "offbool") return raw !== "off";
     if (d.type === "onbool") return raw === "on";
     if (d.type === "flag") return true;
+    if (d.type === "number") {
+      const n = parseFloat(raw);
+      return Number.isFinite(n) ? n : d.def;
+    }
     if (d.type === "json") {
       try {
         return JSON.parse(raw);
@@ -2745,6 +2750,12 @@
       btn.addEventListener("click", cycleChatMode);
       document.body.appendChild(btn);
     }
+    if (!document.getElementById("sc-chatonly-banner")) {
+      const banner = document.createElement("div");
+      banner.id = "sc-chatonly-banner";
+      banner.textContent = "Paused · Muted";
+      document.body.appendChild(banner);
+    }
     applyChatMode(saved);
     document.addEventListener("keydown", (e) => {
       if (e.key !== "c" && e.key !== "C") return;
@@ -2849,11 +2860,35 @@
       }
     }, { passive: true });
   }
+  var VSPLIT_MIN = 25, VSPLIT_MAX = 75;
   function initVertControlBand() {
     if (document.getElementById("sc-vert-ctrl-band")) return;
     const band = document.createElement("div");
     band.id = "sc-vert-ctrl-band";
     document.body.appendChild(band);
+    const saved = getSetting("vertSplit");
+    const initial = Math.min(VSPLIT_MAX, Math.max(VSPLIT_MIN, saved));
+    document.body.style.setProperty("--sc-split", String(initial));
+    let dragging = false;
+    band.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      band.classList.add("sc-dragging");
+      band.setPointerCapture(e.pointerId);
+    });
+    band.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      const pct = Math.min(VSPLIT_MAX, Math.max(VSPLIT_MIN, e.clientY / window.innerHeight * 100));
+      document.body.style.setProperty("--sc-split", String(pct));
+    });
+    const endDrag = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      band.classList.remove("sc-dragging");
+      const pct = Math.min(VSPLIT_MAX, Math.max(VSPLIT_MIN, e.clientY / window.innerHeight * 100));
+      localStorage.setItem("sc_vert_split", String(pct));
+    };
+    band.addEventListener("pointerup", endDrag);
+    band.addEventListener("pointercancel", endDrag);
   }
   function initRightZone() {
     let hideTimer = null;
@@ -5375,7 +5410,7 @@
                 display: flex !important;
                 position: fixed !important;
                 left: 0 !important; right: auto !important; width: auto !important;
-                top: 50vh !important; height: 44px !important; bottom: auto !important;
+                top: calc(var(--sc-split, 50) * 1vh) !important; height: 44px !important; bottom: auto !important;
                 background: transparent !important;
                 z-index: 10001 !important;
                 padding: 0 12px !important;
@@ -5447,7 +5482,7 @@
             }
             body.sc-vertical #sc-users-panel {
                 top: auto !important;
-                bottom: calc(50vh - 44px) !important;
+                bottom: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important;
                 right: 5px !important;
                 width: calc(100vw - 5px) !important;
                 max-height: 40vh !important;
@@ -5510,9 +5545,12 @@
                 backdrop-filter: blur(4px) !important;
             }
             body.sc-vertical .video-js .vjs-control-bar {
-                /* Sit at the bottom of the video (just above the 50vh chat header),
-                   not pinned to the screen bottom where it would land over chat. */
-                bottom: calc(50vh + 4px) !important;
+                /* Sit at the bottom of the video (just above the chat header),
+                   not pinned to the screen bottom where it would land over chat.
+                   The video's bottom edge is --sc-split vh from the TOP, i.e.
+                   (100 - --sc-split) vh from the BOTTOM — this is a bottom offset,
+                   so it must use the complement, not --sc-split directly. */
+                bottom: calc((100 - var(--sc-split, 50)) * 1vh + 4px) !important;
                 right: 4px !important;
                 left: 4px !important;
             }
@@ -5811,17 +5849,17 @@
             }
 
             /* ===== VERTICAL LAYOUT (portrait) — YouTube-style stack =====
-               Title strip (36px) → video (ends at 50vh) → control band (44px) → chat */
+               Title strip (36px) → video (ends at --sc-split vh) → control band (44px) → chat */
             body.sc-vertical #videowrap {
                 position: fixed !important; top: 36px !important; left: 0 !important;
-                width: 100vw !important; height: calc(50vh - 36px) !important;
+                width: 100vw !important; height: calc(var(--sc-split, 50) * 1vh - 36px) !important;
                 z-index: 9999 !important; background: black !important;
                 border: none !important; outline: none !important;
                 box-shadow: none !important;
             }
             body.sc-vertical #videowrap .embed-responsive,
             body.sc-vertical #ytapiplayer {
-                width: 100vw !important; height: calc(50vh - 36px) !important;
+                width: 100vw !important; height: calc(var(--sc-split, 50) * 1vh - 36px) !important;
                 border: none !important;
                 margin: 0 !important;
                 padding: 0 !important;
@@ -5837,7 +5875,7 @@
             }
             body.sc-vertical #chatwrap {
                 position: fixed !important; bottom: 0 !important; left: 0 !important;
-                width: 100vw !important; height: calc(50vh - 44px) !important;
+                width: 100vw !important; height: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important;
                 z-index: 9999 !important; background: rgba(16,14,24,0.97) !important;
                 overflow: hidden !important; padding: 0 5px !important;
                 display: flex !important; flex-direction: column !important;
@@ -6037,7 +6075,7 @@
             }
             /* Vertical: control-band row, one slot left of settings */
             body.sc-vertical #sc-cast-btn {
-                top: calc(50vh + 4px) !important; bottom: auto !important;
+                top: calc(var(--sc-split, 50) * 1vh + 4px) !important; bottom: auto !important;
                 right: 140px !important; left: auto !important;
                 opacity: 0 !important; pointer-events: none !important;
                 transform: translateX(16px) !important;
@@ -6349,42 +6387,56 @@
             #sc-chat-textarea { font-size: 16px !important; }
 
             /* ── VERTICAL (portrait phone): YouTube-style stack ─── */
-            /* Title strip (36px) → video (50vh total) → ctrl band (44px) → chat */
+            /* Title strip (36px) → video (--sc-split vh) → ctrl band (44px) → chat.
+               --sc-split is a unitless 0-100 custom prop (video/chat seam position, in vh);
+               default 50 reproduces the original fixed 50/50 split. Set live by the drag
+               handler on #sc-vert-ctrl-band (see initVertControlBand). */
             body.sc-vertical #videowrap,
             body.sc-vertical #videowrap .embed-responsive,
-            body.sc-vertical #ytapiplayer    { height: calc(50vh - 36px) !important; }
-            body.sc-vertical #chatwrap       { height: calc(50vh - 44px) !important; }
-            body.sc-vertical #sc-users-panel { bottom: calc(50vh - 44px) !important; }
-            body.sc-vertical #sc-poll-panel  { bottom: calc(50vh - 44px) !important; }
+            body.sc-vertical #ytapiplayer    { height: calc(var(--sc-split, 50) * 1vh - 36px) !important; }
+            body.sc-vertical #chatwrap       { height: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important; }
+            body.sc-vertical #sc-users-panel { bottom: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important; }
+            body.sc-vertical #sc-poll-panel  { bottom: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important; }
             /* Three buttons sit inside the control band — evenly spaced from the right */
             body.sc-vertical #sc-chatmode-btn {
-                bottom: auto !important; top: calc(50vh + 4px) !important;
+                bottom: auto !important; top: calc(var(--sc-split, 50) * 1vh + 4px) !important;
                 right: 8px !important; left: auto !important; transform: none !important;
                 opacity: 1 !important; pointer-events: auto !important;
             }
             body.sc-vertical #sc-desync-btn {
-                bottom: auto !important; top: calc(50vh + 4px) !important;
+                bottom: auto !important; top: calc(var(--sc-split, 50) * 1vh + 4px) !important;
                 right: 52px !important; left: auto !important;
                 opacity: 1 !important; pointer-events: auto !important;
             }
             body.sc-vertical #sc-settings-btn {
-                bottom: auto !important; top: calc(50vh + 4px) !important;
+                bottom: auto !important; top: calc(var(--sc-split, 50) * 1vh + 4px) !important;
                 right: 96px !important; left: auto !important;
                 opacity: 1 !important; pointer-events: auto !important;
             }
-            body.sc-vertical .video-js .vjs-control-bar { bottom: calc(50vh + 4px) !important; left: 4px !important; right: 4px !important; }
+            body.sc-vertical .video-js .vjs-control-bar { bottom: calc((100 - var(--sc-split, 50)) * 1vh + 4px) !important; left: 4px !important; right: 4px !important; }
 
-            /* Control band element — dark strip between video and chat */
+            /* Control band element — dark strip between video and chat; also the drag handle
+               for resizing the split (see initVertControlBand). */
             #sc-vert-ctrl-band { display: none !important; }
             body.sc-vertical #sc-vert-ctrl-band {
-                display: block !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
                 position: fixed !important; left: 0 !important; right: 0 !important;
-                top: 50vh !important; height: 44px !important;
+                top: calc(var(--sc-split, 50) * 1vh) !important; height: 44px !important;
                 background: rgba(8,6,12,0.95) !important;
                 z-index: 10000 !important;
                 border-top: 1px solid rgba(255,255,255,0.10) !important;
                 border-bottom: 1px solid rgba(255,255,255,0.07) !important;
+                touch-action: none !important;
             }
+            /* Grip-pill — visual affordance that the band is a drag handle */
+            body.sc-vertical #sc-vert-ctrl-band::before {
+                content: "" !important;
+                width: 36px !important; height: 4px !important;
+                border-radius: 2px !important;
+                background: rgba(255,255,255,0.28) !important;
+                pointer-events: none !important;
+            }
+            body.sc-vertical #sc-vert-ctrl-band.sc-dragging::before { background: rgba(255,255,255,0.5) !important; }
             /* Right-zone slide drawer — buttons hidden off-screen right, revealed on edge swipe */
             body.sc-vertical #sc-chatmode-btn,
             body.sc-vertical #sc-desync-btn,
@@ -6403,7 +6455,7 @@
             #sc-vert-ctrl-grip { display: none !important; }
             body.sc-vertical #sc-vert-ctrl-grip {
                 display: block !important;
-                position: fixed !important; right: 0 !important; top: 50vh !important;
+                position: fixed !important; right: 0 !important; top: calc(var(--sc-split, 50) * 1vh) !important;
                 width: 4px !important; height: 44px !important;
                 background: rgba(255,255,255,0.22) !important;
                 z-index: 10002 !important; cursor: pointer !important;
@@ -7239,7 +7291,7 @@
             }
             /* The control row sits just ABOVE the bottom scrubber (≈32px tall at bottom:4px)
                so the two don't overlap; the cast button joins the row (it otherwise floats
-               mid-screen at the 50vh control-band position). */
+               mid-screen at the --sc-split control-band position). */
             body.sc-chat-hidden.sc-vertical #sc-chatmode-btn,
             body.sc-chat-hidden.sc-vertical #sc-desync-btn,
             body.sc-chat-hidden.sc-vertical #sc-settings-btn,
@@ -7247,7 +7299,7 @@
                 top: auto !important; bottom: 48px !important;
             }
             /* Video-only fills the screen, so the scrubber belongs at the screen bottom —
-               not at the 50vh "above the chat header" spot used when chat is present. */
+               not at the --sc-split "above the chat header" spot used when chat is present. */
             body.sc-chat-hidden.sc-vertical .video-js .vjs-control-bar {
                 bottom: 4px !important;
             }
@@ -7275,7 +7327,7 @@
                 display: none !important;
             }
             body.sc-chat-chatonly #sc-cluster-grip { display: none !important; }
-            /* The top header doubles as a control band (like the vertical band at 50vh, but
+            /* The top header doubles as a control band (like the draggable vertical band, but
                pinned to the top): a right-edge grip slides the chat-mode + settings buttons
                out. Reuses the right-zone drawer (right-edge swipe in portrait, or tap the grip). */
             body.sc-chat-chatonly #sc-vert-ctrl-grip {
@@ -7314,6 +7366,20 @@
                 padding: 0 10px !important; box-sizing: border-box !important;
             }
             body.sc-chat-chatonly #sc-chat-collapse-btn { display: none !important; }
+            /* Explicit "video is paused/muted" indicator — chat-only silently stops the
+               player (_coStopMedia); this makes that state visible instead of a mystery.
+               Sits inside the 32px header bar, whose only other content (the collapse
+               button) is already hidden in chat-only mode, so there's nothing to overlap. */
+            #sc-chatonly-banner { display: none !important; }
+            body.sc-chat-chatonly #sc-chatonly-banner {
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important;
+                height: 32px !important; width: 100vw !important;
+                font-size: 11px !important; letter-spacing: 0.04em !important;
+                color: rgba(255,200,140,0.85) !important;
+                pointer-events: none !important;
+                z-index: 10011 !important;
+            }
             /* Chat fills the screen under the header bar */
             body.sc-chat-chatonly #chatwrap {
                 position: fixed !important;
@@ -7433,7 +7499,7 @@
             }
             #sc-newmsg-pill.sc-show { opacity: 1 !important; pointer-events: auto !important; }
             body.sc-horizontal #sc-newmsg-pill { right: calc(19vw + 16px) !important; bottom: 56px !important; }
-            body.sc-vertical   #sc-newmsg-pill { left: 50% !important; transform: translateX(-50%) !important; bottom: calc(50vh - 44px + 12px) !important; }
+            body.sc-vertical   #sc-newmsg-pill { left: 50% !important; transform: translateX(-50%) !important; bottom: calc((100 - var(--sc-split, 50)) * 1vh - 44px + 12px) !important; }
             body.sc-tv #sc-newmsg-pill { font-size: 17px !important; padding: 10px 22px !important; }
             /* Hide CyTube's native "New Messages Below" bar — our pill replaces it. */
             #newmessages-indicator, #newmessages-indicator-bghack { display: none !important; }
