@@ -7841,6 +7841,13 @@
                         </label>
                         <button id="sc-login-btn" class="sc-settings-btn-wide" type="button">Log in / Switch Account</button>
                     </div>
+
+                    <div class="sc-settings-group">
+                        <label class="sc-settings-label">Support the Channel
+                            <span class="sc-settings-note">Opens the 420Grindhouse Patreon page in your browser</span>
+                        </label>
+                        <button id="sc-patreon-btn" class="sc-settings-btn-wide" type="button">❤ Patreon</button>
+                    </div>
                 </div>
 
                 <div class="sc-settings-pane" data-pane="appearance">
@@ -8009,6 +8016,9 @@
       document.getElementById("sc-login-btn").addEventListener("click", () => {
         persistSettings();
         window.location.href = "/login?redirect=" + encodeURIComponent(window.location.pathname);
+      });
+      document.getElementById("sc-patreon-btn").addEventListener("click", () => {
+        openExternalUrl("https://www.patreon.com/c/420Grindhouse/posts?vanity=420Grindhouse");
       });
       const wireTest = (btnId, inputId, statusId, validator) => {
         const btn = document.getElementById(btnId);
