@@ -420,9 +420,15 @@
                 letter-spacing: 0.18em !important; text-transform: uppercase !important;
                 color: var(--np-accent, #ff5b73) !important; margin-bottom: 10px !important;
             }
+            /* Font-size for long titles is shrunk in JS (see showNowPlayingCard) based on
+               length -- this line-clamp is just the hard backstop so a title long enough to
+               still wrap past 3 lines at the smallest tier truncates with an ellipsis instead
+               of pushing the card's bottom-anchored content off the top of the screen. */
             #sc-np-title {
                 font-size: 44px !important; font-weight: 800 !important; line-height: 1.05 !important;
                 text-shadow: 0 2px 16px rgba(0,0,0,0.8) !important; margin-bottom: 14px !important;
+                display: -webkit-box !important; -webkit-line-clamp: 3 !important;
+                -webkit-box-orient: vertical !important; overflow: hidden !important;
             }
             #sc-np-meta {
                 font-size: 17px !important; color: rgba(255,255,255,0.82) !important;

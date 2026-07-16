@@ -60,6 +60,20 @@ function _renderNpProgress() {
 // Flip to `true` to enable the card on phones too.
 export function _npCardEnabled() { return isTv; }
 
+// #sc-np-title's base size differs by layout (tv.css sets 44px default / 60px TV / 30px
+// vertical) -- shrink it proportionally for long titles so a wordy one wraps to fewer lines
+// rather than growing tall enough to push this bottom-anchored card's content off the top of
+// the screen. The CSS line-clamp on #sc-np-title is the hard backstop for anything still too
+// long even at the smallest tier.
+function _npTitleFontSize(text) {
+    const base = isTv ? 60 : (document.body.classList.contains('sc-vertical') ? 30 : 44);
+    let scale = 1;
+    if (text.length > 60) scale = 0.5;
+    else if (text.length > 40) scale = 0.65;
+    else if (text.length > 25) scale = 0.8;
+    return Math.round(base * scale);
+}
+
 // Long synopses overflow the fixed overview window. Start at the top (so the
 // opening lines read first), then after a beat glide smoothly to the bottom so
 // the whole thing can be read hands-free on the remote. Returns the total ms the
@@ -145,7 +159,10 @@ export function showNowPlayingCard(data, opts = {}) {
     const eyebrow = card.querySelector('#sc-np-eyebrow');
     eyebrow.style.display = opts.showProgress !== false ? '' : 'none';
 
-    card.querySelector('#sc-np-title').textContent = title + year;
+    const titleEl = card.querySelector('#sc-np-title');
+    const titleText = title + year;
+    titleEl.textContent = titleText;
+    titleEl.style.setProperty('font-size', _npTitleFontSize(titleText) + 'px', 'important');
     card.querySelector('#sc-np-overview').textContent = data.overview || '';
 
     const metaParts = [];

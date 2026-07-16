@@ -1545,6 +1545,14 @@
   function _npCardEnabled() {
     return isTv;
   }
+  function _npTitleFontSize(text) {
+    const base = isTv ? 60 : document.body.classList.contains("sc-vertical") ? 30 : 44;
+    let scale = 1;
+    if (text.length > 60) scale = 0.5;
+    else if (text.length > 40) scale = 0.65;
+    else if (text.length > 25) scale = 0.8;
+    return Math.round(base * scale);
+  }
   var _npScrollTimer = null;
   var _npScrollRaf = null;
   var _NP_SCROLL_DELAY = 3500;
@@ -1618,7 +1626,10 @@
     } else poster.style.display = "none";
     const eyebrow = card.querySelector("#sc-np-eyebrow");
     eyebrow.style.display = opts.showProgress !== false ? "" : "none";
-    card.querySelector("#sc-np-title").textContent = title + year;
+    const titleEl = card.querySelector("#sc-np-title");
+    const titleText = title + year;
+    titleEl.textContent = titleText;
+    titleEl.style.setProperty("font-size", _npTitleFontSize(titleText) + "px", "important");
     card.querySelector("#sc-np-overview").textContent = data.overview || "";
     const metaParts = [];
     if (data.rating) metaParts.push(`⭐ ${data.rating}`);
@@ -6846,9 +6857,15 @@
                 letter-spacing: 0.18em !important; text-transform: uppercase !important;
                 color: var(--np-accent, #ff5b73) !important; margin-bottom: 10px !important;
             }
+            /* Font-size for long titles is shrunk in JS (see showNowPlayingCard) based on
+               length -- this line-clamp is just the hard backstop so a title long enough to
+               still wrap past 3 lines at the smallest tier truncates with an ellipsis instead
+               of pushing the card's bottom-anchored content off the top of the screen. */
             #sc-np-title {
                 font-size: 44px !important; font-weight: 800 !important; line-height: 1.05 !important;
                 text-shadow: 0 2px 16px rgba(0,0,0,0.8) !important; margin-bottom: 14px !important;
+                display: -webkit-box !important; -webkit-line-clamp: 3 !important;
+                -webkit-box-orient: vertical !important; overflow: hidden !important;
             }
             #sc-np-meta {
                 font-size: 17px !important; color: rgba(255,255,255,0.82) !important;
