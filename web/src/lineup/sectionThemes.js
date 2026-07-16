@@ -30,7 +30,8 @@ export function getSectionTheme(slug) {
 }
 
 // Bebas Neue isn't a section theme -- it's the ETA/"NOW PLAYING" caption face (tv.css).
-const FONT_FAMILIES = ['Boogaloo', 'Chewy', 'Creepster', 'Rubik+Wet+Paint', 'Monoton', 'Vast+Shadow', 'Cinzel', 'Eater', 'Bungee+Shade', 'Bebas+Neue'];
+// Alfa Slab One isn't a section theme either -- it's the day-tab ticket-stub face (tv.css).
+const FONT_FAMILIES = ['Boogaloo', 'Chewy', 'Creepster', 'Rubik+Wet+Paint', 'Monoton', 'Vast+Shadow', 'Cinzel', 'Eater', 'Bungee+Shade', 'Bebas+Neue', 'Alfa+Slab+One'];
 const FONTS_LINK_ID = 'sc-lineup-theme-fonts';
 
 // Idempotent -- safe to call on every showLineupScreen(); only injects the <link> once per

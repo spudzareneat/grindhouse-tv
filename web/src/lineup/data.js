@@ -2,16 +2,18 @@ import { fetchTonightsSchedule, itemMatchesTitle } from './reddit.js';
 import { lookupMovie, movieState } from '../metadata/tmdb.js';
 import { onSocket } from '../socket.js';
 import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
-import { formatEta, dayAnchorPacific, pacificDateString, medianGapSeconds, estimateDayItems, roundEtaMs } from './timing.js';
+import { formatEta, dayAnchorPacific, pacificDateString, medianGapSeconds, estimateDayItems, roundEtaMs, scheduleExpired } from './timing.js';
 import { getMotdPosterImages } from '../motd.js';
 import { hasKey, LS_TMDB } from '../store.js';
 import { parseMovieFilename } from '../parse.js';
 
 /* ==========================================================
    TONIGHT'S LINEUP -- data interface consumed by lineup/screen.js.
-   Fetches + caches the Reddit schedule post (see reddit.js) once per session
-   (persisted to localStorage across app relaunches, keyed by the post's own
-   id -- self-heals whenever the pinned post rolls over to next week's), locates
+   Fetches + caches the Reddit schedule post (see reddit.js), persisted to
+   localStorage across app relaunches and re-checked every time the Lineup
+   screen opens: a background revalidate past CACHE_MAX_AGE_MS, or an awaited
+   one once the cached weekend's own dates are in the past (scheduleExpired) --
+   the latter is what guarantees a new pinned post gets picked up. Locates
    "now" within TODAY's day only, and feeds the pure timing model
    (timing.js estimateDayItems) each day's TMDB runtimes, the learned median
    bumper-gap, the confirmed now-playing film, and the persisted furthest-played
@@ -124,13 +126,27 @@ async function refetchAndCache() {
 }
 
 async function ensureSchedule() {
-    if (_scheduleCache || _fetchFailed) return;
-    const cached = readCache();
-    if (cached) {
-        _scheduleCache = cached;
-        if (Date.now() - (cached.fetchedAt || 0) > CACHE_MAX_AGE_MS) refetchAndCache(); // fire-and-forget
+    // Populate the in-memory cache from localStorage on the first call of the session --
+    // but unlike before, THIS FUNCTION RUNS AGAIN every time the Lineup screen is opened,
+    // not just once. The WebView page is not reloaded across screen-off/on or backgrounding
+    // (MainActivity.onStop only pauses it -- see CLAUDE.md), so a TV box especially can sit
+    // on the same JS context for days; a one-time-only check here previously meant the
+    // schedule, once loaded, was NEVER re-fetched again for the rest of that session even
+    // after the pinned post rolled over (seen live 2026-07-15: Wednesday's new post ignored
+    // all day because the old weekend's schedule was still sitting in memory from before it).
+    if (!_scheduleCache && !_fetchFailed) {
+        const cached = readCache();
+        if (cached) _scheduleCache = cached;
+    }
+    if (_scheduleCache) {
+        if (scheduleExpired(_scheduleCache)) {
+            await refetchAndCache(); // the cached weekend is over -- there IS a new post, wait for it
+        } else if (Date.now() - (_scheduleCache.fetchedAt || 0) > CACHE_MAX_AGE_MS) {
+            refetchAndCache(); // just routine revalidation (e.g. a same-weekend post edit) -- fire-and-forget
+        }
         return;
     }
+    if (_fetchFailed) return;
     try {
         const result = await fetchTonightsSchedule();
         _scheduleCache = result;

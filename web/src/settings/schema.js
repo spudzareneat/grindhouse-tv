@@ -9,6 +9,7 @@ const DEFS = {
     watchAlong:   { key: 'sc_watch_along',        type: 'onbool', def: false },
     castMute:     { key: 'sc_cast_fallback_mute', type: 'onbool', def: false },
     chatMode:     { key: 'sc_chat_mode',          type: 'string', def: 'sidebar' },
+    vertSplit:    { key: 'sc_vert_split',         type: 'number', def: 50 },
     updateCache:  { key: 'sc_update_cache',       type: 'json',   def: null },
 };
 export function getSetting(n) {
@@ -17,6 +18,7 @@ export function getSetting(n) {
     if (d.type === 'offbool') return raw !== 'off';
     if (d.type === 'onbool') return raw === 'on';
     if (d.type === 'flag') return true;
+    if (d.type === 'number') { const num = parseFloat(raw); return Number.isFinite(num) ? num : d.def; }
     if (d.type === 'json') { try { return JSON.parse(raw); } catch { return d.def; } }
     return raw;
 }

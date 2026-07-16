@@ -2,6 +2,7 @@ import { getTonightsLineup } from './data.js';
 import { showNowPlayingCard } from '../cards/nowplaying.js';
 import { getSectionTheme, ensureThemeFontsLoaded } from './sectionThemes.js';
 import { isTv } from '../tvdetect.js';
+import { tvNavState } from '../tvnav.js';
 
 /* ==========================================================
    TONIGHT'S LINEUP — full-screen schedule, opened from the Coming Attractions
@@ -34,7 +35,13 @@ function ensureScreenDom() {
         <div id="sc-lineup-header"></div>
         <div id="sc-lineup-subtitle">Titles/times may be subject to change.</div>
         <nav id="sc-lineup-daytabs"></nav>
-        <div id="sc-lineup-body"></div>`;
+        <div id="sc-lineup-body"></div>
+        <svg width="0" height="0" style="position:absolute">
+            <filter id="sc-ticket-grain">
+                <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" result="noise"/>
+                <feColorMatrix in="noise" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.08 0"/>
+            </filter>
+        </svg>`;
     screen.querySelector('#sc-lineup-close').addEventListener('click', hideLineupScreen);
     document.body.appendChild(screen);
     return screen;
@@ -101,7 +108,10 @@ function renderDayTabs(screen, days) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'sc-lineup-daytab' + (d.day === _activeDay ? ' sc-lineup-daytab-active' : '');
-        btn.textContent = d.day;
+        // The label sits in its own stacked (z-index) span so it always paints above the
+        // ticket-stub's ::before (tear-line/perforation) and ::after (paper-grain) pseudo-
+        // elements -- those are position:absolute and would otherwise paint over plain text.
+        btn.innerHTML = `<span class="sc-lineup-daytab-label">${d.day}</span>`;
         btn.addEventListener('click', () => showDay(screen, d.day));
         tabs.appendChild(btn);
     });
@@ -187,6 +197,13 @@ function renderItems(screen, data) {
     _activeSectionIndex = 0;
     renderDayTabs(screen, days);
     renderBody(screen, days);
+    // TV: anchor the remote's focus ring on the active day tab immediately, rather than
+    // leaving it unset until the first D-pad press (which would fall through to whatever's
+    // first in DOM order -- the close button -- instead of the day the screen visibly opens on).
+    if (tvNavState.setFocus) {
+        const activeTab = screen.querySelector('.sc-lineup-daytab-active');
+        if (activeTab) tvNavState.setFocus(activeTab);
+    }
 }
 
 // Toggles visibility SYNCHRONOUSLY (before the data fetch resolves) so tvnav.js's

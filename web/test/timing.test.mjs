@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { formatEta, medianGapSeconds, dayAnchorPacific, pacificDateString, estimateDayItems, roundEtaMs } from '../src/lineup/timing.js';
+import { formatEta, medianGapSeconds, dayAnchorPacific, pacificDateString, estimateDayItems, roundEtaMs, scheduleExpired } from '../src/lineup/timing.js';
 
 test('formatEta: exact precision uses the ≈ prefix', () => {
     assert.strictEqual(formatEta(21, 20, 'exact'), '≈ 9:20 PM');
@@ -196,4 +196,27 @@ test('roundEtaMs: future estimates are unaffected by the clamp', () => {
 });
 test('roundEtaMs: now exactly on the grid is an acceptable display time', () => {
     assert.strictEqual(roundEtaMs(T0 + 29 * MIN, 'approx', T0 + 30 * MIN), T0 + 30 * MIN);
+});
+
+function schedWithDates(...dates) {
+    return { days: dates.map(date => ({ date })) };
+}
+test('scheduleExpired: false while today falls within the cached weekend', () => {
+    const sched = schedWithDates('2026-07-10', '2026-07-11', '2026-07-12');
+    assert.strictEqual(scheduleExpired(sched, '2026-07-11'), false);
+});
+test('scheduleExpired: false on the cached weekend\'s last day itself', () => {
+    const sched = schedWithDates('2026-07-10', '2026-07-11', '2026-07-12');
+    assert.strictEqual(scheduleExpired(sched, '2026-07-12'), false);
+});
+test('scheduleExpired: true once today is after the cached weekend\'s last day', () => {
+    const sched = schedWithDates('2026-07-10', '2026-07-11', '2026-07-12');
+    assert.strictEqual(scheduleExpired(sched, '2026-07-15'), true);
+});
+test('scheduleExpired: true when no day in the cached schedule has a date at all', () => {
+    assert.strictEqual(scheduleExpired(schedWithDates(null, null), '2026-07-11'), true);
+});
+test('scheduleExpired: unaffected by day array order -- picks the max date, not the last entry', () => {
+    const sched = schedWithDates('2026-07-12', '2026-07-10', '2026-07-11');
+    assert.strictEqual(scheduleExpired(sched, '2026-07-12'), false);
 });

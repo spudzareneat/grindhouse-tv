@@ -348,18 +348,34 @@ export function initTvNav() {
                 const myIndex = items.indexOf(focusEl);
                 const target = stepLineupSection(dir === 'down' ? 1 : -1, myIndex);
                 if (target) { setFocus(target); return; }
-                if (dir === 'up') {
-                    // No section above — first section of the day, steer to the active day tab
-                    // (mirrors the Coming Attractions strip's own toggle<->reel special case).
-                    const activeTab = document.querySelector('.sc-lineup-daytab-active');
-                    if (activeTab) { setFocus(activeTab); return; }
-                }
-                // dir === 'down' with no section below (last one): nothing to do, fall through.
+                // No section that way (top of the pager on Up, bottom on Down) — steer back
+                // to the active day tab (mirrors the Coming Attractions strip's own
+                // toggle<->reel special case). Symmetric both directions: Up from the first
+                // row and Down from the last row both return to the day-tab strip, so the
+                // pager reads as bounded rather than falling into unpredictable spatial nav.
+                const activeTab = document.querySelector('.sc-lineup-daytab-active');
+                if (activeTab) { setFocus(activeTab); return; }
             }
-            if (dir === 'down' && focusEl && focusEl.classList.contains('sc-lineup-daytab')) {
+            // The close button behaves as part of the day-tab row, not the vertical flow: it's
+            // reachable via Right off the last day tab (and Left back from it), while Down from
+            // either a day tab OR close skips straight to the first movie of the first row.
+            const onDayRow = focusEl && (focusEl.classList.contains('sc-lineup-daytab') || focusEl.id === 'sc-lineup-close');
+            if (onDayRow && dir === 'down') {
                 const body = document.getElementById('sc-lineup-body');
                 const firstItem = body && body.querySelector('.sc-lineup-item');
                 if (firstItem) { setFocus(firstItem); return; }
+            }
+            if (dir === 'right' && focusEl && focusEl.classList.contains('sc-lineup-daytab')) {
+                const tabs = [...document.querySelectorAll('.sc-lineup-daytab')];
+                if (focusEl === tabs[tabs.length - 1]) {
+                    const close = document.getElementById('sc-lineup-close');
+                    if (close) { setFocus(close); return; }
+                }
+            }
+            if (dir === 'left' && focusEl && focusEl.id === 'sc-lineup-close') {
+                const tabs = [...document.querySelectorAll('.sc-lineup-daytab')];
+                const lastTab = tabs[tabs.length - 1];
+                if (lastTab) { setFocus(lastTab); return; }
             }
         }
 

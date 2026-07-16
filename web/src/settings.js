@@ -29,6 +29,7 @@ import { npState, showNowPlayingCard, hideNowPlayingCard, initNowPlayingWatcher 
 import { triggerTitleInject, watchMovieTitle } from './titleinject.js';
 import { initGoogleDrive } from './player/drive.js';
 import { initMediaWatcher } from './player/resync.js';
+import { openExternalUrl } from './player/drm.js';
 import baseCss from './styles/base.css';
 import overlaysCss from './styles/overlays.css';
 import tvCss from './styles/tv.css';
@@ -500,6 +501,13 @@ import tvCss from './styles/tv.css';
                         </label>
                         <button id="sc-login-btn" class="sc-settings-btn-wide" type="button">Log in / Switch Account</button>
                     </div>
+
+                    <div class="sc-settings-group">
+                        <label class="sc-settings-label">Support the Channel
+                            <span class="sc-settings-note">Opens the 420Grindhouse Patreon page in your browser</span>
+                        </label>
+                        <button id="sc-patreon-btn" class="sc-settings-btn-wide" type="button">❤ Patreon</button>
+                    </div>
                 </div>
 
                 <div class="sc-settings-pane" data-pane="appearance">
@@ -681,6 +689,9 @@ import tvCss from './styles/tv.css';
         document.getElementById('sc-login-btn').addEventListener('click', () => {
             persistSettings();     // don't lose entries when we navigate away to log in
             window.location.href = '/login?redirect=' + encodeURIComponent(window.location.pathname);
+        });
+        document.getElementById('sc-patreon-btn').addEventListener('click', () => {
+            openExternalUrl('https://www.patreon.com/c/420Grindhouse/posts?vanity=420Grindhouse');
         });
 
         // ── API key validation ───────────────────────────────────────────────
@@ -1202,7 +1213,8 @@ import tvCss from './styles/tv.css';
             document.body.classList.add('sc-kb-open');
 
             const buf = document.getElementById('messagebuffer');
-            if (buf) setTimeout(() => { buf.scrollTop = buf.scrollHeight; }, 120);
+            const wasNearBottom = buf && buf.scrollHeight - buf.scrollTop - buf.clientHeight < 80;
+            if (buf && wasNearBottom) setTimeout(() => { buf.scrollTop = buf.scrollHeight; }, 120);
         };
 
         const onClose = () => {

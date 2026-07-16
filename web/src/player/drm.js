@@ -8,7 +8,7 @@
 ========================================================== */
 export const drmState = { checkTimer: null };
 
-function openExternalUrl(url) {
+export function openExternalUrl(url) {
     try {
         if (window.CytubeNative && typeof CytubeNative.openExternal === 'function') {
             CytubeNative.openExternal(url);

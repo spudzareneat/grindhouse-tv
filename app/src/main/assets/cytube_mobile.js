@@ -173,8 +173,8 @@
     if (d.type === "onbool") return raw === "on";
     if (d.type === "flag") return true;
     if (d.type === "number") {
-      const n = parseFloat(raw);
-      return Number.isFinite(n) ? n : d.def;
+      const num = parseFloat(raw);
+      return Number.isFinite(num) ? num : d.def;
     }
     if (d.type === "json") {
       try {
@@ -1079,6 +1079,10 @@
     const get = (t) => parts.find((p) => p.type === t).value;
     return `${get("year")}-${get("month")}-${get("day")}`;
   }
+  function scheduleExpired(sched, todayStr = pacificDateString()) {
+    const lastDate = sched.days.reduce((max, d) => d.date && d.date > max ? d.date : max, "");
+    return !lastDate || todayStr > lastDate;
+  }
 
   // src/motd.js
   function getMotdPosterImages() {
@@ -1295,13 +1299,19 @@
     }
   }
   async function ensureSchedule() {
-    if (_scheduleCache || _fetchFailed) return;
-    const cached = readCache();
-    if (cached) {
-      _scheduleCache = cached;
-      if (Date.now() - (cached.fetchedAt || 0) > CACHE_MAX_AGE_MS) refetchAndCache();
+    if (!_scheduleCache && !_fetchFailed) {
+      const cached = readCache();
+      if (cached) _scheduleCache = cached;
+    }
+    if (_scheduleCache) {
+      if (scheduleExpired(_scheduleCache)) {
+        await refetchAndCache();
+      } else if (Date.now() - (_scheduleCache.fetchedAt || 0) > CACHE_MAX_AGE_MS) {
+        refetchAndCache();
+      }
       return;
     }
+    if (_fetchFailed) return;
     try {
       const result = await fetchTonightsSchedule();
       _scheduleCache = result;
@@ -1683,7 +1693,7 @@
   function getSectionTheme(slug) {
     return THEMES[slug] || DEFAULT_THEME;
   }
-  var FONT_FAMILIES = ["Boogaloo", "Chewy", "Creepster", "Rubik+Wet+Paint", "Monoton", "Vast+Shadow", "Cinzel", "Eater", "Bungee+Shade", "Bebas+Neue"];
+  var FONT_FAMILIES = ["Boogaloo", "Chewy", "Creepster", "Rubik+Wet+Paint", "Monoton", "Vast+Shadow", "Cinzel", "Eater", "Bungee+Shade", "Bebas+Neue", "Alfa+Slab+One"];
   var FONTS_LINK_ID = "sc-lineup-theme-fonts";
   function ensureThemeFontsLoaded() {
     if (document.getElementById(FONTS_LINK_ID)) return;
@@ -1692,348 +1702,6 @@
     link.rel = "stylesheet";
     link.href = `https://fonts.googleapis.com/css2?${FONT_FAMILIES.map((f) => `family=${f}`).join("&")}&display=swap`;
     document.head.appendChild(link);
-  }
-
-  // src/lineup/screen.js
-  var _lastData = null;
-  var _activeDay = null;
-  var _activeSectionIndex = 0;
-  function ensureScreenDom() {
-    ensureThemeFontsLoaded();
-    let screen2 = document.getElementById("sc-lineup-screen");
-    if (screen2) return screen2;
-    screen2 = document.createElement("div");
-    screen2.id = "sc-lineup-screen";
-    screen2.innerHTML = `
-        <button id="sc-lineup-close" type="button">✕</button>
-        <div id="sc-lineup-header"></div>
-        <div id="sc-lineup-subtitle">Titles/times may be subject to change.</div>
-        <nav id="sc-lineup-daytabs"></nav>
-        <div id="sc-lineup-body"></div>`;
-    screen2.querySelector("#sc-lineup-close").addEventListener("click", hideLineupScreen);
-    document.body.appendChild(screen2);
-    return screen2;
-  }
-  function renderLoading(screen2) {
-    screen2.querySelector("#sc-lineup-daytabs").innerHTML = "";
-    screen2.querySelector("#sc-lineup-body").innerHTML = '<div id="sc-lineup-loading">Fetching tonight’s lineup…</div>';
-  }
-  function itemButton(item) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "sc-lineup-item" + (item.isNowPlaying ? " sc-lineup-item-current" : "") + (item.played ? " sc-lineup-item-played" : "") + (item.clickable === false ? " sc-lineup-item-static" : "");
-    const titleText = `${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ""}`;
-    const etaText = item.isNowPlaying ? "NOW PLAYING" : item.etaLabel || "";
-    btn.innerHTML = `
-        <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ""}">
-            ${!item.poster ? `<div class="sc-lineup-poster-fallback">${titleText}</div>` : ""}
-            ${etaText ? `<div class="sc-lineup-eta">${etaText}</div>` : ""}
-        </div>`;
-    if (item.clickable !== false) {
-      btn.addEventListener("click", () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
-    }
-    return btn;
-  }
-  function sectionEl(section) {
-    const el = document.createElement("div");
-    el.className = "sc-lineup-section";
-    const theme = getSectionTheme(section.slug);
-    el.style.setProperty("--sc-lineup-wash", theme.wash);
-    if (section.name) {
-      const name = document.createElement("div");
-      name.className = "sc-lineup-section-name";
-      name.style.setProperty("color", theme.color, "important");
-      if (theme.font) name.style.setProperty("font-family", `${theme.font}, cursive`, "important");
-      name.textContent = section.name;
-      el.appendChild(name);
-    }
-    const rail = document.createElement("div");
-    rail.className = "sc-lineup-rail";
-    section.items.forEach((item) => rail.appendChild(itemButton(item)));
-    el.appendChild(rail);
-    return el;
-  }
-  function renderDayTabs(screen2, days) {
-    const tabs = screen2.querySelector("#sc-lineup-daytabs");
-    tabs.innerHTML = "";
-    days.forEach((d) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "sc-lineup-daytab" + (d.day === _activeDay ? " sc-lineup-daytab-active" : "");
-      btn.textContent = d.day;
-      btn.addEventListener("click", () => showDay(screen2, d.day));
-      tabs.appendChild(btn);
-    });
-  }
-  function renderBody(screen2, days) {
-    const body = screen2.querySelector("#sc-lineup-body");
-    body.innerHTML = "";
-    const day = days.find((d) => d.day === _activeDay) || days[0];
-    if (!day || !day.sections.length) {
-      body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
-      return;
-    }
-    if (isTv) {
-      if (_activeSectionIndex >= day.sections.length) _activeSectionIndex = 0;
-      body.appendChild(sectionEl(day.sections[_activeSectionIndex]));
-    } else {
-      day.sections.forEach((section) => body.appendChild(sectionEl(section)));
-    }
-  }
-  function showDay(screen2, day) {
-    _activeDay = day;
-    _activeSectionIndex = 0;
-    const tabs = [...screen2.querySelectorAll(".sc-lineup-daytab")];
-    tabs.forEach((t) => t.classList.toggle("sc-lineup-daytab-active", t.textContent === day));
-    renderBody(screen2, _lastData.days);
-  }
-  function stepLineupSection(delta, columnIndex) {
-    if (!_lastData || _lastData.fallback) return null;
-    const days = _lastData.days || [];
-    const day = days.find((d) => d.day === _activeDay) || days[0];
-    if (!day) return null;
-    const newIndex = _activeSectionIndex + delta;
-    if (newIndex < 0 || newIndex >= day.sections.length) return null;
-    _activeSectionIndex = newIndex;
-    const screen2 = document.getElementById("sc-lineup-screen");
-    renderBody(screen2, days);
-    const rail = screen2.querySelector(".sc-lineup-rail");
-    if (!rail) return null;
-    const items = [...rail.querySelectorAll(".sc-lineup-item")];
-    return items[Math.min(columnIndex, items.length - 1)] || null;
-  }
-  function renderFallback(screen2, data) {
-    screen2.querySelector("#sc-lineup-daytabs").innerHTML = "";
-    const body = screen2.querySelector("#sc-lineup-body");
-    body.innerHTML = "";
-    const items = data.days && data.days[0] && data.days[0].sections[0] && data.days[0].sections[0].items || [];
-    if (!items.length) {
-      body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
-      return;
-    }
-    const section = document.createElement("div");
-    section.className = "sc-lineup-section sc-lineup-section-fallback";
-    const rail = document.createElement("div");
-    rail.className = "sc-lineup-rail";
-    items.forEach((item) => rail.appendChild(itemButton(item)));
-    section.appendChild(rail);
-    body.appendChild(section);
-  }
-  function renderItems(screen2, data) {
-    const header = screen2.querySelector("#sc-lineup-header");
-    if (header) header.textContent = data && data.listTitle || "Grindhouse Lineup";
-    _lastData = data;
-    if (!data || data.fallback) {
-      renderFallback(screen2, data || { days: [] });
-      return;
-    }
-    const days = data.days || [];
-    _activeDay = (days.find((d) => d.isToday) || days[0] || {}).day || null;
-    _activeSectionIndex = 0;
-    renderDayTabs(screen2, days);
-    renderBody(screen2, days);
-  }
-  function showLineupScreen() {
-    const screen2 = ensureScreenDom();
-    screen2.classList.add("sc-lineup-visible");
-    renderLoading(screen2);
-    getTonightsLineup().then((data) => renderItems(screen2, data)).catch(() => {
-      renderItems(screen2, { fallback: true, days: [] });
-    });
-  }
-  function hideLineupScreen() {
-    const screen2 = document.getElementById("sc-lineup-screen");
-    if (screen2) screen2.classList.remove("sc-lineup-visible");
-  }
-
-  // src/posters.js
-  function initPosterStrip() {
-    if (document.getElementById("sc-poster-toggle")) return;
-    const toggleBtn = document.createElement("button");
-    toggleBtn.id = "sc-poster-toggle";
-    toggleBtn.textContent = "Coming Attractions";
-    toggleBtn.title = "Show tonight's lineup";
-    toggleBtn.dataset.noTvCaption = "1";
-    toggleBtn.addEventListener("click", () => showLineupScreen());
-    document.body.appendChild(toggleBtn);
-  }
-  function initPollWatcher() {
-    const tryInit = () => {
-      const pollwrap = document.getElementById("pollwrap");
-      if (!pollwrap) {
-        const bodyObs = new MutationObserver(() => {
-          if (document.getElementById("pollwrap")) {
-            bodyObs.disconnect();
-            tryInit();
-          }
-        });
-        bodyObs.observe(document.body, { childList: true, subtree: true });
-        return;
-      }
-      _initPollWatcher(pollwrap);
-    };
-    tryInit();
-  }
-  function _initPollWatcher(pollwrap) {
-    const header = document.getElementById("sc-chat-header");
-    if (!header) return;
-    const btn = document.createElement("button");
-    btn.id = "sc-poll-btn";
-    btn.title = "Channel announcement / poll";
-    btn.textContent = "POLL";
-    header.appendChild(btn);
-    const panel = document.createElement("div");
-    panel.id = "sc-poll-panel";
-    panel.style.display = "none";
-    document.body.appendChild(panel);
-    let panelOpen = false;
-    const renderPanel = () => {
-      var _a, _b, _c, _d, _e;
-      const well = pollwrap.querySelector(".well.active") || pollwrap.querySelector(".well");
-      if (!well) {
-        panel.innerHTML = "";
-        return;
-      }
-      const h = ((_b = (_a = well.querySelector("h3")) == null ? void 0 : _a.textContent) == null ? void 0 : _b.trim()) || "";
-      const opts = [...well.querySelectorAll(".option")].map((o) => {
-        const btn2 = o.querySelector("button");
-        const text = o.textContent.replace((btn2 == null ? void 0 : btn2.textContent) || "", "").trim();
-        const links = [...o.querySelectorAll("a")].map(
-          (a) => `<a href="${a.href}" target="_blank" rel="noopener noreferrer">${a.textContent}</a>`
-        );
-        let html = o.innerHTML.replace(/<button[^>]*>.*?<\/button>/i, "").trim();
-        return `<div class="sc-poll-option">${html}</div>`;
-      });
-      const label = ((_d = (_c = well.querySelector(".label")) == null ? void 0 : _c.textContent) == null ? void 0 : _d.trim()) || "";
-      const author = ((_e = well.querySelector(".label")) == null ? void 0 : _e.getAttribute("title")) || "";
-      panel.innerHTML = `
-            <div class="sc-poll-header">${h}</div>
-            <div class="sc-poll-options">${opts.join("")}</div>
-            ${label ? `<div class="sc-poll-meta">${author ? author + " · " : ""}${label}</div>` : ""}
-        `;
-    };
-    const hasPollContent = () => {
-      const activeWell = pollwrap.querySelector(".well.active") || pollwrap.querySelector(".well");
-      return !!(activeWell && activeWell.textContent.trim().length > 10);
-    };
-    const updateBtn = () => {
-      const hasContent = hasPollContent();
-      btn.style.display = hasContent ? "" : "none";
-      if (!hasContent && panelOpen) {
-        panel.style.display = "none";
-        panelOpen = false;
-        btn.classList.remove("sc-poll-btn-active");
-      }
-    };
-    btn.addEventListener("click", () => {
-      panelOpen = !panelOpen;
-      if (panelOpen) {
-        renderPanel();
-        panel.style.display = "block";
-        btn.classList.add("sc-poll-btn-active");
-      } else {
-        panel.style.display = "none";
-        btn.classList.remove("sc-poll-btn-active");
-      }
-    });
-    document.addEventListener("click", (e) => {
-      if (panelOpen && !btn.contains(e.target) && !panel.contains(e.target)) {
-        panel.style.display = "none";
-        panelOpen = false;
-        btn.classList.remove("sc-poll-btn-active");
-      }
-    });
-    const reactToPollChange = () => {
-      updateBtn();
-      if (panelOpen) renderPanel();
-    };
-    onSocket("newPoll", reactToPollChange);
-    onSocket("updatePoll", reactToPollChange);
-    onSocket("closePoll", reactToPollChange);
-    updateBtn();
-  }
-  function initUserCount() {
-    const header = document.getElementById("sc-chat-header");
-    if (!header) return;
-    const btn = document.createElement("button");
-    btn.id = "sc-usercount-btn";
-    header.appendChild(btn);
-    const panel = document.createElement("div");
-    panel.id = "sc-users-panel";
-    document.body.appendChild(panel);
-    let open = false;
-    const getUsers = () => {
-      const items = [...document.querySelectorAll("#userlist .userlist_item")];
-      return items.map((item) => {
-        var _a;
-        const spans = item.querySelectorAll("span");
-        const nameSpan = spans.length >= 2 ? spans[1] : spans[0];
-        return ((_a = nameSpan == null ? void 0 : nameSpan.textContent) == null ? void 0 : _a.trim()) || "";
-      }).filter(Boolean).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-    };
-    const updateCount = (n) => {
-      const count = typeof n === "number" ? n : (() => {
-        var _a, _b;
-        const cytubCount = document.getElementById("usercount");
-        const raw = (_b = (_a = cytubCount == null ? void 0 : cytubCount.textContent) == null ? void 0 : _a.match(/\d+/)) == null ? void 0 : _b[0];
-        return raw ? parseInt(raw) : getUsers().length;
-      })();
-      btn.textContent = count + " USERS";
-    };
-    const renderPanel = () => {
-      const users = getUsers();
-      panel.innerHTML = `
-            <div class="sc-users-panel-header">${users.length} connected</div>
-            ${users.map((u) => {
-        const color = usernameToColor(u);
-        return `<div class="sc-users-panel-name" style="color:${color}">${u}</div>`;
-      }).join("")}
-        `;
-    };
-    const closePanel = () => {
-      panel.style.display = "none";
-      btn.classList.remove("sc-users-active");
-      open = false;
-    };
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      open = !open;
-      if (open) {
-        renderPanel();
-        panel.style.display = "block";
-        btn.classList.add("sc-users-active");
-      } else {
-        closePanel();
-      }
-    });
-    document.addEventListener("click", (e) => {
-      if (open && !panel.contains(e.target) && e.target !== btn) closePanel();
-    });
-    const ul = document.getElementById("userlist");
-    if (ul) {
-      new MutationObserver(() => {
-        updateCount();
-        if (open) renderPanel();
-      }).observe(ul, { childList: true, subtree: true });
-    }
-    onSocket("usercount", (n) => updateCount(n));
-    updateCount();
-  }
-
-  // src/chat/fontsize.js
-  function getChatFontSize() {
-    const v = parseInt(getKey(LS_CHAT_FONT), 10);
-    if (Number.isFinite(v) && v >= 10 && v <= 32) return v;
-    return document.body && document.body.classList.contains("sc-tv") ? 18 : 14;
-  }
-  function applyChatFontSize(px) {
-    const buf = document.getElementById("messagebuffer");
-    if (buf) buf.style.setProperty("font-size", px + "px", "important");
-    const ta = document.getElementById("sc-chat-textarea");
-    if (ta) {
-      const overlay = document.body && document.body.classList.contains("sc-chat-overlay");
-      ta.style.setProperty("font-size", (overlay ? 13 : px) + "px", "important");
-    }
   }
 
   // src/player/scrubber.js
@@ -2415,19 +2083,36 @@
             setFocus(target);
             return;
           }
-          if (dir === "up") {
-            const activeTab = document.querySelector(".sc-lineup-daytab-active");
-            if (activeTab) {
-              setFocus(activeTab);
-              return;
-            }
+          const activeTab = document.querySelector(".sc-lineup-daytab-active");
+          if (activeTab) {
+            setFocus(activeTab);
+            return;
           }
         }
-        if (dir === "down" && focusEl && focusEl.classList.contains("sc-lineup-daytab")) {
+        const onDayRow = focusEl && (focusEl.classList.contains("sc-lineup-daytab") || focusEl.id === "sc-lineup-close");
+        if (onDayRow && dir === "down") {
           const body = document.getElementById("sc-lineup-body");
           const firstItem = body && body.querySelector(".sc-lineup-item");
           if (firstItem) {
             setFocus(firstItem);
+            return;
+          }
+        }
+        if (dir === "right" && focusEl && focusEl.classList.contains("sc-lineup-daytab")) {
+          const tabs = [...document.querySelectorAll(".sc-lineup-daytab")];
+          if (focusEl === tabs[tabs.length - 1]) {
+            const close = document.getElementById("sc-lineup-close");
+            if (close) {
+              setFocus(close);
+              return;
+            }
+          }
+        }
+        if (dir === "left" && focusEl && focusEl.id === "sc-lineup-close") {
+          const tabs = [...document.querySelectorAll(".sc-lineup-daytab")];
+          const lastTab = tabs[tabs.length - 1];
+          if (lastTab) {
+            setFocus(lastTab);
             return;
           }
         }
@@ -2574,6 +2259,358 @@
       } catch (e) {
       }
     };
+  }
+
+  // src/lineup/screen.js
+  var _lastData = null;
+  var _activeDay = null;
+  var _activeSectionIndex = 0;
+  function ensureScreenDom() {
+    ensureThemeFontsLoaded();
+    let screen2 = document.getElementById("sc-lineup-screen");
+    if (screen2) return screen2;
+    screen2 = document.createElement("div");
+    screen2.id = "sc-lineup-screen";
+    screen2.innerHTML = `
+        <button id="sc-lineup-close" type="button">✕</button>
+        <div id="sc-lineup-header"></div>
+        <div id="sc-lineup-subtitle">Titles/times may be subject to change.</div>
+        <nav id="sc-lineup-daytabs"></nav>
+        <div id="sc-lineup-body"></div>
+        <svg width="0" height="0" style="position:absolute">
+            <filter id="sc-ticket-grain">
+                <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" result="noise"/>
+                <feColorMatrix in="noise" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.08 0"/>
+            </filter>
+        </svg>`;
+    screen2.querySelector("#sc-lineup-close").addEventListener("click", hideLineupScreen);
+    document.body.appendChild(screen2);
+    return screen2;
+  }
+  function renderLoading(screen2) {
+    screen2.querySelector("#sc-lineup-daytabs").innerHTML = "";
+    screen2.querySelector("#sc-lineup-body").innerHTML = '<div id="sc-lineup-loading">Fetching tonight’s lineup…</div>';
+  }
+  function itemButton(item) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sc-lineup-item" + (item.isNowPlaying ? " sc-lineup-item-current" : "") + (item.played ? " sc-lineup-item-played" : "") + (item.clickable === false ? " sc-lineup-item-static" : "");
+    const titleText = `${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ""}`;
+    const etaText = item.isNowPlaying ? "NOW PLAYING" : item.etaLabel || "";
+    btn.innerHTML = `
+        <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ""}">
+            ${!item.poster ? `<div class="sc-lineup-poster-fallback">${titleText}</div>` : ""}
+            ${etaText ? `<div class="sc-lineup-eta">${etaText}</div>` : ""}
+        </div>`;
+    if (item.clickable !== false) {
+      btn.addEventListener("click", () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
+    }
+    return btn;
+  }
+  function sectionEl(section) {
+    const el = document.createElement("div");
+    el.className = "sc-lineup-section";
+    const theme = getSectionTheme(section.slug);
+    el.style.setProperty("--sc-lineup-wash", theme.wash);
+    if (section.name) {
+      const name = document.createElement("div");
+      name.className = "sc-lineup-section-name";
+      name.style.setProperty("color", theme.color, "important");
+      if (theme.font) name.style.setProperty("font-family", `${theme.font}, cursive`, "important");
+      name.textContent = section.name;
+      el.appendChild(name);
+    }
+    const rail = document.createElement("div");
+    rail.className = "sc-lineup-rail";
+    section.items.forEach((item) => rail.appendChild(itemButton(item)));
+    el.appendChild(rail);
+    return el;
+  }
+  function renderDayTabs(screen2, days) {
+    const tabs = screen2.querySelector("#sc-lineup-daytabs");
+    tabs.innerHTML = "";
+    days.forEach((d) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "sc-lineup-daytab" + (d.day === _activeDay ? " sc-lineup-daytab-active" : "");
+      btn.innerHTML = `<span class="sc-lineup-daytab-label">${d.day}</span>`;
+      btn.addEventListener("click", () => showDay(screen2, d.day));
+      tabs.appendChild(btn);
+    });
+  }
+  function renderBody(screen2, days) {
+    const body = screen2.querySelector("#sc-lineup-body");
+    body.innerHTML = "";
+    const day = days.find((d) => d.day === _activeDay) || days[0];
+    if (!day || !day.sections.length) {
+      body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
+      return;
+    }
+    if (isTv) {
+      if (_activeSectionIndex >= day.sections.length) _activeSectionIndex = 0;
+      body.appendChild(sectionEl(day.sections[_activeSectionIndex]));
+    } else {
+      day.sections.forEach((section) => body.appendChild(sectionEl(section)));
+    }
+  }
+  function showDay(screen2, day) {
+    _activeDay = day;
+    _activeSectionIndex = 0;
+    const tabs = [...screen2.querySelectorAll(".sc-lineup-daytab")];
+    tabs.forEach((t) => t.classList.toggle("sc-lineup-daytab-active", t.textContent === day));
+    renderBody(screen2, _lastData.days);
+  }
+  function stepLineupSection(delta, columnIndex) {
+    if (!_lastData || _lastData.fallback) return null;
+    const days = _lastData.days || [];
+    const day = days.find((d) => d.day === _activeDay) || days[0];
+    if (!day) return null;
+    const newIndex = _activeSectionIndex + delta;
+    if (newIndex < 0 || newIndex >= day.sections.length) return null;
+    _activeSectionIndex = newIndex;
+    const screen2 = document.getElementById("sc-lineup-screen");
+    renderBody(screen2, days);
+    const rail = screen2.querySelector(".sc-lineup-rail");
+    if (!rail) return null;
+    const items = [...rail.querySelectorAll(".sc-lineup-item")];
+    return items[Math.min(columnIndex, items.length - 1)] || null;
+  }
+  function renderFallback(screen2, data) {
+    screen2.querySelector("#sc-lineup-daytabs").innerHTML = "";
+    const body = screen2.querySelector("#sc-lineup-body");
+    body.innerHTML = "";
+    const items = data.days && data.days[0] && data.days[0].sections[0] && data.days[0].sections[0].items || [];
+    if (!items.length) {
+      body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
+      return;
+    }
+    const section = document.createElement("div");
+    section.className = "sc-lineup-section sc-lineup-section-fallback";
+    const rail = document.createElement("div");
+    rail.className = "sc-lineup-rail";
+    items.forEach((item) => rail.appendChild(itemButton(item)));
+    section.appendChild(rail);
+    body.appendChild(section);
+  }
+  function renderItems(screen2, data) {
+    const header = screen2.querySelector("#sc-lineup-header");
+    if (header) header.textContent = data && data.listTitle || "Grindhouse Lineup";
+    _lastData = data;
+    if (!data || data.fallback) {
+      renderFallback(screen2, data || { days: [] });
+      return;
+    }
+    const days = data.days || [];
+    _activeDay = (days.find((d) => d.isToday) || days[0] || {}).day || null;
+    _activeSectionIndex = 0;
+    renderDayTabs(screen2, days);
+    renderBody(screen2, days);
+    if (tvNavState.setFocus) {
+      const activeTab = screen2.querySelector(".sc-lineup-daytab-active");
+      if (activeTab) tvNavState.setFocus(activeTab);
+    }
+  }
+  function showLineupScreen() {
+    const screen2 = ensureScreenDom();
+    screen2.classList.add("sc-lineup-visible");
+    renderLoading(screen2);
+    getTonightsLineup().then((data) => renderItems(screen2, data)).catch(() => {
+      renderItems(screen2, { fallback: true, days: [] });
+    });
+  }
+  function hideLineupScreen() {
+    const screen2 = document.getElementById("sc-lineup-screen");
+    if (screen2) screen2.classList.remove("sc-lineup-visible");
+  }
+
+  // src/posters.js
+  function initPosterStrip() {
+    if (document.getElementById("sc-poster-toggle")) return;
+    const toggleBtn = document.createElement("button");
+    toggleBtn.id = "sc-poster-toggle";
+    toggleBtn.textContent = "Coming Attractions";
+    toggleBtn.title = "Show tonight's lineup";
+    toggleBtn.dataset.noTvCaption = "1";
+    toggleBtn.addEventListener("click", () => showLineupScreen());
+    document.body.appendChild(toggleBtn);
+  }
+  function initPollWatcher() {
+    const tryInit = () => {
+      const pollwrap = document.getElementById("pollwrap");
+      if (!pollwrap) {
+        const bodyObs = new MutationObserver(() => {
+          if (document.getElementById("pollwrap")) {
+            bodyObs.disconnect();
+            tryInit();
+          }
+        });
+        bodyObs.observe(document.body, { childList: true, subtree: true });
+        return;
+      }
+      _initPollWatcher(pollwrap);
+    };
+    tryInit();
+  }
+  function _initPollWatcher(pollwrap) {
+    const header = document.getElementById("sc-chat-header");
+    if (!header) return;
+    const btn = document.createElement("button");
+    btn.id = "sc-poll-btn";
+    btn.title = "Channel announcement / poll";
+    btn.textContent = "POLL";
+    header.appendChild(btn);
+    const panel = document.createElement("div");
+    panel.id = "sc-poll-panel";
+    panel.style.display = "none";
+    document.body.appendChild(panel);
+    let panelOpen = false;
+    const renderPanel = () => {
+      var _a, _b, _c, _d, _e;
+      const well = pollwrap.querySelector(".well.active") || pollwrap.querySelector(".well");
+      if (!well) {
+        panel.innerHTML = "";
+        return;
+      }
+      const h = ((_b = (_a = well.querySelector("h3")) == null ? void 0 : _a.textContent) == null ? void 0 : _b.trim()) || "";
+      const opts = [...well.querySelectorAll(".option")].map((o) => {
+        const btn2 = o.querySelector("button");
+        const text = o.textContent.replace((btn2 == null ? void 0 : btn2.textContent) || "", "").trim();
+        const links = [...o.querySelectorAll("a")].map(
+          (a) => `<a href="${a.href}" target="_blank" rel="noopener noreferrer">${a.textContent}</a>`
+        );
+        let html = o.innerHTML.replace(/<button[^>]*>.*?<\/button>/i, "").trim();
+        return `<div class="sc-poll-option">${html}</div>`;
+      });
+      const label = ((_d = (_c = well.querySelector(".label")) == null ? void 0 : _c.textContent) == null ? void 0 : _d.trim()) || "";
+      const author = ((_e = well.querySelector(".label")) == null ? void 0 : _e.getAttribute("title")) || "";
+      panel.innerHTML = `
+            <div class="sc-poll-header">${h}</div>
+            <div class="sc-poll-options">${opts.join("")}</div>
+            ${label ? `<div class="sc-poll-meta">${author ? author + " · " : ""}${label}</div>` : ""}
+        `;
+    };
+    const hasPollContent = () => {
+      const activeWell = pollwrap.querySelector(".well.active") || pollwrap.querySelector(".well");
+      return !!(activeWell && activeWell.textContent.trim().length > 10);
+    };
+    const updateBtn = () => {
+      const hasContent = hasPollContent();
+      btn.style.display = hasContent ? "" : "none";
+      if (!hasContent && panelOpen) {
+        panel.style.display = "none";
+        panelOpen = false;
+        btn.classList.remove("sc-poll-btn-active");
+      }
+    };
+    btn.addEventListener("click", () => {
+      panelOpen = !panelOpen;
+      if (panelOpen) {
+        renderPanel();
+        panel.style.display = "block";
+        btn.classList.add("sc-poll-btn-active");
+      } else {
+        panel.style.display = "none";
+        btn.classList.remove("sc-poll-btn-active");
+      }
+    });
+    document.addEventListener("click", (e) => {
+      if (panelOpen && !btn.contains(e.target) && !panel.contains(e.target)) {
+        panel.style.display = "none";
+        panelOpen = false;
+        btn.classList.remove("sc-poll-btn-active");
+      }
+    });
+    const reactToPollChange = () => {
+      updateBtn();
+      if (panelOpen) renderPanel();
+    };
+    onSocket("newPoll", reactToPollChange);
+    onSocket("updatePoll", reactToPollChange);
+    onSocket("closePoll", reactToPollChange);
+    updateBtn();
+  }
+  function initUserCount() {
+    const header = document.getElementById("sc-chat-header");
+    if (!header) return;
+    const btn = document.createElement("button");
+    btn.id = "sc-usercount-btn";
+    header.appendChild(btn);
+    const panel = document.createElement("div");
+    panel.id = "sc-users-panel";
+    document.body.appendChild(panel);
+    let open = false;
+    const getUsers = () => {
+      const items = [...document.querySelectorAll("#userlist .userlist_item")];
+      return items.map((item) => {
+        var _a;
+        const spans = item.querySelectorAll("span");
+        const nameSpan = spans.length >= 2 ? spans[1] : spans[0];
+        return ((_a = nameSpan == null ? void 0 : nameSpan.textContent) == null ? void 0 : _a.trim()) || "";
+      }).filter(Boolean).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+    };
+    const updateCount = (n) => {
+      const count = typeof n === "number" ? n : (() => {
+        var _a, _b;
+        const cytubCount = document.getElementById("usercount");
+        const raw = (_b = (_a = cytubCount == null ? void 0 : cytubCount.textContent) == null ? void 0 : _a.match(/\d+/)) == null ? void 0 : _b[0];
+        return raw ? parseInt(raw) : getUsers().length;
+      })();
+      btn.textContent = count + " USERS";
+    };
+    const renderPanel = () => {
+      const users = getUsers();
+      panel.innerHTML = `
+            <div class="sc-users-panel-header">${users.length} connected</div>
+            ${users.map((u) => {
+        const color = usernameToColor(u);
+        return `<div class="sc-users-panel-name" style="color:${color}">${u}</div>`;
+      }).join("")}
+        `;
+    };
+    const closePanel = () => {
+      panel.style.display = "none";
+      btn.classList.remove("sc-users-active");
+      open = false;
+    };
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      open = !open;
+      if (open) {
+        renderPanel();
+        panel.style.display = "block";
+        btn.classList.add("sc-users-active");
+      } else {
+        closePanel();
+      }
+    });
+    document.addEventListener("click", (e) => {
+      if (open && !panel.contains(e.target) && e.target !== btn) closePanel();
+    });
+    const ul = document.getElementById("userlist");
+    if (ul) {
+      new MutationObserver(() => {
+        updateCount();
+        if (open) renderPanel();
+      }).observe(ul, { childList: true, subtree: true });
+    }
+    onSocket("usercount", (n) => updateCount(n));
+    updateCount();
+  }
+
+  // src/chat/fontsize.js
+  function getChatFontSize() {
+    const v = parseInt(getKey(LS_CHAT_FONT), 10);
+    if (Number.isFinite(v) && v >= 10 && v <= 32) return v;
+    return document.body && document.body.classList.contains("sc-tv") ? 18 : 14;
+  }
+  function applyChatFontSize(px) {
+    const buf = document.getElementById("messagebuffer");
+    if (buf) buf.style.setProperty("font-size", px + "px", "important");
+    const ta = document.getElementById("sc-chat-textarea");
+    if (ta) {
+      const overlay = document.body && document.body.classList.contains("sc-chat-overlay");
+      ta.style.setProperty("font-size", (overlay ? 13 : px) + "px", "important");
+    }
   }
 
   // src/chat/modes.js
@@ -2860,7 +2897,8 @@
       }
     }, { passive: true });
   }
-  var VSPLIT_MIN = 25, VSPLIT_MAX = 75;
+  var VSPLIT_MIN = 25;
+  var VSPLIT_MAX = 75;
   function initVertControlBand() {
     if (document.getElementById("sc-vert-ctrl-band")) return;
     const band = document.createElement("div");
@@ -6953,24 +6991,79 @@
             }
             body.sc-tv #sc-lineup-body { overflow: hidden !important; gap: 0 !important; }
 
-            /* Day tabs — plain button row, same shape as settings.js's tab pattern; the whole-
-               page geometric scorer handles Left/Right across tabs and Up/Down into the first
-               section on its own (no special-case nav code needed, see tvnav.js). */
+            /* Day tabs — ticket-stub shape (torn-off-a-strip perforation + a paper-grain
+               texture), replacing the old plain pill/solid-fill-box look. The whole-page
+               geometric scorer still handles Left/Right across tabs and Up/Down into the
+               first section on its own (no special-case nav code needed, see tvnav.js). */
             #sc-lineup-daytabs {
-                display: flex !important; gap: 10px !important; margin-bottom: 6px !important;
+                display: flex !important; gap: 14px !important; margin: 0 -6px 6px !important;
+                padding: 0 6px !important; /* room for the focus outline/box-shadow at the scroll edges below --
+                    without this the first/last tab's ring gets clipped by overflow-x; the matching
+                    negative margin keeps the row visually flush with the header/subtitle above it */
                 flex-shrink: 0 !important; /* never squashed by #sc-lineup-body's flex sibling */
                 overflow-x: auto !important; /* safety net on very narrow phones -- scrolls rather than breaking */
             }
             .sc-lineup-daytab {
-                background: rgba(255,255,255,0.08) !important; border: none !important;
-                color: rgba(255,255,255,0.65) !important; font-weight: 700 !important;
-                font-size: 13px !important; letter-spacing: 0.06em !important;
-                padding: 8px 18px !important; border-radius: 999px !important; cursor: pointer !important;
+                position: relative !important; overflow: hidden !important;
+                background: #c9c2b8 !important; border: 1px solid #b0a89c !important;
+                color: #4a4238 !important; font-family: 'Alfa Slab One', serif !important; font-weight: 400 !important;
+                font-size: 13px !important; letter-spacing: 0.01em !important;
+                padding: 9px 16px 9px 24px !important; border-radius: 3px !important; cursor: pointer !important;
             }
-            .sc-lineup-daytab-active { background: var(--np-accent, #ff5b73) !important; color: #fff !important; }
-            body.sc-tv .sc-lineup-daytab { font-size: 15px !important; padding: 10px 22px !important; }
+            .sc-lineup-daytab-label { position: relative !important; z-index: 2 !important; }
+            /* Perforation edge: a dashed tear-line plus a column of punch-holes just inside it,
+               like the tab was torn off a longer ticket strip. The hole color is hardcoded to
+               match #sc-lineup-screen's own near-opaque background (rgba(6,4,9,0.97)) since a
+               real cutout isn't possible on an opaque button -- this fakes it convincingly
+               enough at the sizes these tabs render at. */
+            .sc-lineup-daytab::before {
+                content: '' !important; position: absolute !important; z-index: 1 !important;
+                left: 9px !important; top: 4px !important; bottom: 4px !important; width: 7px !important;
+                border-left: 2px dashed rgba(0,0,0,0.2) !important;
+                background-image: radial-gradient(circle, #060409 2.5px, transparent 2.6px) !important;
+                background-size: 7px 12px !important; background-repeat: repeat-y !important;
+            }
+            /* Subtle paper-grain texture (SVG filter defined once in screen.js's template) --
+               feTurbulence ignores the element's own pixels, so this pseudo-element just
+               becomes translucent noise layered over the ticket; kept faint (matrix alpha
+               0.08) so it reads as slightly rough cardstock rather than visual noise. */
+            .sc-lineup-daytab::after {
+                content: '' !important; position: absolute !important; inset: 0 !important; z-index: 1 !important;
+                filter: url(#sc-ticket-grain) !important; pointer-events: none !important;
+            }
+            /* Deep ticket-red + a torn edge for the selected day, replacing the old solid
+               burnt-orange "highlight box". Still a static UI chrome color (not the
+               video-sampled --np-accent) so it doesn't shift with whatever's playing. The tear
+               runs the full left edge (where the perforation implies it was ripped off the
+               strip) plus small nicks at both right corners -- most of the right edge stays
+               straight so it doesn't read as a fully ragged shape. */
+            /* No border on any red state -- the fill color (plus the tear shape for selected)
+               is enough signal on its own; a border rim on top just added visual noise. */
+            .sc-lineup-daytab-active {
+                background: #7a1f1a !important; border: none !important; color: #f5e4c8 !important;
+                clip-path: polygon(
+                    6% 0%, 88% 0%, 94% 4%, 100% 9%, 95% 14%, 100% 19%,
+                    100% 81%, 95% 86%, 100% 91%, 94% 96%, 88% 100%, 6% 100%,
+                    2% 97%, 9% 92%, 5% 84%, 9% 76%, 6% 66%, 9% 56%, 5% 46%, 9% 36%, 6% 26%, 9% 16%, 2% 6%, 6% 0%
+                ) !important;
+            }
+            .sc-lineup-daytab-active::before { border-left-color: rgba(245,228,200,0.3) !important; }
+            body.sc-tv .sc-lineup-daytab { font-size: 15px !important; padding: 11px 20px 11px 26px !important; }
+            /* Focused (remote is pointing here, not yet committed): a lighter/warmer red fill
+               instead of the old orange outline ring, so focus and selection both read through
+               the same "red means highlighted" language -- the tear is what narrows it down to
+               the actually-selected day. */
             body.sc-tv .sc-lineup-daytab.sc-tv-focus {
-                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+                background: #96332b !important; border: none !important; color: #f5e4c8 !important;
+                outline: none !important; box-shadow: none !important;
+            }
+            body.sc-tv .sc-lineup-daytab.sc-tv-focus::before { border-left-color: rgba(245,228,200,0.3) !important; }
+            /* Selected AND focused at once (remote sitting on today's already-chosen day) gets
+               its own third shade -- distinct from either state alone, so the three meanings
+               (pointed-at, chosen, both) each read as a different red rather than one silently
+               overriding the other. */
+            body.sc-tv .sc-lineup-daytab-active.sc-tv-focus {
+                background: #c0392b !important; border: none !important;
             }
 
             /* Base (phone/tablet): each section sizes to its own content and several stack in

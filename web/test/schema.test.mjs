@@ -23,7 +23,18 @@ test('defaults when unset', async () => {
     assert.strictEqual(getSetting('watchAlong'), false);
     assert.strictEqual(getSetting('castMute'), false);
     assert.strictEqual(getSetting('chatMode'), 'sidebar');
+    assert.strictEqual(getSetting('vertSplit'), 50);
     assert.strictEqual(getSetting('updateCache'), null);
+});
+
+test('number: round-trips a float and falls back to the default when unparseable', async () => {
+    stubLocalStorage();
+    const { getSetting, setSetting } = await import('../src/settings/schema.js?t=' + Date.now());
+    setSetting('vertSplit', 62.5);
+    assert.strictEqual(localStorage.getItem('sc_vert_split'), '62.5');
+    assert.strictEqual(getSetting('vertSplit'), 62.5);
+    localStorage.setItem('sc_vert_split', 'not-a-number');
+    assert.strictEqual(getSetting('vertSplit'), 50);
 });
 
 test('offbool: only the literal string "off" disables', async () => {

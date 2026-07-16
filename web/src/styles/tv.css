@@ -22,42 +22,56 @@
             #sc-chat-textarea { font-size: 16px !important; }
 
             /* ── VERTICAL (portrait phone): YouTube-style stack ─── */
-            /* Title strip (36px) → video (50vh total) → ctrl band (44px) → chat */
+            /* Title strip (36px) → video (--sc-split vh) → ctrl band (44px) → chat.
+               --sc-split is a unitless 0-100 custom prop (video/chat seam position, in vh);
+               default 50 reproduces the original fixed 50/50 split. Set live by the drag
+               handler on #sc-vert-ctrl-band (see initVertControlBand). */
             body.sc-vertical #videowrap,
             body.sc-vertical #videowrap .embed-responsive,
-            body.sc-vertical #ytapiplayer    { height: calc(50vh - 36px) !important; }
-            body.sc-vertical #chatwrap       { height: calc(50vh - 44px) !important; }
-            body.sc-vertical #sc-users-panel { bottom: calc(50vh - 44px) !important; }
-            body.sc-vertical #sc-poll-panel  { bottom: calc(50vh - 44px) !important; }
+            body.sc-vertical #ytapiplayer    { height: calc(var(--sc-split, 50) * 1vh - 36px) !important; }
+            body.sc-vertical #chatwrap       { height: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important; }
+            body.sc-vertical #sc-users-panel { bottom: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important; }
+            body.sc-vertical #sc-poll-panel  { bottom: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important; }
             /* Three buttons sit inside the control band — evenly spaced from the right */
             body.sc-vertical #sc-chatmode-btn {
-                bottom: auto !important; top: calc(50vh + 4px) !important;
+                bottom: auto !important; top: calc(var(--sc-split, 50) * 1vh + 4px) !important;
                 right: 8px !important; left: auto !important; transform: none !important;
                 opacity: 1 !important; pointer-events: auto !important;
             }
             body.sc-vertical #sc-desync-btn {
-                bottom: auto !important; top: calc(50vh + 4px) !important;
+                bottom: auto !important; top: calc(var(--sc-split, 50) * 1vh + 4px) !important;
                 right: 52px !important; left: auto !important;
                 opacity: 1 !important; pointer-events: auto !important;
             }
             body.sc-vertical #sc-settings-btn {
-                bottom: auto !important; top: calc(50vh + 4px) !important;
+                bottom: auto !important; top: calc(var(--sc-split, 50) * 1vh + 4px) !important;
                 right: 96px !important; left: auto !important;
                 opacity: 1 !important; pointer-events: auto !important;
             }
-            body.sc-vertical .video-js .vjs-control-bar { bottom: calc(50vh + 4px) !important; left: 4px !important; right: 4px !important; }
+            body.sc-vertical .video-js .vjs-control-bar { bottom: calc((100 - var(--sc-split, 50)) * 1vh + 4px) !important; left: 4px !important; right: 4px !important; }
 
-            /* Control band element — dark strip between video and chat */
+            /* Control band element — dark strip between video and chat; also the drag handle
+               for resizing the split (see initVertControlBand). */
             #sc-vert-ctrl-band { display: none !important; }
             body.sc-vertical #sc-vert-ctrl-band {
-                display: block !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
                 position: fixed !important; left: 0 !important; right: 0 !important;
-                top: 50vh !important; height: 44px !important;
+                top: calc(var(--sc-split, 50) * 1vh) !important; height: 44px !important;
                 background: rgba(8,6,12,0.95) !important;
                 z-index: 10000 !important;
                 border-top: 1px solid rgba(255,255,255,0.10) !important;
                 border-bottom: 1px solid rgba(255,255,255,0.07) !important;
+                touch-action: none !important;
             }
+            /* Grip-pill — visual affordance that the band is a drag handle */
+            body.sc-vertical #sc-vert-ctrl-band::before {
+                content: "" !important;
+                width: 36px !important; height: 4px !important;
+                border-radius: 2px !important;
+                background: rgba(255,255,255,0.28) !important;
+                pointer-events: none !important;
+            }
+            body.sc-vertical #sc-vert-ctrl-band.sc-dragging::before { background: rgba(255,255,255,0.5) !important; }
             /* Right-zone slide drawer — buttons hidden off-screen right, revealed on edge swipe */
             body.sc-vertical #sc-chatmode-btn,
             body.sc-vertical #sc-desync-btn,
@@ -76,7 +90,7 @@
             #sc-vert-ctrl-grip { display: none !important; }
             body.sc-vertical #sc-vert-ctrl-grip {
                 display: block !important;
-                position: fixed !important; right: 0 !important; top: 50vh !important;
+                position: fixed !important; right: 0 !important; top: calc(var(--sc-split, 50) * 1vh) !important;
                 width: 4px !important; height: 44px !important;
                 background: rgba(255,255,255,0.22) !important;
                 z-index: 10002 !important; cursor: pointer !important;
@@ -100,6 +114,13 @@
             body.sc-kb-open.sc-vertical #ytapiplayer {
                 height: var(--sc-vid-h) !important;
             }
+            /* The tap-to-wake catcher is sized off a stale 55vh (see comment above) — without
+               this it still spans the pre-keyboard video height and, whenever the chrome has
+               auto-dimmed (pointer-events:auto), silently eats touch-scroll over the chat area
+               that's since been repositioned up above it. */
+            body.sc-kb-open.sc-vertical #sc-video-tap {
+                height: var(--sc-vid-h) !important;
+            }
             body.sc-kb-open.sc-vertical #chatwrap {
                 height: var(--sc-chat-h) !important;
                 bottom: var(--sc-kb-h) !important;
@@ -109,6 +130,7 @@
             body.sc-kb-open.sc-vertical #sc-chatmode-btn,
             body.sc-kb-open.sc-vertical #sc-desync-btn,
             body.sc-kb-open.sc-vertical #sc-settings-btn,
+            body.sc-kb-open.sc-vertical #sc-cast-btn,
             body.sc-kb-open #sc-top-bar,
             body.sc-kb-open #sc-chat-header {
                 opacity: 0 !important;
@@ -119,6 +141,11 @@
             body.sc-kb-open.sc-horizontal #videowrap,
             body.sc-kb-open.sc-horizontal #videowrap .embed-responsive,
             body.sc-kb-open.sc-horizontal #ytapiplayer {
+                height: var(--sc-vid-h) !important;
+            }
+            /* Same stale-height fix as vertical — matters when the chat-overlay layout
+               (100vw tap catcher) is active over a keyboard-shrunk chat area. */
+            body.sc-kb-open.sc-horizontal #sc-video-tap {
                 height: var(--sc-vid-h) !important;
             }
             body.sc-kb-open.sc-horizontal #chatwrap {
@@ -561,24 +588,79 @@
             }
             body.sc-tv #sc-lineup-body { overflow: hidden !important; gap: 0 !important; }
 
-            /* Day tabs — plain button row, same shape as settings.js's tab pattern; the whole-
-               page geometric scorer handles Left/Right across tabs and Up/Down into the first
-               section on its own (no special-case nav code needed, see tvnav.js). */
+            /* Day tabs — ticket-stub shape (torn-off-a-strip perforation + a paper-grain
+               texture), replacing the old plain pill/solid-fill-box look. The whole-page
+               geometric scorer still handles Left/Right across tabs and Up/Down into the
+               first section on its own (no special-case nav code needed, see tvnav.js). */
             #sc-lineup-daytabs {
-                display: flex !important; gap: 10px !important; margin-bottom: 6px !important;
+                display: flex !important; gap: 14px !important; margin: 0 -6px 6px !important;
+                padding: 0 6px !important; /* room for the focus outline/box-shadow at the scroll edges below --
+                    without this the first/last tab's ring gets clipped by overflow-x; the matching
+                    negative margin keeps the row visually flush with the header/subtitle above it */
                 flex-shrink: 0 !important; /* never squashed by #sc-lineup-body's flex sibling */
                 overflow-x: auto !important; /* safety net on very narrow phones -- scrolls rather than breaking */
             }
             .sc-lineup-daytab {
-                background: rgba(255,255,255,0.08) !important; border: none !important;
-                color: rgba(255,255,255,0.65) !important; font-weight: 700 !important;
-                font-size: 13px !important; letter-spacing: 0.06em !important;
-                padding: 8px 18px !important; border-radius: 999px !important; cursor: pointer !important;
+                position: relative !important; overflow: hidden !important;
+                background: #c9c2b8 !important; border: 1px solid #b0a89c !important;
+                color: #4a4238 !important; font-family: 'Alfa Slab One', serif !important; font-weight: 400 !important;
+                font-size: 13px !important; letter-spacing: 0.01em !important;
+                padding: 9px 16px 9px 24px !important; border-radius: 3px !important; cursor: pointer !important;
             }
-            .sc-lineup-daytab-active { background: var(--np-accent, #ff5b73) !important; color: #fff !important; }
-            body.sc-tv .sc-lineup-daytab { font-size: 15px !important; padding: 10px 22px !important; }
+            .sc-lineup-daytab-label { position: relative !important; z-index: 2 !important; }
+            /* Perforation edge: a dashed tear-line plus a column of punch-holes just inside it,
+               like the tab was torn off a longer ticket strip. The hole color is hardcoded to
+               match #sc-lineup-screen's own near-opaque background (rgba(6,4,9,0.97)) since a
+               real cutout isn't possible on an opaque button -- this fakes it convincingly
+               enough at the sizes these tabs render at. */
+            .sc-lineup-daytab::before {
+                content: '' !important; position: absolute !important; z-index: 1 !important;
+                left: 9px !important; top: 4px !important; bottom: 4px !important; width: 7px !important;
+                border-left: 2px dashed rgba(0,0,0,0.2) !important;
+                background-image: radial-gradient(circle, #060409 2.5px, transparent 2.6px) !important;
+                background-size: 7px 12px !important; background-repeat: repeat-y !important;
+            }
+            /* Subtle paper-grain texture (SVG filter defined once in screen.js's template) --
+               feTurbulence ignores the element's own pixels, so this pseudo-element just
+               becomes translucent noise layered over the ticket; kept faint (matrix alpha
+               0.08) so it reads as slightly rough cardstock rather than visual noise. */
+            .sc-lineup-daytab::after {
+                content: '' !important; position: absolute !important; inset: 0 !important; z-index: 1 !important;
+                filter: url(#sc-ticket-grain) !important; pointer-events: none !important;
+            }
+            /* Deep ticket-red + a torn edge for the selected day, replacing the old solid
+               burnt-orange "highlight box". Still a static UI chrome color (not the
+               video-sampled --np-accent) so it doesn't shift with whatever's playing. The tear
+               runs the full left edge (where the perforation implies it was ripped off the
+               strip) plus small nicks at both right corners -- most of the right edge stays
+               straight so it doesn't read as a fully ragged shape. */
+            /* No border on any red state -- the fill color (plus the tear shape for selected)
+               is enough signal on its own; a border rim on top just added visual noise. */
+            .sc-lineup-daytab-active {
+                background: #7a1f1a !important; border: none !important; color: #f5e4c8 !important;
+                clip-path: polygon(
+                    6% 0%, 88% 0%, 94% 4%, 100% 9%, 95% 14%, 100% 19%,
+                    100% 81%, 95% 86%, 100% 91%, 94% 96%, 88% 100%, 6% 100%,
+                    2% 97%, 9% 92%, 5% 84%, 9% 76%, 6% 66%, 9% 56%, 5% 46%, 9% 36%, 6% 26%, 9% 16%, 2% 6%, 6% 0%
+                ) !important;
+            }
+            .sc-lineup-daytab-active::before { border-left-color: rgba(245,228,200,0.3) !important; }
+            body.sc-tv .sc-lineup-daytab { font-size: 15px !important; padding: 11px 20px 11px 26px !important; }
+            /* Focused (remote is pointing here, not yet committed): a lighter/warmer red fill
+               instead of the old orange outline ring, so focus and selection both read through
+               the same "red means highlighted" language -- the tear is what narrows it down to
+               the actually-selected day. */
             body.sc-tv .sc-lineup-daytab.sc-tv-focus {
-                outline: 3px solid #e0701a !important; outline-offset: 2px !important;
+                background: #96332b !important; border: none !important; color: #f5e4c8 !important;
+                outline: none !important; box-shadow: none !important;
+            }
+            body.sc-tv .sc-lineup-daytab.sc-tv-focus::before { border-left-color: rgba(245,228,200,0.3) !important; }
+            /* Selected AND focused at once (remote sitting on today's already-chosen day) gets
+               its own third shade -- distinct from either state alone, so the three meanings
+               (pointed-at, chosen, both) each read as a different red rather than one silently
+               overriding the other. */
+            body.sc-tv .sc-lineup-daytab-active.sc-tv-focus {
+                background: #c0392b !important; border: none !important;
             }
 
             /* Base (phone/tablet): each section sizes to its own content and several stack in
@@ -899,7 +981,7 @@
             }
             /* The control row sits just ABOVE the bottom scrubber (≈32px tall at bottom:4px)
                so the two don't overlap; the cast button joins the row (it otherwise floats
-               mid-screen at the 50vh control-band position). */
+               mid-screen at the --sc-split control-band position). */
             body.sc-chat-hidden.sc-vertical #sc-chatmode-btn,
             body.sc-chat-hidden.sc-vertical #sc-desync-btn,
             body.sc-chat-hidden.sc-vertical #sc-settings-btn,
@@ -907,7 +989,7 @@
                 top: auto !important; bottom: 48px !important;
             }
             /* Video-only fills the screen, so the scrubber belongs at the screen bottom —
-               not at the 50vh "above the chat header" spot used when chat is present. */
+               not at the --sc-split "above the chat header" spot used when chat is present. */
             body.sc-chat-hidden.sc-vertical .video-js .vjs-control-bar {
                 bottom: 4px !important;
             }
@@ -935,7 +1017,7 @@
                 display: none !important;
             }
             body.sc-chat-chatonly #sc-cluster-grip { display: none !important; }
-            /* The top header doubles as a control band (like the vertical band at 50vh, but
+            /* The top header doubles as a control band (like the draggable vertical band, but
                pinned to the top): a right-edge grip slides the chat-mode + settings buttons
                out. Reuses the right-zone drawer (right-edge swipe in portrait, or tap the grip). */
             body.sc-chat-chatonly #sc-vert-ctrl-grip {
@@ -974,6 +1056,20 @@
                 padding: 0 10px !important; box-sizing: border-box !important;
             }
             body.sc-chat-chatonly #sc-chat-collapse-btn { display: none !important; }
+            /* Explicit "video is paused/muted" indicator — chat-only silently stops the
+               player (_coStopMedia); this makes that state visible instead of a mystery.
+               Sits inside the 32px header bar, whose only other content (the collapse
+               button) is already hidden in chat-only mode, so there's nothing to overlap. */
+            #sc-chatonly-banner { display: none !important; }
+            body.sc-chat-chatonly #sc-chatonly-banner {
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important;
+                height: 32px !important; width: 100vw !important;
+                font-size: 11px !important; letter-spacing: 0.04em !important;
+                color: rgba(255,200,140,0.85) !important;
+                pointer-events: none !important;
+                z-index: 10011 !important;
+            }
             /* Chat fills the screen under the header bar */
             body.sc-chat-chatonly #chatwrap {
                 position: fixed !important;
@@ -1093,7 +1189,7 @@
             }
             #sc-newmsg-pill.sc-show { opacity: 1 !important; pointer-events: auto !important; }
             body.sc-horizontal #sc-newmsg-pill { right: calc(19vw + 16px) !important; bottom: 56px !important; }
-            body.sc-vertical   #sc-newmsg-pill { left: 50% !important; transform: translateX(-50%) !important; bottom: calc(50vh - 44px + 12px) !important; }
+            body.sc-vertical   #sc-newmsg-pill { left: 50% !important; transform: translateX(-50%) !important; bottom: calc((100 - var(--sc-split, 50)) * 1vh - 44px + 12px) !important; }
             body.sc-tv #sc-newmsg-pill { font-size: 17px !important; padding: 10px 22px !important; }
             /* Hide CyTube's native "New Messages Below" bar — our pill replaces it. */
             #newmessages-indicator, #newmessages-indicator-bghack { display: none !important; }

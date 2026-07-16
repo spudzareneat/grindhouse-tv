@@ -135,7 +135,7 @@
                 display: flex !important;
                 position: fixed !important;
                 left: 0 !important; right: auto !important; width: auto !important;
-                top: 50vh !important; height: 44px !important; bottom: auto !important;
+                top: calc(var(--sc-split, 50) * 1vh) !important; height: 44px !important; bottom: auto !important;
                 background: transparent !important;
                 z-index: 10001 !important;
                 padding: 0 12px !important;
@@ -207,7 +207,7 @@
             }
             body.sc-vertical #sc-users-panel {
                 top: auto !important;
-                bottom: calc(50vh - 44px) !important;
+                bottom: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important;
                 right: 5px !important;
                 width: calc(100vw - 5px) !important;
                 max-height: 40vh !important;
@@ -270,9 +270,12 @@
                 backdrop-filter: blur(4px) !important;
             }
             body.sc-vertical .video-js .vjs-control-bar {
-                /* Sit at the bottom of the video (just above the 50vh chat header),
-                   not pinned to the screen bottom where it would land over chat. */
-                bottom: calc(50vh + 4px) !important;
+                /* Sit at the bottom of the video (just above the chat header),
+                   not pinned to the screen bottom where it would land over chat.
+                   The video's bottom edge is --sc-split vh from the TOP, i.e.
+                   (100 - --sc-split) vh from the BOTTOM — this is a bottom offset,
+                   so it must use the complement, not --sc-split directly. */
+                bottom: calc((100 - var(--sc-split, 50)) * 1vh + 4px) !important;
                 right: 4px !important;
                 left: 4px !important;
             }
@@ -571,17 +574,17 @@
             }
 
             /* ===== VERTICAL LAYOUT (portrait) — YouTube-style stack =====
-               Title strip (36px) → video (ends at 50vh) → control band (44px) → chat */
+               Title strip (36px) → video (ends at --sc-split vh) → control band (44px) → chat */
             body.sc-vertical #videowrap {
                 position: fixed !important; top: 36px !important; left: 0 !important;
-                width: 100vw !important; height: calc(50vh - 36px) !important;
+                width: 100vw !important; height: calc(var(--sc-split, 50) * 1vh - 36px) !important;
                 z-index: 9999 !important; background: black !important;
                 border: none !important; outline: none !important;
                 box-shadow: none !important;
             }
             body.sc-vertical #videowrap .embed-responsive,
             body.sc-vertical #ytapiplayer {
-                width: 100vw !important; height: calc(50vh - 36px) !important;
+                width: 100vw !important; height: calc(var(--sc-split, 50) * 1vh - 36px) !important;
                 border: none !important;
                 margin: 0 !important;
                 padding: 0 !important;
@@ -597,7 +600,7 @@
             }
             body.sc-vertical #chatwrap {
                 position: fixed !important; bottom: 0 !important; left: 0 !important;
-                width: 100vw !important; height: calc(50vh - 44px) !important;
+                width: 100vw !important; height: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important;
                 z-index: 9999 !important; background: rgba(16,14,24,0.97) !important;
                 overflow: hidden !important; padding: 0 5px !important;
                 display: flex !important; flex-direction: column !important;

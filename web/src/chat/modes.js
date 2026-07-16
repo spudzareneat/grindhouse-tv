@@ -3,6 +3,7 @@ import { chromeState } from '../chrome/state.js';
 import { getChatFontSize, applyChatFontSize } from './fontsize.js';
 import { holdScrubber } from '../player/scrubber.js';
 import { onSocket } from '../socket.js';
+import { getSetting } from '../settings/schema.js';
 
 /* ==========================================================
    CINEMATIC + CHAT ENHANCEMENTS
@@ -161,6 +162,12 @@ export function initChatModes() {
         btn.addEventListener('click', cycleChatMode);
         document.body.appendChild(btn);
     }
+    if (!document.getElementById('sc-chatonly-banner')) {
+        const banner = document.createElement('div');
+        banner.id = 'sc-chatonly-banner';
+        banner.textContent = 'Paused · Muted';
+        document.body.appendChild(banner);
+    }
     applyChatMode(saved);
 
     // Hotkey 'c' cycles modes (ignored while typing in chat)
@@ -269,11 +276,39 @@ export function initLeftZone() {
 }
 
 // Dark strip between video and chat in vertical mode; buttons float on top via CSS.
+// Also the drag handle for resizing the video/chat split (--sc-split, 25-75vh) --
+// touch/drag it up or down to set any ratio, persisted across restarts (sc_vert_split).
+const VSPLIT_MIN = 25, VSPLIT_MAX = 75;
 export function initVertControlBand() {
     if (document.getElementById('sc-vert-ctrl-band')) return;
     const band = document.createElement('div');
     band.id = 'sc-vert-ctrl-band';
     document.body.appendChild(band);
+
+    const saved = getSetting('vertSplit');
+    const initial = Math.min(VSPLIT_MAX, Math.max(VSPLIT_MIN, saved));
+    document.body.style.setProperty('--sc-split', String(initial));
+
+    let dragging = false;
+    band.addEventListener('pointerdown', (e) => {
+        dragging = true;
+        band.classList.add('sc-dragging');
+        band.setPointerCapture(e.pointerId);
+    });
+    band.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        const pct = Math.min(VSPLIT_MAX, Math.max(VSPLIT_MIN, e.clientY / window.innerHeight * 100));
+        document.body.style.setProperty('--sc-split', String(pct));
+    });
+    const endDrag = (e) => {
+        if (!dragging) return;
+        dragging = false;
+        band.classList.remove('sc-dragging');
+        const pct = Math.min(VSPLIT_MAX, Math.max(VSPLIT_MIN, e.clientY / window.innerHeight * 100));
+        localStorage.setItem('sc_vert_split', String(pct));
+    };
+    band.addEventListener('pointerup', endDrag);
+    band.addEventListener('pointercancel', endDrag);
 }
 
 // Right-edge slide-out drawer for vertical mode (mirrors the left-zone in horizontal).

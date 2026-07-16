@@ -155,3 +155,13 @@ export function pacificDateString(now = new Date()) {
     const get = (t) => parts.find(p => p.type === t).value;
     return `${get('year')}-${get('month')}-${get('day')}`;
 }
+
+// True once a cached schedule's own weekend has fully elapsed. The pinned Reddit post
+// always describes the upcoming Fri-Sun, so once Sunday's date is in the past there is
+// definitely a newer post live -- a harder, date-driven signal than a fetch-age timer,
+// used by data.js to guarantee a rolled-over post gets picked up rather than relying on
+// however long it's been since the last fetch.
+export function scheduleExpired(sched, todayStr = pacificDateString()) {
+    const lastDate = sched.days.reduce((max, d) => (d.date && d.date > max ? d.date : max), '');
+    return !lastDate || todayStr > lastDate;
+}

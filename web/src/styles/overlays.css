@@ -139,7 +139,7 @@
             }
             /* Vertical: control-band row, one slot left of settings */
             body.sc-vertical #sc-cast-btn {
-                top: calc(50vh + 4px) !important; bottom: auto !important;
+                top: calc(var(--sc-split, 50) * 1vh + 4px) !important; bottom: auto !important;
                 right: 140px !important; left: auto !important;
                 opacity: 0 !important; pointer-events: none !important;
                 transform: translateX(16px) !important;
@@ -147,8 +147,6 @@
             body.sc-vertical.sc-rightzone #sc-cast-btn {
                 opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
             }
-            /* Hide with the rest of the cluster while the keyboard is up */
-            body.sc-kb-open #sc-cast-btn { opacity: 0 !important; pointer-events: none !important; }
 
             /* ===== SETTINGS MODAL ===== */
             #sc-settings-overlay {
