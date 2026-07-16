@@ -256,12 +256,26 @@ function buildDaySections(day, dayStatus, infosByKey) {
     }));
 }
 
+// TMDB is searched under the post's primary title first; if that comes up empty, retry
+// under each aka in turn -- the stream sometimes plays (and the post lists) a film under a
+// retitle TMDB doesn't recognize (seen live 2026-07-15: "Alien Predators" has no TMDB entry,
+// but its stated aka "The Falling" does) that `itemMatchesTitle` already treats as the same film.
+async function lookupItem(item) {
+    const primary = await lookupMovie(item.title, item.year);
+    if (primary.cleanTitle || !item.akas?.length) return primary;
+    for (const aka of item.akas) {
+        const info = await lookupMovie(aka, item.year);
+        if (info.cleanTitle) return info;
+    }
+    return primary;
+}
+
 export async function getTonightsLineup() {
     await ensureSchedule();
     if (!_scheduleCache) return fallbackView();
 
     const allItems = allScheduleTitles();
-    const infos = await Promise.all(allItems.map(({ title, year }) => lookupMovie(title, year)));
+    const infos = await Promise.all(allItems.map(lookupItem));
     const infosByKey = new Map(allItems.map((item, i) => [item.title + '|' + item.year, infos[i]]));
 
     const todayStr = pacificDateString(); // ISO date strings order lexicographically

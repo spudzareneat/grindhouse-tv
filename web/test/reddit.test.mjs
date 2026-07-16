@@ -24,6 +24,15 @@ test('parseFirstEntry: XML entity-escaping is fully decoded into real tags', () 
 test('parseFirstEntry: returns null when the feed has no entries', () => {
     assert.strictEqual(parseFirstEntry('<feed></feed>'), null);
 });
+test('parseFirstEntry: a double-encoded entity (markdown-escaped, then XML-escaped again) fully decodes', () => {
+    // Real shape from the feed: an apostrophe comes through as &amp;#39; (Reddit's renderer
+    // entity-encodes it, then the Atom feed XML-escapes that whole blob a second time).
+    const feed = '<feed><entry><id>t3_x</id><title>T</title>' +
+        '<content type="html">&lt;li&gt;They&amp;#39;re Coming to Get You! (1972)&lt;/li&gt;</content>' +
+        '<published>2026-07-15T00:00:00+00:00</published></entry></feed>';
+    const entry = parseFirstEntry(feed);
+    assert.strictEqual(entry.contentHtml, "<li>They're Coming to Get You! (1972)</li>");
+});
 
 test('parseDateRange: reads Friday\'s month/day from the title, derives Sat/Sun as +1/+2 days', () => {
     assert.deepStrictEqual(

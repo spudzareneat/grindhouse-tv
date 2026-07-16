@@ -588,7 +588,7 @@
     return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   }
   function decodeHtmlEntities(s) {
-    return s.replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16))).replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10))).replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+    return s.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16))).replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)));
   }
   function parseFirstEntry(feedXml) {
     const start = feedXml.indexOf("<entry>");
@@ -853,14 +853,20 @@
     let tmdbResult = null;
     let wikiUrl = null;
     const tmdbPromise = hasKey(LS_TMDB) ? (async () => {
-      var _a2, _b2;
+      var _a2, _b2, _c;
       try {
         const params = new URLSearchParams({ api_key: getKey(LS_TMDB), query: title, language: "en-US" });
         if (year) params.set("year", year);
-        const res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
+        let res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
         if (!res.ok) return;
-        const data = await res.json();
-        if (!((_a2 = data.results) == null ? void 0 : _a2.length)) return;
+        let data = await res.json();
+        if (!((_a2 = data.results) == null ? void 0 : _a2.length) && year) {
+          params.delete("year");
+          res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
+          if (!res.ok) return;
+          data = await res.json();
+        }
+        if (!((_b2 = data.results) == null ? void 0 : _b2.length)) return;
         let best = data.results[0];
         if (year) {
           const withYear = data.results.find((r) => {
@@ -876,7 +882,7 @@
         const detail = await detailRes.json();
         tmdbResult = {
           tmdbId: best.id,
-          imdbId: detail.imdb_id || ((_b2 = detail.external_ids) == null ? void 0 : _b2.imdb_id) || null,
+          imdbId: detail.imdb_id || ((_c = detail.external_ids) == null ? void 0 : _c.imdb_id) || null,
           title: detail.title,
           year: detail.release_date ? detail.release_date.slice(0, 4) : year,
           poster: detail.poster_path ? `https://image.tmdb.org/t/p/w500${detail.poster_path}` : null,
@@ -1406,11 +1412,21 @@
       items: builtFlat.filter((_, idx) => flat[idx].si === si)
     }));
   }
+  async function lookupItem(item) {
+    var _a;
+    const primary = await lookupMovie(item.title, item.year);
+    if (primary.cleanTitle || !((_a = item.akas) == null ? void 0 : _a.length)) return primary;
+    for (const aka of item.akas) {
+      const info = await lookupMovie(aka, item.year);
+      if (info.cleanTitle) return info;
+    }
+    return primary;
+  }
   async function getTonightsLineup() {
     await ensureSchedule();
     if (!_scheduleCache) return fallbackView();
     const allItems = allScheduleTitles();
-    const infos = await Promise.all(allItems.map(({ title, year }) => lookupMovie(title, year)));
+    const infos = await Promise.all(allItems.map(lookupItem));
     const infosByKey = new Map(allItems.map((item, i) => [item.title + "|" + item.year, infos[i]]));
     const todayStr = pacificDateString();
     const days = _scheduleCache.days.map((day) => ({

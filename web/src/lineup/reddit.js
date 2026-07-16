@@ -26,11 +26,16 @@ function slugify(name) {
     return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
+// Reddit's markdown renderer entity-encodes special chars (e.g. an apostrophe -> &#39;)
+// INSIDE the body, then the Atom feed XML-escapes the whole blob again, turning that into
+// &amp;#39; -- so &amp; must be unescaped before the numeric/hex entities are decoded, or a
+// double-encoded entity (seen live 2026-07-15: "They&#39;re Coming to Get You!" survived
+// straight into the TMDB query) never gets a second decode pass.
 function decodeHtmlEntities(s) {
     return s
+        .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
         .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-        .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)))
-        .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+        .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)));
 }
 
 // The first <entry> in the feed is the pinned post (verified live). Returns

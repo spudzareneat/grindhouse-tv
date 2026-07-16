@@ -147,9 +147,19 @@ export async function lookupMovie(title, year) {
         try {
             const params = new URLSearchParams({ api_key: getKey(LS_TMDB), query: title, language: 'en-US' });
             if (year) params.set('year', year);
-            const res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
+            let res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
             if (!res.ok) return;
-            const data = await res.json();
+            let data = await res.json();
+            // TMDB's `year` param is a hard filter, not a ranking hint -- a poster/schedule's
+            // listed year one off from TMDB's own release date (seen live 2026-07-15:
+            // "South Beach Academy" posted as 1995, TMDB has it as 1996) returns zero results
+            // even though the film is right there under a yearless search.
+            if (!data.results?.length && year) {
+                params.delete('year');
+                res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`);
+                if (!res.ok) return;
+                data = await res.json();
+            }
             if (!data.results?.length) return;
             let best = data.results[0];
             if (year) {
