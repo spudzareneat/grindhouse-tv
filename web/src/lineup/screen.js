@@ -53,6 +53,16 @@ function renderLoading(screen) {
         '<div id="sc-lineup-loading">Fetching tonight’s lineup…</div>';
 }
 
+// The fallback title (no TMDB poster match) sits in a fixed ~185x278 (190x285 on TV) box --
+// long titles shrink to fit rather than overflowing past the poster's rounded corners.
+// Three tiers tuned against that box; .sc-lineup-poster-fallback also has overflow:hidden
+// as a hard backstop for the rare title still too long even at the smallest tier.
+function fallbackTitleFontSize(text) {
+    if (text.length > 55) return 10;
+    if (text.length > 38) return 12;
+    return 14;
+}
+
 function itemButton(item) {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -67,7 +77,7 @@ function itemButton(item) {
     // shown at all; OK still opens the Now-Playing card with the full title if needed.
     btn.innerHTML = `
         <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ''}">
-            ${!item.poster ? `<div class="sc-lineup-poster-fallback">${titleText}</div>` : ''}
+            ${!item.poster ? `<div class="sc-lineup-poster-fallback" style="font-size:${fallbackTitleFontSize(titleText)}px">${titleText}</div>` : ''}
             ${etaText ? `<div class="sc-lineup-eta">${etaText}</div>` : ''}
         </div>`;
     // Static Coming Attractions fallback posters are display-only (item.clickable === false)

@@ -2309,6 +2309,11 @@
     screen2.querySelector("#sc-lineup-daytabs").innerHTML = "";
     screen2.querySelector("#sc-lineup-body").innerHTML = '<div id="sc-lineup-loading">Fetching tonight’s lineup…</div>';
   }
+  function fallbackTitleFontSize(text) {
+    if (text.length > 55) return 10;
+    if (text.length > 38) return 12;
+    return 14;
+  }
   function itemButton(item) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -2317,7 +2322,7 @@
     const etaText = item.isNowPlaying ? "NOW PLAYING" : item.etaLabel || "";
     btn.innerHTML = `
         <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ""}">
-            ${!item.poster ? `<div class="sc-lineup-poster-fallback">${titleText}</div>` : ""}
+            ${!item.poster ? `<div class="sc-lineup-poster-fallback" style="font-size:${fallbackTitleFontSize(titleText)}px">${titleText}</div>` : ""}
             ${etaText ? `<div class="sc-lineup-eta">${etaText}</div>` : ""}
         </div>`;
     if (item.clickable !== false) {
@@ -7182,8 +7187,8 @@
             .sc-lineup-poster-fallback {
                 position: absolute !important; inset: 0 !important; display: flex !important;
                 align-items: center !important; justify-content: center !important; text-align: center !important;
-                padding: 14px !important; box-sizing: border-box !important;
-                color: rgba(255,255,255,0.85) !important; font-size: 14px !important; font-weight: 600 !important;
+                padding: 14px !important; box-sizing: border-box !important; overflow: hidden !important;
+                color: rgba(255,255,255,0.85) !important; font-weight: 600 !important;
                 line-height: 1.35 !important;
             }
             /* Start-time estimate, overlaid directly on the poster art (a caption bar pinned to

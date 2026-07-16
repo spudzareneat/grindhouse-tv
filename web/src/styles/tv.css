@@ -761,8 +761,8 @@
             .sc-lineup-poster-fallback {
                 position: absolute !important; inset: 0 !important; display: flex !important;
                 align-items: center !important; justify-content: center !important; text-align: center !important;
-                padding: 14px !important; box-sizing: border-box !important;
-                color: rgba(255,255,255,0.85) !important; font-size: 14px !important; font-weight: 600 !important;
+                padding: 14px !important; box-sizing: border-box !important; overflow: hidden !important;
+                color: rgba(255,255,255,0.85) !important; font-weight: 600 !important;
                 line-height: 1.35 !important;
             }
             /* Start-time estimate, overlaid directly on the poster art (a caption bar pinned to
