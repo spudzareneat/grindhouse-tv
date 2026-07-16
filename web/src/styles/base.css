@@ -96,7 +96,14 @@
                 color: rgba(255,255,255,0.32) !important;
                 text-shadow: none !important;
             }
-            /* Vertical: header is a real title bar above the video, not an overlay */
+            /* Vertical: header is a real title bar above the video, not an overlay.
+               Flex row so the title/badges/action buttons share one line without
+               any of them computing their own position from the viewport — the
+               title is the only flexible box (shrinks + ellipsizes); everything
+               else is flex-shrink:0 so it can never be pushed off-screen or
+               clipped by a long title. This replaces the old position:fixed +
+               viewport-math approach that let #sc-poster-toggle drift off its
+               header alignment on phones with a nonzero safe-area-inset-top. */
             body.sc-vertical #videowrap-header {
                 width: 100vw !important;
                 height: 36px !important; line-height: 36px !important;
@@ -105,6 +112,19 @@
                 border-bottom: 1px solid rgba(255,255,255,0.08) !important;
                 z-index: 10003 !important;
                 text-shadow: none !important;
+                display: flex !important;
+                align-items: center !important;
+                gap: 6px !important;
+            }
+            body.sc-vertical #videowrap-header .pull-left {
+                flex: 1 1 auto !important;
+                min-width: 0 !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+                white-space: nowrap !important;
+            }
+            body.sc-vertical #sc-movie-links {
+                flex-shrink: 0 !important;
             }
             /* Title bar dims text but keeps its solid background */
             body.sc-vertical #videowrap-header.sc-bar-dim {
@@ -387,11 +407,12 @@
                 display: flex !important;
                 align-items: center !important;
             }
+            /* Flows in the header's flex row instead of computing its own
+               position from the viewport — see the #videowrap-header flex
+               rules above. */
             body.sc-vertical #sc-poster-toggle {
-                top: 0 !important;
-                right: 0 !important;
-                left: auto !important;
-                bottom: auto !important;
+                position: static !important;
+                flex-shrink: 0 !important;
             }
 
             /* Phones draw edge-to-edge, so rounded display corners / cutouts clip the

@@ -500,8 +500,14 @@
             }
             #sc-trivia-btn:hover { color: rgba(255,255,255,0.9) !important; }
             #sc-trivia-btn.sc-bar-dim { opacity: 0 !important; }
-            /* Trivia button hidden in vertical — title bar is too narrow */
-            body.sc-vertical #sc-trivia-btn { display: none !important; }
+            /* Flows in the header's flex row instead of computing its own
+               position from the viewport — see the #videowrap-header flex
+               rules in base.css. Previously hidden entirely in vertical
+               because the old fixed-position math had nowhere to put it. */
+            body.sc-vertical #sc-trivia-btn {
+                position: static !important;
+                flex-shrink: 0 !important;
+            }
             body.sc-tv #sc-trivia-btn { font-size: 12px !important; }
 
             #sc-trivia-card {
