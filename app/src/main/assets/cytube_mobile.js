@@ -1616,6 +1616,8 @@
       poster.src = data.poster;
       poster.style.display = "";
     } else poster.style.display = "none";
+    const eyebrow = card.querySelector("#sc-np-eyebrow");
+    eyebrow.style.display = opts.showProgress !== false ? "" : "none";
     card.querySelector("#sc-np-title").textContent = title + year;
     card.querySelector("#sc-np-overview").textContent = data.overview || "";
     const metaParts = [];

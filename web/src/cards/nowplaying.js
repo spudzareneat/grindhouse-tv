@@ -138,6 +138,13 @@ export function showNowPlayingCard(data, opts = {}) {
     if (data.poster) { poster.src = data.poster; poster.style.display = ''; }
     else poster.style.display = 'none';
 
+    // Eyebrow only claims "Now Playing" for the item actually loaded/synced right now --
+    // browsing a different title from Tonight's Lineup passes showProgress: false (see the
+    // progress-bar gating below, same signal) so it doesn't mislabel a title that hasn't
+    // started yet.
+    const eyebrow = card.querySelector('#sc-np-eyebrow');
+    eyebrow.style.display = opts.showProgress !== false ? '' : 'none';
+
     card.querySelector('#sc-np-title').textContent = title + year;
     card.querySelector('#sc-np-overview').textContent = data.overview || '';
 
