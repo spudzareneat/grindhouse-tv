@@ -450,8 +450,11 @@
                     font-size: 0 !important;
                     justify-content: center !important;
                 }
-                body.sc-vertical #sc-poster-toggle::before { content: "🍿" !important; font-size: 18px !important; }
-                body.sc-vertical #sc-trivia-btn::before { content: "💡" !important; font-size: 18px !important; }
+                /* Color emoji glyphs ignore CSS `color` (they're rendered from the
+                   platform's color-emoji font, not a text glyph) — grayscale() is
+                   the only way to make them match the header's muted gray chrome. */
+                body.sc-vertical #sc-poster-toggle::before { content: "🍿" !important; font-size: 18px !important; filter: grayscale(1) !important; }
+                body.sc-vertical #sc-trivia-btn::before { content: "💡" !important; font-size: 18px !important; filter: grayscale(1) !important; }
             }
 
             /* ===== MOVIE LINKS ===== */
