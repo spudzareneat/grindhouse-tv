@@ -96,7 +96,14 @@
                 color: rgba(255,255,255,0.32) !important;
                 text-shadow: none !important;
             }
-            /* Vertical: header is a real title bar above the video, not an overlay */
+            /* Vertical: header is a real title bar above the video, not an overlay.
+               Flex row so the title/badges/action buttons share one line without
+               any of them computing their own position from the viewport — the
+               title is the only flexible box (shrinks + ellipsizes); everything
+               else is flex-shrink:0 so it can never be pushed off-screen or
+               clipped by a long title. This replaces the old position:fixed +
+               viewport-math approach that let #sc-poster-toggle drift off its
+               header alignment on phones with a nonzero safe-area-inset-top. */
             body.sc-vertical #videowrap-header {
                 width: 100vw !important;
                 height: 36px !important; line-height: 36px !important;
@@ -105,6 +112,19 @@
                 border-bottom: 1px solid rgba(255,255,255,0.08) !important;
                 z-index: 10003 !important;
                 text-shadow: none !important;
+                display: flex !important;
+                align-items: center !important;
+                gap: 6px !important;
+            }
+            body.sc-vertical #videowrap-header .pull-left {
+                flex: 1 1 auto !important;
+                min-width: 0 !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+                white-space: nowrap !important;
+            }
+            body.sc-vertical #sc-movie-links {
+                flex-shrink: 0 !important;
             }
             /* Title bar dims text but keeps its solid background */
             body.sc-vertical #videowrap-header.sc-bar-dim {
@@ -387,15 +407,16 @@
                 display: flex !important;
                 align-items: center !important;
             }
+            /* Flows in the header's flex row instead of computing its own
+               position from the viewport — see the #videowrap-header flex
+               rules above. */
             body.sc-vertical #sc-poster-toggle {
-                top: 0 !important;
-                right: 0 !important;
-                left: auto !important;
-                bottom: auto !important;
+                position: static !important;
+                flex-shrink: 0 !important;
             }
 
             /* Phones draw edge-to-edge, so rounded display corners / cutouts clip the
-               top-corner chrome (movie title at the left, Coming Attractions at the right).
+               top-corner chrome (movie title at the left, action buttons at the right).
                Nudge them in from the very edge. Scoped to phones (≤540px on the short side,
                either orientation) so TV and tablets — which are larger — are untouched;
                env() adds extra room on devices that actually report a display cutout. */
@@ -404,10 +425,36 @@
                 body.sc-vertical   #videowrap-header {
                     padding-left: max(18px, env(safe-area-inset-left, 0px)) !important;
                 }
-                body.sc-vertical #sc-poster-toggle {
-                    right: max(16px, env(safe-area-inset-right, 0px)) !important;
-                    top: env(safe-area-inset-top, 0px) !important;
+                /* Right-edge cutout/corner protection for the header's trailing flex
+                   items (Trivia, Coming Attractions) — mirrors padding-left above.
+                   This replaced per-button `right`/`top` positioning: now that both
+                   buttons flow in the header (Task 2), a header-level padding-right
+                   does the same job without either button needing to know its own
+                   screen position — which is what let Coming Attractions drift off
+                   in the first place (a mismatched `top: env(safe-area-inset-top)`
+                   applied to the button but not to the header next to it). */
+                body.sc-vertical #videowrap-header {
+                    padding-right: max(16px, env(safe-area-inset-right, 0px)) !important;
                 }
+                /* Narrow phones: Coming Attractions and Trivia shrink to icon-only tap
+                   targets so they never compete with the title for space. Real
+                   textContent stays as the accessible label/tooltip source (title=
+                   attribute); the emoji is a ::before so no JS change is needed here.
+                   Tablet-width portrait (outside this media query) keeps the text
+                   labels — there's room and this bug is phone-specific. */
+                body.sc-vertical #sc-poster-toggle,
+                body.sc-vertical #sc-trivia-btn {
+                    width: 32px !important;
+                    height: 32px !important;
+                    padding: 0 !important;
+                    font-size: 0 !important;
+                    justify-content: center !important;
+                }
+                /* Color emoji glyphs ignore CSS `color` (they're rendered from the
+                   platform's color-emoji font, not a text glyph) — grayscale() is
+                   the only way to make them match the header's muted gray chrome. */
+                body.sc-vertical #sc-poster-toggle::before { content: "🍿" !important; font-size: 18px !important; filter: grayscale(1) !important; }
+                body.sc-vertical #sc-trivia-btn::before { content: "💡" !important; font-size: 18px !important; filter: grayscale(1) !important; }
             }
 
             /* ===== MOVIE LINKS ===== */

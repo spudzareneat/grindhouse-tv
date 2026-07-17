@@ -17,7 +17,13 @@ export function initPosterStrip() {
     toggleBtn.title = "Show tonight's lineup";
     toggleBtn.dataset.noTvCaption = '1'; // button text is self-explanatory; no remote caption
     toggleBtn.addEventListener('click', () => showLineupScreen());
-    document.body.appendChild(toggleBtn);
+    // Appended into the header (like #sc-trivia-btn already is) so portrait
+    // layout can lay it out in the header's normal flex flow instead of
+    // computing its position from the viewport. Fixed-position geometry
+    // (landscape/TV) is computed against the viewport regardless of DOM
+    // parent, so this is safe for those layouts too.
+    const header = document.getElementById('videowrap-header');
+    (header || document.body).appendChild(toggleBtn);
 }
 
 /* ==========================================================
