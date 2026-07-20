@@ -59,7 +59,8 @@ const RUNTIMES = [90, 100, 80, 95, 110, 70];    // minutes, 6 films
 
 function estimate(overrides) {
     return estimateDayItems({
-        nowMs: ANCHOR, anchorMs: ANCHOR, runtimesMin: RUNTIMES, gapSeconds: GAP_S,
+        nowMs: ANCHOR, anchorMs: ANCHOR, runtimesMin: RUNTIMES,
+        sameSectionGapSeconds: GAP_S, crossSectionGapSeconds: GAP_S,
         dayStatus: 'today', currentIndex: -1, remainingSec: 0,
         furthestPlayedIndex: -1, bumperStartMs: null,
         ...overrides,
@@ -148,13 +149,89 @@ test('estimateDayItems: joined late with nothing observed grays by clock project
     assert.strictEqual(items[5].etaMs, null);           // only 3 upcoming guesses
 });
 
-test('estimateDayItems: missing runtime contributes zero minutes to the walk', () => {
+test('estimateDayItems: missing runtime withholds the ETA of the film that follows it (no duplicate)', () => {
+    // Previously a null runtime contributed zero minutes to the walk, so item[1]'s ETA
+    // silently duplicated item[0]'s -- seen live 2026-07-17 on the A-Go-Go section. More
+    // honest to show nothing than a confident-looking wrong guess.
     const items = estimateDayItems({
-        nowMs: ANCHOR, anchorMs: ANCHOR, runtimesMin: [null, 90, 80], gapSeconds: GAP_S,
+        nowMs: ANCHOR, anchorMs: ANCHOR, runtimesMin: [null, 90, 80],
+        sameSectionGapSeconds: GAP_S, crossSectionGapSeconds: GAP_S,
         dayStatus: 'future', currentIndex: -1, remainingSec: 0,
         furthestPlayedIndex: -1, bumperStartMs: null,
     });
-    assert.strictEqual(items[1].etaMs, ANCHOR + GAP_MS); // null runtime adds nothing
+    assert.strictEqual(items[0].etaMs, ANCHOR); // the unknown-runtime film's own start is still solid
+    assert.strictEqual(items[1].etaMs, null);   // withheld, not duplicated
+    assert.strictEqual(items[2].etaMs, null);   // uncertainty propagates past it too
+});
+
+test('estimateDayItems: live-anchored branch also withholds ETAs past an unknown-runtime film', () => {
+    const now = ANCHOR + 200 * MIN;
+    const items = estimate({
+        nowMs: now, currentIndex: 1, remainingSec: 1200, furthestPlayedIndex: 0,
+        runtimesMin: [90, 100, null, 95, 110, 70],
+    });
+    assert.notStrictEqual(items[2].etaMs, null); // next film after current: still live-anchored, confident
+    assert.strictEqual(items[3].etaMs, null);    // item[2]'s own runtime is unknown -- past it, withheld
+    assert.strictEqual(items[4].etaMs, null);
+    assert.strictEqual(items[5].etaMs, null);
+});
+
+test('estimateDayItems: remainingSec null (duration not known yet) withholds the next film\'s ETA entirely', () => {
+    // Distinct from remainingSec: 0 (genuinely wrapping up right now) -- null means "we don't
+    // know," e.g. joined mid-film before the first changeMedia arrived. Treating it as 0 would
+    // anchor the next film's ETA to nowMs+gap, a confident-looking but bogus guess (seen live
+    // 2026-07-19 on the sibling userscript: showed ~10 min out with 15+ min actually remaining).
+    const now = ANCHOR + 200 * MIN;
+    const items = estimate({ nowMs: now, currentIndex: 1, remainingSec: null, furthestPlayedIndex: 0 });
+    assert.strictEqual(items[1].isNowPlaying, true);
+    assert.strictEqual(items[2].etaMs, null); // no live data to anchor it -- withheld, not a guess
+    assert.strictEqual(items[3].etaMs, null);
+});
+test('estimateDayItems: remainingSec 0 (genuinely no time left) still gives an exact live-anchored ETA', () => {
+    const now = ANCHOR + 200 * MIN;
+    const items = estimate({ nowMs: now, currentIndex: 1, remainingSec: 0, furthestPlayedIndex: 0 });
+    assert.strictEqual(items[2].etaMs, now + GAP_MS); // remaining=0 -> next film starts after just the gap
+    assert.strictEqual(items[2].precision, 'exact');
+});
+
+test('estimateDayItems: bumper-anchored branch also withholds ETAs past an unknown-runtime film', () => {
+    const now = ANCHOR + 200 * MIN;
+    const items = estimate({
+        nowMs: now, furthestPlayedIndex: 1, bumperStartMs: now - 2 * MIN,
+        runtimesMin: [90, 100, null, 95, 110, 70],
+    });
+    assert.notStrictEqual(items[2].etaMs, null); // first film after furthest-played: still confident
+    assert.strictEqual(items[3].etaMs, null);    // item[2]'s own runtime is unknown -- past it, withheld
+    assert.strictEqual(items[4].etaMs, null);
+});
+
+test('estimateDayItems: cross-section gap applies at a section boundary, same-section elsewhere', () => {
+    const now = ANCHOR + 200 * MIN;
+    const sectionOf = [0, 0, 0, 1, 1, 1]; // matches RUNTIMES: first 3 films section 0, last 3 section 1
+    const items = estimateDayItems({
+        nowMs: now, anchorMs: ANCHOR, runtimesMin: RUNTIMES, sectionOf,
+        sameSectionGapSeconds: 300, crossSectionGapSeconds: 1800, // 5 min vs 30 min
+        dayStatus: 'today', currentIndex: 1, remainingSec: 1200,
+        furthestPlayedIndex: 0, bumperStartMs: null,
+    });
+    // item[2]: still section 0 -- same-section gap.
+    assert.strictEqual(items[2].etaMs, now + (1200 + 300) * 1000);
+    // item[3]: crosses into section 1 -- cross-section gap, not the same-section one.
+    assert.strictEqual(items[3].etaMs, now + (1200 + 300 + 80 * 60 + 1800) * 1000);
+});
+
+test('estimateDayItems: bumper-anchored branch also honors a cross-section gap at the boundary', () => {
+    const now = ANCHOR + 200 * MIN;
+    const bumperStart = now - 2 * MIN;
+    const sectionOf = [0, 0, 0, 1, 1, 1];
+    const items = estimateDayItems({
+        nowMs: now, anchorMs: ANCHOR, runtimesMin: RUNTIMES, sectionOf,
+        sameSectionGapSeconds: 300, crossSectionGapSeconds: 1800,
+        dayStatus: 'today', currentIndex: -1, remainingSec: 0,
+        furthestPlayedIndex: 2, bumperStartMs: bumperStart, // furthest-played is the last film of section 0
+    });
+    // item[3] is the first film of section 1 -- the gap right after furthestPlayedIndex crosses sections.
+    assert.strictEqual(items[3].etaMs, bumperStart + 1800 * 1000);
 });
 
 /* ---------- roundEtaMs ---------- */

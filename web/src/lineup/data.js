@@ -4,7 +4,7 @@ import { onSocket } from '../socket.js';
 import { getCurrentMediaSeconds, getCurrentPlaybackSeconds } from '../mediatime.js';
 import { formatEta, dayAnchorPacific, pacificDateString, medianGapSeconds, estimateDayItems, roundEtaMs, scheduleExpired } from './timing.js';
 import { getMotdPosterImages } from '../motd.js';
-import { hasKey, LS_TMDB } from '../store.js';
+import { hasKey, LS_TMDB, lineupTimingEnabled } from '../store.js';
 import { parseMovieFilename } from '../parse.js';
 
 /* ==========================================================
@@ -15,9 +15,10 @@ import { parseMovieFilename } from '../parse.js';
    one once the cached weekend's own dates are in the past (scheduleExpired) --
    the latter is what guarantees a new pinned post gets picked up. Locates
    "now" within TODAY's day only, and feeds the pure timing model
-   (timing.js estimateDayItems) each day's TMDB runtimes, the learned median
-   bumper-gap, the confirmed now-playing film, and the persisted furthest-played
-   marker -- yielding per-film ETAs (live-anchored, bumper-anchored, or projected
+   (timing.js estimateDayItems) each day's TMDB runtimes, section boundaries, the
+   learned same-section and cross-section median bumper gaps, the confirmed
+   now-playing film, and the persisted furthest-played marker -- yielding per-film
+   ETAs (live-anchored, bumper-anchored, or projected
    from that day's Noon-Pacific showtime start) plus a played flag that grays
    already-shown posters. Falls back to the current title plus the static
    admin-curated Coming Attractions art if the fetch fails and no usable cache
@@ -26,6 +27,34 @@ import { parseMovieFilename } from '../parse.js';
 
 const LS_LINEUP_CACHE = 'sc_lineup_cache_v1';
 const LS_LINEUP_PROGRESS = 'sc_lineup_progress_v1'; // furthest film observed playing today
+const LS_GAP_SAME_SECTION = 'sc_lineup_gap_same_v1';   // learned same-section bumper gaps (s), across nights
+const LS_GAP_CROSS_SECTION = 'sc_lineup_gap_cross_v1'; // learned cross-section bumper gaps (s), across nights
+const LS_LAST_SECTION = 'sc_lineup_last_section_v1';   // section of the most recently matched film today
+const GAP_SAMPLE_CAP = 40; // bound stored sample count; oldest drop off so habits can drift over time
+// itemMatchesTitle compares title text only (no year), so any unrelated content that happens to
+// share a scheduled item's exact title -- a trailer, promo, or bumper referencing the same film
+// -- false-positive matches it. A real feature presentation runs well past this; a short clip
+// doesn't, so reject the match instead of trusting it (confirmed live 2026-07-19: a stray title
+// collision permanently corrupted the played-progress marker, graying out films hours ahead of
+// the real one playing). Checked against the socket's own declared duration (d.seconds),
+// available immediately -- no need to wait and see how long it actually plays. Doesn't catch a
+// coincidental FULL-length rerun of unrelated content under the same title; only short-clip
+// collisions.
+const MIN_PLAUSIBLE_FEATURE_SECONDS = 10 * 60;
+// A film whose title fails to match the schedule (e.g. an unusual acronym/punctuation the
+// filename parser mangles -- seen live 2026-07-18 on "L.E.T.H.A.L. Ladies") plays out as
+// "unmatched" for its entire runtime, same as a real bumper. If the NEXT title does match,
+// that whole runtime gets miscounted as one giant "gap" and corrupts the learned median --
+// confirmed live: a real ~97-min movie became a persisted 7173s (119.6min) same-section
+// sample. Real observed gaps tonight topped out at 13.6 min, so anything past this is far
+// more likely a match failure than genuine bumper time -- discard it rather than learn from it.
+const MAX_PLAUSIBLE_GAP_SECONDS = 30 * 60;
+// Symmetric floor: a gap under a few seconds is far more likely a spurious title-observer blip
+// than a real bumper block -- confirmed live 2026-07-19 on the sibling userscript: a 0.419s
+// "gap" got learned and, being the only sample, poisoned both the same-section median AND the
+// cross-section estimate (which falls back to the same-section one when it has no samples of
+// its own), collapsing the ETA for everything past the current film to roughly zero padding.
+const MIN_PLAUSIBLE_GAP_SECONDS = 15;
 const CACHE_MAX_AGE_MS = 20 * 60 * 60 * 1000; // background-revalidate if older than this
 const FALLBACK_LIST_TITLE = 'Coming Attractions';
 
@@ -34,9 +63,52 @@ const PROGRESS_CONFIRM_MS = 5 * 60 * 1000; // a match this brief was a queue jum
 let _scheduleCache = null;    // {postId, title, publishedAt, days, fetchedAt} or null
 let _fetchFailed = false;     // sticky for the session once Reddit is unreachable AND no cache at all
 let _revalidating = false;
-let _observedGapSeconds = []; // durations (s) of unmatched blocks between scheduled features
 let _lastUnmatchedStart = null; // Date.now() when the current unmatched (bumper) BLOCK started
+let _currentMatchedFlatIndex = -1; // flat index of whatever's playing RIGHT NOW per the socket;
+                                    // -1 when the current title doesn't match anything (bumper/off-schedule)
 let _pendingProgress = null;  // {idx, since} -- a matched film not yet current long enough to count as played
+
+// Learned bumper-gap samples (s), split by whether the gap crossed a section boundary --
+// live 2026-07-17/18 observation showed section breaks run a whole separate bumper reel
+// (several short clips back to back: e.g. a 74s bumper, a 123s "Intermission", a 31s
+// commercial), not one bumper's worth of gap, so pooling them with ordinary same-section
+// gaps badly underestimated exactly those transitions (~2hr live drift on one section
+// change). Persisted to localStorage (uncapped by date, unlike the played-progress
+// marker) so the learned habit survives a relaunch/resync mid-night instead of the
+// in-memory array quietly resetting to empty, as it did overnight 2026-07-17/18.
+function readGapSamples(key) {
+    try {
+        const raw = JSON.parse(localStorage.getItem(key));
+        return Array.isArray(raw) ? raw.filter(n => typeof n === 'number' && n >= 0) : [];
+    } catch (e) { return []; }
+}
+function pushGapSample(key, arr, sec) {
+    arr.push(sec);
+    if (arr.length > GAP_SAMPLE_CAP) arr.shift();
+    try { localStorage.setItem(key, JSON.stringify(arr)); }
+    catch (e) { /* storage full/unavailable -- in-memory sample for this session still works */ }
+}
+let _observedSameSectionGapSeconds = readGapSamples(LS_GAP_SAME_SECTION);
+let _observedCrossSectionGapSeconds = readGapSamples(LS_GAP_CROSS_SECTION);
+
+// Section index of the most recently matched film seen today -- the "coming from" context
+// a gap needs to be classified same- vs cross-section. Persisted (date-scoped, like the
+// played-progress marker) so a page reload landing mid-bumper-block doesn't lose it and
+// silently drop that gap sample entirely -- seen live 2026-07-18: the app's own
+// stale-resync reload fired right as the Psychedelic Saturday -> Saturday Prime Time
+// Drive-In bumper reel started, and the in-memory-only version of this meant the very
+// first real cross-section transition went unclassified.
+function readLastMatchedSection() {
+    try {
+        const p = JSON.parse(localStorage.getItem(LS_LAST_SECTION));
+        return p && p.date === pacificDateString() && typeof p.section === 'number' ? p.section : -1;
+    } catch (e) { return -1; }
+}
+function writeLastMatchedSection(section) {
+    try { localStorage.setItem(LS_LAST_SECTION, JSON.stringify({ date: pacificDateString(), section })); }
+    catch (e) { /* storage full/unavailable -- gap classification just skips until the next real match */ }
+}
+let _lastMatchedSection = readLastMatchedSection();
 
 function readCache() {
     try {
@@ -52,6 +124,17 @@ function writeCache(schedule) {
 function allScheduleTitles(sched = _scheduleCache) {
     if (!sched) return [];
     return sched.days.flatMap(d => d.sections.flatMap(s => s.items));
+}
+
+// Today's items flattened WITH each one's section index attached -- needed both to
+// classify an observed gap as same-section vs cross-section, and (unchanged from
+// before) to locate a matched title's flat index for the played-progress marker.
+function flatTodayWithSection(sched) {
+    const today = sched && sched.days.find(day => day.date === pacificDateString());
+    if (!today) return [];
+    const flat = [];
+    today.sections.forEach((section, si) => section.items.forEach(item => flat.push({ si, item })));
+    return flat;
 }
 
 // Furthest flat index within TODAY's day ever observed playing, persisted so grayed
@@ -84,29 +167,58 @@ function commitConfirmedProgress() {
 // Learn bumper-gap duration live: the time from the FIRST unmatched changeMedia after a
 // feature to the next matched one is one observed gap sample -- the whole bumper block,
 // not just its last item (resetting per-item made the median absurdly small on multi-
-// bumper blocks, seen live 2026-07-11). Matched titles in TODAY's day also advance the
-// persisted played-progress marker, via the confirm-delay above. Reads the localStorage
-// cache directly (without assigning _scheduleCache, which stays ensureSchedule's job so
-// revalidation still happens) so all of this works before the lineup is first opened.
+// bumper blocks, seen live 2026-07-11). Classified same-section vs cross-section by
+// comparing the newly-matched film's section to whatever section was last confirmed
+// playing, and pushed into the matching persisted sample list. Matched titles in TODAY's
+// day also advance the persisted played-progress marker, via the confirm-delay above, and
+// set _currentMatchedFlatIndex -- the authoritative "what's airing right now" signal
+// buildDaySections prefers over the DOM-title heuristic (see there for why). Reads the
+// localStorage cache directly (without assigning _scheduleCache, which stays
+// ensureSchedule's job so revalidation still happens) so all of this works before the
+// lineup is first opened.
 onSocket('changeMedia', (d) => {
+    // Deliberately NOT gated on lineupTimingEnabled() -- only the display (buildDaySections)
+    // is. Tracking always runs in the background so the state stays accurate; gating it here
+    // too seemed like a natural extension but actually broke things: while the setting was
+    // off, changeMedia events were never observed at all, so a film's entire runtime could
+    // pass with no confirmed-played marker -- confirmed live 2026-07-19, Shock Waves' whole
+    // ~90min run went untracked while the setting was off, and turning it back on mid-Zero-Boys
+    // showed a bogus "Shock Waves starts at 8:15" because the app still thought Shock Waves
+    // hadn't happened yet. Always tracking means flipping the setting on shows accurate state
+    // immediately instead of waiting for the next real title change to self-correct.
     const rawTitle = d && d.title;
     const title = rawTitle ? parseMovieFilename(rawTitle).title : null;
     const sched = _scheduleCache || readCache();
+    const declaredSeconds = d && typeof d.seconds === 'number' ? d.seconds : null;
     const matchesSchedule = !!(title && sched &&
+        (declaredSeconds == null || declaredSeconds >= MIN_PLAUSIBLE_FEATURE_SECONDS) &&
         allScheduleTitles(sched).some(s => itemMatchesTitle(s, title)));
+
+    const flatToday = flatTodayWithSection(sched);
+    const idx = matchesSchedule ? flatToday.findIndex(f => itemMatchesTitle(f.item, title)) : -1;
+    const newSection = idx !== -1 ? flatToday[idx].si : -1;
+    _currentMatchedFlatIndex = idx;
+
     if (rawTitle && !matchesSchedule && sched) {
         if (!_lastUnmatchedStart) _lastUnmatchedStart = Date.now();
     } else if (_lastUnmatchedStart) {
-        _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1000);
+        const gapSec = (Date.now() - _lastUnmatchedStart) / 1000;
+        if (_lastMatchedSection !== -1 && newSection !== -1
+            && gapSec >= MIN_PLAUSIBLE_GAP_SECONDS && gapSec <= MAX_PLAUSIBLE_GAP_SECONDS) {
+            if (newSection === _lastMatchedSection) {
+                pushGapSample(LS_GAP_SAME_SECTION, _observedSameSectionGapSeconds, gapSec);
+            } else {
+                pushGapSample(LS_GAP_CROSS_SECTION, _observedCrossSectionGapSeconds, gapSec);
+            }
+        }
         _lastUnmatchedStart = null;
     }
     commitConfirmedProgress();
     _pendingProgress = null; // whatever was pending either just committed or was a jump
-    if (matchesSchedule) {
-        const today = sched.days.find(day => day.date === pacificDateString());
-        const flatItems = today ? today.sections.flatMap(s => s.items) : [];
-        const idx = flatItems.findIndex(s => itemMatchesTitle(s, title));
-        if (idx !== -1 && idx > readProgress()) _pendingProgress = { idx, since: Date.now() };
+    if (matchesSchedule && idx !== -1) {
+        _lastMatchedSection = newSection;
+        writeLastMatchedSection(newSection);
+        if (idx > readProgress()) _pendingProgress = { idx, since: Date.now() };
     }
 });
 
@@ -214,27 +326,65 @@ function buildDaySections(day, dayStatus, infosByKey) {
     day.sections.forEach((section, si) => {
         section.items.forEach(item => flat.push({ section, si, item }));
     });
+    const infoFor = (f) => infosByKey.get(f.item.title + '|' + f.item.year) || {};
+
+    // Experimental feature, off by default -- see lineupTimingEnabled(). Skip all live
+    // matching/estimation and show the schedule as a plain, unstatused list instead: posters,
+    // titles, section themes -- no NOW PLAYING, no played graying, no ETA guesses.
+    if (!lineupTimingEnabled()) {
+        const builtFlat = flat.map((f) => ({
+            ...buildBase(infoFor(f), f.item.title, f.item.year),
+            isNowPlaying: false,
+            played: false,
+            etaLabel: '',
+        }));
+        return day.sections.map((section, si) => ({
+            name: section.name, slug: section.slug,
+            items: builtFlat.filter((_, idx) => flat[idx].si === si),
+        }));
+    }
 
     const isToday = dayStatus === 'today';
-    const currentTitle = isToday && movieState.lastMovieTitle
+    // Prefer the socket-driven match (_currentMatchedFlatIndex, authoritative -- straight
+    // from the raw changeMedia payload data.js's own handler already parses) over the
+    // DOM-title heuristic below (movieState.lastMovieTitle, populated by titleinject.js
+    // polling #currenttitle). The DOM path can lag or land on a transient bumper/trailer
+    // title right after a page reload and then never update again until the next real
+    // title change -- seen live 2026-07-17/18: a still-airing film stayed misclassified as
+    // already "played" for the rest of that boot. The socket payload self-heals on every
+    // real media change, including the resync changeMedia CyTube resends on reconnect, so
+    // it's only ever stale for the brief window before the first one arrives -- the DOM
+    // fallback covers exactly that gap.
+    const domTitle = isToday && movieState.lastMovieTitle
         ? parseMovieFilename(movieState.lastMovieTitle).title : '';
-    const currentFlatIndex = currentTitle
-        ? flat.findIndex(f => itemMatchesTitle(f.item, currentTitle))
+    const domFlatIndex = domTitle
+        ? flat.findIndex(f => itemMatchesTitle(f.item, domTitle))
         : -1;
+    const currentFlatIndex = isToday && _currentMatchedFlatIndex !== -1
+        ? _currentMatchedFlatIndex : domFlatIndex;
 
     if (isToday) commitConfirmedProgress(); // a film past the confirm threshold counts as reached
 
     const nowMs = Date.now();
-    const infoFor = (f) => infosByKey.get(f.item.title + '|' + f.item.year) || {};
+    // Cross-section falls back to the same-section median (better than a flat guess) if
+    // no cross-section samples have been learned yet; same-section falls back to the
+    // original 10-min cold-start default.
+    const sameSectionGapSeconds = medianGapSeconds(_observedSameSectionGapSeconds) ?? 600;
+    const crossSectionGapSeconds = medianGapSeconds(_observedCrossSectionGapSeconds) ?? sameSectionGapSeconds;
     const estimates = estimateDayItems({
         nowMs,
         anchorMs: dayAnchorPacific(day.date).getTime(),
         runtimesMin: flat.map(f => infoFor(f).runtime ?? null),
-        gapSeconds: medianGapSeconds(_observedGapSeconds) ?? 600, // 10-min cold-start default
+        sectionOf: flat.map(f => f.si),
+        sameSectionGapSeconds,
+        crossSectionGapSeconds,
         dayStatus,
         currentIndex: currentFlatIndex,
-        remainingSec: currentFlatIndex !== -1
-            ? Math.max(0, getCurrentMediaSeconds() - getCurrentPlaybackSeconds()) : 0,
+        // null (not 0) when the duration isn't known yet -- see estimateDayItems for why that
+        // distinction matters.
+        remainingSec: currentFlatIndex !== -1 && getCurrentMediaSeconds() > 0
+            ? Math.max(0, getCurrentMediaSeconds() - getCurrentPlaybackSeconds())
+            : (currentFlatIndex !== -1 ? null : 0),
         furthestPlayedIndex: isToday ? readProgress() : -1,
         bumperStartMs: _lastUnmatchedStart,
     });

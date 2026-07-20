@@ -52,12 +52,36 @@ const MAX_PRE_SHOW = 3;        // projection-only: how many films get a "starts 
 // Estimates degrade honestly by evidence quality: a confirmed now-playing film gives
 // the next film an 'exact' ETA; a bumper anchor or the noon-Pacific clock projection
 // only ever supports 'approx'.
+//
+// The gap immediately before a film is section-aware: `sectionOf[idx]` is that film's
+// section index, and a transition where it differs from `sectionOf[idx - 1]` (crossing
+// into a new named block, e.g. "Funky Cheese Friday" -> "Grindhouse-A-Go-Go") uses
+// `crossSectionGapSeconds` instead of `sameSectionGapSeconds` -- live 2026-07-17/18
+// observation showed section breaks run a whole separate bumper reel (several short
+// clips back to back), not one bumper gap, so a single pooled gap badly underestimated
+// exactly these transitions. `sectionOf` is optional; omitting it treats every film as
+// one section (every gap is "same-section").
+function makeGapMsFor(sectionOf, sameSectionGapSeconds, crossSectionGapSeconds) {
+    return (idx) => {
+        const crossing = sectionOf && idx > 0 && idx < sectionOf.length
+            && sectionOf[idx] !== sectionOf[idx - 1];
+        return (crossing ? crossSectionGapSeconds : sameSectionGapSeconds) * 1000;
+    };
+}
+
 export function estimateDayItems({
-    nowMs, anchorMs, runtimesMin, gapSeconds, dayStatus,
-    currentIndex, remainingSec, furthestPlayedIndex, bumperStartMs,
+    nowMs, anchorMs, runtimesMin, sectionOf, sameSectionGapSeconds, crossSectionGapSeconds,
+    dayStatus, currentIndex, remainingSec, furthestPlayedIndex, bumperStartMs,
 }) {
-    const gapMs = gapSeconds * 1000;
+    const gapMsFor = makeGapMsFor(sectionOf, sameSectionGapSeconds, crossSectionGapSeconds);
     const runtimeMs = (i) => (runtimesMin[i] ? runtimesMin[i] * 60000 : 0);
+    // A film with no TMDB runtime match contributes zero minutes to the walk, which
+    // would otherwise make the NEXT film's ETA silently identical to this one's (seen
+    // live on the Grindhouse-A-Go-Go section 2026-07-17). Once an unknown-runtime film
+    // enters the walk, every ETA past it is built on a genuinely unknown gap -- more
+    // honest to withhold those than show a confident-looking guess, so `confident`
+    // latches false once tripped and every later film in this branch goes blank.
+    const runtimeUnknown = (i) => runtimesMin[i] == null;
     const blank = { played: false, isNowPlaying: false, etaMs: null, precision: 'approx' };
 
     if (dayStatus === 'past') {
@@ -70,20 +94,27 @@ export function estimateDayItems({
     let cursor = anchorMs;
     runtimesMin.forEach((_, i) => {
         projected.push({ startMs: cursor, endMs: cursor + runtimeMs(i) });
-        cursor += runtimeMs(i) + gapMs;
+        cursor += runtimeMs(i) + gapMsFor(i + 1);
     });
 
     if (dayStatus === 'today' && currentIndex >= 0) {
-        // Live anchor: walk forward from the current film's remaining runtime.
-        let cumulative = Math.max(0, remainingSec) * 1000;
+        // Live anchor: walk forward from the current film's remaining runtime. remainingSec is
+        // null when the duration isn't known yet (e.g. the WebView reloaded mid-film, before the
+        // next changeMedia arrives) -- treat that as "no live data" rather than letting it read
+        // as 0 (which would otherwise mean "wrapping up right now" and anchor the next film's ETA
+        // to nowMs+gap, a confident-looking but bogus guess -- confirmed live 2026-07-19 on the
+        // sibling userscript).
+        let cumulative = remainingSec != null ? Math.max(0, remainingSec) * 1000 : 0;
+        let confident = remainingSec != null;
         return runtimesMin.map((_, idx) => {
             if (idx === currentIndex) return { ...blank, isNowPlaying: true };
             if (idx < currentIndex || idx <= furthestPlayedIndex) return { ...blank, played: true };
             const offset = idx - currentIndex;
-            cumulative += gapMs;
-            const withEta = offset <= MAX_ESTIMATED_AHEAD
+            cumulative += gapMsFor(idx);
+            const withEta = offset <= MAX_ESTIMATED_AHEAD && confident
                 ? { ...blank, etaMs: nowMs + cumulative, precision: offset === 1 ? 'exact' : 'approx' }
                 : { ...blank };
+            if (runtimeUnknown(idx)) confident = false;
             cumulative += runtimeMs(idx);
             return withEta;
         });
@@ -92,12 +123,14 @@ export function estimateDayItems({
     if (dayStatus === 'today' && furthestPlayedIndex >= 0) {
         // Bumper between films (or a title we failed to match): the furthest observed
         // film has finished; keep estimating from when the unmatched item started.
-        let cumulative = (bumperStartMs != null ? bumperStartMs : nowMs) + gapMs;
+        let cumulative = (bumperStartMs != null ? bumperStartMs : nowMs) + gapMsFor(furthestPlayedIndex + 1);
+        let confident = true; // the bumper/now anchor itself is live data, always trusted
         return runtimesMin.map((_, idx) => {
             if (idx <= furthestPlayedIndex) return { ...blank, played: true };
             const offset = idx - furthestPlayedIndex;
-            const withEta = offset <= MAX_ESTIMATED_AHEAD ? { ...blank, etaMs: cumulative } : { ...blank };
-            cumulative += runtimeMs(idx) + gapMs;
+            const withEta = offset <= MAX_ESTIMATED_AHEAD && confident ? { ...blank, etaMs: cumulative } : { ...blank };
+            if (runtimeUnknown(idx)) confident = false;
+            cumulative += runtimeMs(idx) + gapMsFor(idx + 1);
             return withEta;
         });
     }
@@ -106,14 +139,16 @@ export function estimateDayItems({
     // Gray by projected end; guess starts for the next MAX_PRE_SHOW unstarted films.
     // A film straddling `now` is left unmarked -- probably playing, but unconfirmed.
     let guesses = 0;
+    let confident = true;
     return runtimesMin.map((_, idx) => {
         const p = projected[idx];
         if (dayStatus === 'today') {
             if (p.endMs < nowMs) return { ...blank, played: true };
             if (p.startMs <= nowMs) return { ...blank }; // straddling now: probably playing, unconfirmed
         }
-        if (guesses < MAX_PRE_SHOW) {
+        if (guesses < MAX_PRE_SHOW && confident) {
             guesses++;
+            if (runtimeUnknown(idx)) confident = false;
             return { ...blank, etaMs: p.startMs };
         }
         return { ...blank };

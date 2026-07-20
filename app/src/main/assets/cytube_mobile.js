@@ -161,6 +161,8 @@
     // 'on' enables
     watchAlong: { key: "sc_watch_along", type: "onbool", def: false },
     castMute: { key: "sc_cast_fallback_mute", type: "onbool", def: false },
+    lineupTiming: { key: "sc_lineup_timing", type: "onbool", def: false },
+    // Experimental; off by default
     chatMode: { key: "sc_chat_mode", type: "string", def: "sidebar" },
     vertSplit: { key: "sc_vert_split", type: "number", def: 50 },
     updateCache: { key: "sc_update_cache", type: "json", def: null }
@@ -195,6 +197,7 @@
   var LS_COUCH = "sc_couch_mode";
   var LS_WATCHALONG = "sc_watch_along";
   var LS_CAST_MUTE = "sc_cast_fallback_mute";
+  var LS_LINEUP_TIMING = "sc_lineup_timing";
   var getKey = (id) => localStorage.getItem(id) || "";
   var setKey = (id, v) => localStorage.setItem(id, v.trim());
   var hasKey = (id) => !!getKey(id);
@@ -203,6 +206,7 @@
   var couchModeEnabled = () => getSetting("couchMode");
   var watchAlongEnabled = () => getSetting("watchAlong");
   var castFallbackMuted = () => getSetting("castMute");
+  var lineupTimingEnabled = () => getSetting("lineupTiming");
 
   // src/readability.js
   function detectReadabilityIssues(text) {
@@ -955,7 +959,13 @@
   function getCurrentMediaSeconds() {
     if (mediaState.currentMediaSeconds > 0) return mediaState.currentMediaSeconds;
     const el = document.querySelector("#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time");
-    return el ? parseTimeToSeconds(el.textContent) : 0;
+    if (el) {
+      const t = parseTimeToSeconds(el.textContent);
+      if (t > 0) return t;
+    }
+    const v = document.querySelector("#videowrap video");
+    if (v && isFinite(v.duration) && v.duration > 0) return v.duration;
+    return 0;
   }
   function getCurrentPlaybackSeconds() {
     const v = document.querySelector("#videowrap video");
@@ -994,19 +1004,28 @@
   }
   var MAX_ESTIMATED_AHEAD = 4;
   var MAX_PRE_SHOW = 3;
+  function makeGapMsFor(sectionOf, sameSectionGapSeconds, crossSectionGapSeconds) {
+    return (idx) => {
+      const crossing = sectionOf && idx > 0 && idx < sectionOf.length && sectionOf[idx] !== sectionOf[idx - 1];
+      return (crossing ? crossSectionGapSeconds : sameSectionGapSeconds) * 1e3;
+    };
+  }
   function estimateDayItems({
     nowMs,
     anchorMs,
     runtimesMin,
-    gapSeconds,
+    sectionOf,
+    sameSectionGapSeconds,
+    crossSectionGapSeconds,
     dayStatus,
     currentIndex,
     remainingSec,
     furthestPlayedIndex,
     bumperStartMs
   }) {
-    const gapMs = gapSeconds * 1e3;
+    const gapMsFor = makeGapMsFor(sectionOf, sameSectionGapSeconds, crossSectionGapSeconds);
     const runtimeMs = (i) => runtimesMin[i] ? runtimesMin[i] * 6e4 : 0;
+    const runtimeUnknown = (i) => runtimesMin[i] == null;
     const blank = { played: false, isNowPlaying: false, etaMs: null, precision: "approx" };
     if (dayStatus === "past") {
       return runtimesMin.map(() => ({ ...blank, played: true }));
@@ -1015,39 +1034,45 @@
     let cursor = anchorMs;
     runtimesMin.forEach((_, i) => {
       projected.push({ startMs: cursor, endMs: cursor + runtimeMs(i) });
-      cursor += runtimeMs(i) + gapMs;
+      cursor += runtimeMs(i) + gapMsFor(i + 1);
     });
     if (dayStatus === "today" && currentIndex >= 0) {
-      let cumulative = Math.max(0, remainingSec) * 1e3;
+      let cumulative = remainingSec != null ? Math.max(0, remainingSec) * 1e3 : 0;
+      let confident2 = remainingSec != null;
       return runtimesMin.map((_, idx) => {
         if (idx === currentIndex) return { ...blank, isNowPlaying: true };
         if (idx < currentIndex || idx <= furthestPlayedIndex) return { ...blank, played: true };
         const offset = idx - currentIndex;
-        cumulative += gapMs;
-        const withEta = offset <= MAX_ESTIMATED_AHEAD ? { ...blank, etaMs: nowMs + cumulative, precision: offset === 1 ? "exact" : "approx" } : { ...blank };
+        cumulative += gapMsFor(idx);
+        const withEta = offset <= MAX_ESTIMATED_AHEAD && confident2 ? { ...blank, etaMs: nowMs + cumulative, precision: offset === 1 ? "exact" : "approx" } : { ...blank };
+        if (runtimeUnknown(idx)) confident2 = false;
         cumulative += runtimeMs(idx);
         return withEta;
       });
     }
     if (dayStatus === "today" && furthestPlayedIndex >= 0) {
-      let cumulative = (bumperStartMs != null ? bumperStartMs : nowMs) + gapMs;
+      let cumulative = (bumperStartMs != null ? bumperStartMs : nowMs) + gapMsFor(furthestPlayedIndex + 1);
+      let confident2 = true;
       return runtimesMin.map((_, idx) => {
         if (idx <= furthestPlayedIndex) return { ...blank, played: true };
         const offset = idx - furthestPlayedIndex;
-        const withEta = offset <= MAX_ESTIMATED_AHEAD ? { ...blank, etaMs: cumulative } : { ...blank };
-        cumulative += runtimeMs(idx) + gapMs;
+        const withEta = offset <= MAX_ESTIMATED_AHEAD && confident2 ? { ...blank, etaMs: cumulative } : { ...blank };
+        if (runtimeUnknown(idx)) confident2 = false;
+        cumulative += runtimeMs(idx) + gapMsFor(idx + 1);
         return withEta;
       });
     }
     let guesses = 0;
+    let confident = true;
     return runtimesMin.map((_, idx) => {
       const p = projected[idx];
       if (dayStatus === "today") {
         if (p.endMs < nowMs) return { ...blank, played: true };
         if (p.startMs <= nowMs) return { ...blank };
       }
-      if (guesses < MAX_PRE_SHOW) {
+      if (guesses < MAX_PRE_SHOW && confident) {
         guesses++;
+        if (runtimeUnknown(idx)) confident = false;
         return { ...blank, etaMs: p.startMs };
       }
       return { ...blank };
@@ -1224,15 +1249,55 @@
   // src/lineup/data.js
   var LS_LINEUP_CACHE = "sc_lineup_cache_v1";
   var LS_LINEUP_PROGRESS = "sc_lineup_progress_v1";
+  var LS_GAP_SAME_SECTION = "sc_lineup_gap_same_v1";
+  var LS_GAP_CROSS_SECTION = "sc_lineup_gap_cross_v1";
+  var LS_LAST_SECTION = "sc_lineup_last_section_v1";
+  var GAP_SAMPLE_CAP = 40;
+  var MIN_PLAUSIBLE_FEATURE_SECONDS = 10 * 60;
+  var MAX_PLAUSIBLE_GAP_SECONDS = 30 * 60;
+  var MIN_PLAUSIBLE_GAP_SECONDS = 15;
   var CACHE_MAX_AGE_MS = 20 * 60 * 60 * 1e3;
   var FALLBACK_LIST_TITLE = "Coming Attractions";
   var PROGRESS_CONFIRM_MS = 5 * 60 * 1e3;
   var _scheduleCache = null;
   var _fetchFailed = false;
   var _revalidating = false;
-  var _observedGapSeconds = [];
   var _lastUnmatchedStart = null;
+  var _currentMatchedFlatIndex = -1;
   var _pendingProgress = null;
+  function readGapSamples(key) {
+    try {
+      const raw = JSON.parse(localStorage.getItem(key));
+      return Array.isArray(raw) ? raw.filter((n) => typeof n === "number" && n >= 0) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function pushGapSample(key, arr, sec) {
+    arr.push(sec);
+    if (arr.length > GAP_SAMPLE_CAP) arr.shift();
+    try {
+      localStorage.setItem(key, JSON.stringify(arr));
+    } catch (e) {
+    }
+  }
+  var _observedSameSectionGapSeconds = readGapSamples(LS_GAP_SAME_SECTION);
+  var _observedCrossSectionGapSeconds = readGapSamples(LS_GAP_CROSS_SECTION);
+  function readLastMatchedSection() {
+    try {
+      const p = JSON.parse(localStorage.getItem(LS_LAST_SECTION));
+      return p && p.date === pacificDateString() && typeof p.section === "number" ? p.section : -1;
+    } catch (e) {
+      return -1;
+    }
+  }
+  function writeLastMatchedSection(section) {
+    try {
+      localStorage.setItem(LS_LAST_SECTION, JSON.stringify({ date: pacificDateString(), section }));
+    } catch (e) {
+    }
+  }
+  var _lastMatchedSection = readLastMatchedSection();
   function readCache() {
     try {
       const raw = localStorage.getItem(LS_LINEUP_CACHE);
@@ -1250,6 +1315,13 @@
   function allScheduleTitles(sched = _scheduleCache) {
     if (!sched) return [];
     return sched.days.flatMap((d) => d.sections.flatMap((s) => s.items));
+  }
+  function flatTodayWithSection(sched) {
+    const today = sched && sched.days.find((day) => day.date === pacificDateString());
+    if (!today) return [];
+    const flat = [];
+    today.sections.forEach((section, si) => section.items.forEach((item) => flat.push({ si, item })));
+    return flat;
   }
   function readProgress() {
     try {
@@ -1276,20 +1348,31 @@
     const rawTitle = d && d.title;
     const title = rawTitle ? parseMovieFilename(rawTitle).title : null;
     const sched = _scheduleCache || readCache();
-    const matchesSchedule = !!(title && sched && allScheduleTitles(sched).some((s) => itemMatchesTitle(s, title)));
+    const declaredSeconds = d && typeof d.seconds === "number" ? d.seconds : null;
+    const matchesSchedule = !!(title && sched && (declaredSeconds == null || declaredSeconds >= MIN_PLAUSIBLE_FEATURE_SECONDS) && allScheduleTitles(sched).some((s) => itemMatchesTitle(s, title)));
+    const flatToday = flatTodayWithSection(sched);
+    const idx = matchesSchedule ? flatToday.findIndex((f) => itemMatchesTitle(f.item, title)) : -1;
+    const newSection = idx !== -1 ? flatToday[idx].si : -1;
+    _currentMatchedFlatIndex = idx;
     if (rawTitle && !matchesSchedule && sched) {
       if (!_lastUnmatchedStart) _lastUnmatchedStart = Date.now();
     } else if (_lastUnmatchedStart) {
-      _observedGapSeconds.push((Date.now() - _lastUnmatchedStart) / 1e3);
+      const gapSec = (Date.now() - _lastUnmatchedStart) / 1e3;
+      if (_lastMatchedSection !== -1 && newSection !== -1 && gapSec >= MIN_PLAUSIBLE_GAP_SECONDS && gapSec <= MAX_PLAUSIBLE_GAP_SECONDS) {
+        if (newSection === _lastMatchedSection) {
+          pushGapSample(LS_GAP_SAME_SECTION, _observedSameSectionGapSeconds, gapSec);
+        } else {
+          pushGapSample(LS_GAP_CROSS_SECTION, _observedCrossSectionGapSeconds, gapSec);
+        }
+      }
       _lastUnmatchedStart = null;
     }
     commitConfirmedProgress();
     _pendingProgress = null;
-    if (matchesSchedule) {
-      const today = sched.days.find((day) => day.date === pacificDateString());
-      const flatItems = today ? today.sections.flatMap((s) => s.items) : [];
-      const idx = flatItems.findIndex((s) => itemMatchesTitle(s, title));
-      if (idx !== -1 && idx > readProgress()) _pendingProgress = { idx, since: Date.now() };
+    if (matchesSchedule && idx !== -1) {
+      _lastMatchedSection = newSection;
+      writeLastMatchedSection(newSection);
+      if (idx > readProgress()) _pendingProgress = { idx, since: Date.now() };
     }
   });
   async function refetchAndCache() {
@@ -1370,17 +1453,33 @@
     };
   }
   function buildDaySections(day, dayStatus, infosByKey) {
-    var _a;
+    var _a, _b;
     const flat = [];
     day.sections.forEach((section, si) => {
       section.items.forEach((item) => flat.push({ section, si, item }));
     });
+    const infoFor = (f) => infosByKey.get(f.item.title + "|" + f.item.year) || {};
+    if (!lineupTimingEnabled()) {
+      const builtFlat2 = flat.map((f) => ({
+        ...buildBase(infoFor(f), f.item.title, f.item.year),
+        isNowPlaying: false,
+        played: false,
+        etaLabel: ""
+      }));
+      return day.sections.map((section, si) => ({
+        name: section.name,
+        slug: section.slug,
+        items: builtFlat2.filter((_, idx) => flat[idx].si === si)
+      }));
+    }
     const isToday = dayStatus === "today";
-    const currentTitle = isToday && movieState.lastMovieTitle ? parseMovieFilename(movieState.lastMovieTitle).title : "";
-    const currentFlatIndex = currentTitle ? flat.findIndex((f) => itemMatchesTitle(f.item, currentTitle)) : -1;
+    const domTitle = isToday && movieState.lastMovieTitle ? parseMovieFilename(movieState.lastMovieTitle).title : "";
+    const domFlatIndex = domTitle ? flat.findIndex((f) => itemMatchesTitle(f.item, domTitle)) : -1;
+    const currentFlatIndex = isToday && _currentMatchedFlatIndex !== -1 ? _currentMatchedFlatIndex : domFlatIndex;
     if (isToday) commitConfirmedProgress();
     const nowMs = Date.now();
-    const infoFor = (f) => infosByKey.get(f.item.title + "|" + f.item.year) || {};
+    const sameSectionGapSeconds = (_a = medianGapSeconds(_observedSameSectionGapSeconds)) != null ? _a : 600;
+    const crossSectionGapSeconds = (_b = medianGapSeconds(_observedCrossSectionGapSeconds)) != null ? _b : sameSectionGapSeconds;
     const estimates = estimateDayItems({
       nowMs,
       anchorMs: dayAnchorPacific(day.date).getTime(),
@@ -1388,11 +1487,14 @@
         var _a2;
         return (_a2 = infoFor(f).runtime) != null ? _a2 : null;
       }),
-      gapSeconds: (_a = medianGapSeconds(_observedGapSeconds)) != null ? _a : 600,
-      // 10-min cold-start default
+      sectionOf: flat.map((f) => f.si),
+      sameSectionGapSeconds,
+      crossSectionGapSeconds,
       dayStatus,
       currentIndex: currentFlatIndex,
-      remainingSec: currentFlatIndex !== -1 ? Math.max(0, getCurrentMediaSeconds() - getCurrentPlaybackSeconds()) : 0,
+      // null (not 0) when the duration isn't known yet -- see estimateDayItems for why that
+      // distinction matters.
+      remainingSec: currentFlatIndex !== -1 && getCurrentMediaSeconds() > 0 ? Math.max(0, getCurrentMediaSeconds() - getCurrentPlaybackSeconds()) : currentFlatIndex !== -1 ? null : 0,
       furthestPlayedIndex: isToday ? readProgress() : -1,
       bumperStartMs: _lastUnmatchedStart
     });
@@ -7314,6 +7416,14 @@
                             <a class="sc-settings-link" href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener">
                                 Get a free TMDB key ↗
                             </a>
+
+                            <label class="sc-settings-toggle-label sc-settings-divider">
+                                <span class="sc-toggle-row">
+                                    <input type="checkbox" id="sc-input-lineuptiming" ${lineupTimingEnabled() ? "checked" : ""} />
+                                    <span class="sc-toggle-text">Coming Attractions live timing (Experimental)</span>
+                                </span>
+                                <span class="sc-settings-note">Shows NOW PLAYING and estimated start times in Tonight's Lineup. Needs TMDB above for movie runtimes — without it, estimates can't guess well. Off by default, still being tuned.</span>
+                            </label>
                         </div>
                     </div>
 
@@ -7600,6 +7710,10 @@
         } else {
           movieState.lastMovieTitle = "";
         }
+      });
+      const lineupTiming = document.getElementById("sc-input-lineuptiming");
+      if (lineupTiming) lineupTiming.addEventListener("change", () => {
+        setKey(LS_LINEUP_TIMING, lineupTiming.checked ? "on" : "off");
       });
       (function wireUpdateSection() {
         const statusEl = document.getElementById("sc-update-status");

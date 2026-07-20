@@ -12,6 +12,7 @@ export const LS_MOVIE_LINKS = 'sc_movie_links'; // 'off' to hide IMDb/Letterboxd
 export const LS_COUCH      = 'sc_couch_mode'; // 'on' = chat input grows big & readable while typing
 export const LS_WATCHALONG = 'sc_watch_along'; // 'on' = hide the chat input + guest login (read-only)
 export const LS_CAST_MUTE  = 'sc_cast_fallback_mute'; // 'on' = mute fallback (YouTube) playback on this device while casting
+export const LS_LINEUP_TIMING = 'sc_lineup_timing'; // 'on' = Experimental: live NOW PLAYING/ETA tracking for the lineup; off by default
 export const getKey   = id => localStorage.getItem(id) || '';
 export const setKey   = (id, v) => localStorage.setItem(id, v.trim());
 export const hasKey   = id => !!getKey(id);
@@ -24,3 +25,4 @@ export const movieLinksEnabled = () => getSetting('movieLinks');
 export const couchModeEnabled  = () => getSetting('couchMode');
 export const watchAlongEnabled = () => getSetting('watchAlong');
 export const castFallbackMuted = () => getSetting('castMute'); // default: unmuted
+export const lineupTimingEnabled = () => getSetting('lineupTiming'); // Experimental; default: off

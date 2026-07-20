@@ -8,6 +8,7 @@ const DEFS = {
     couchMode:    { key: 'sc_couch_mode',         type: 'onbool', def: false },          // 'on' enables
     watchAlong:   { key: 'sc_watch_along',        type: 'onbool', def: false },
     castMute:     { key: 'sc_cast_fallback_mute', type: 'onbool', def: false },
+    lineupTiming: { key: 'sc_lineup_timing',      type: 'onbool', def: false },          // Experimental; off by default
     chatMode:     { key: 'sc_chat_mode',          type: 'string', def: 'sidebar' },
     vertSplit:    { key: 'sc_vert_split',         type: 'number', def: 50 },
     updateCache:  { key: 'sc_update_cache',       type: 'json',   def: null },

@@ -19,8 +19,8 @@ import { initPhoneKeyboard } from './chat/keyboard.js';
 import { renderQrToCanvas } from './vendor/qr.js';
 import { _appVersion, checkForUpdate, initUpdateCheck, _updateInfo, GH_RELEASES_PAGE } from './update.js';
 import {
-    LS_TMDB, LS_ONBOARDED, LS_SPELLCHECK, LS_CHAT_FONT, LS_MOVIE_LINKS, LS_COUCH, LS_WATCHALONG, LS_CAST_MUTE,
-    getKey, setKey, hasKey, spellCheckEnabled, movieLinksEnabled, couchModeEnabled, watchAlongEnabled, castFallbackMuted,
+    LS_TMDB, LS_ONBOARDED, LS_SPELLCHECK, LS_CHAT_FONT, LS_MOVIE_LINKS, LS_COUCH, LS_WATCHALONG, LS_CAST_MUTE, LS_LINEUP_TIMING,
+    getKey, setKey, hasKey, spellCheckEnabled, movieLinksEnabled, couchModeEnabled, watchAlongEnabled, castFallbackMuted, lineupTimingEnabled,
 } from './store.js';
 import { fetchImdbParentalGuide } from './metadata/imdb.js';
 import { isTv } from './tvdetect.js';
@@ -492,6 +492,14 @@ import tvCss from './styles/tv.css';
                             <a class="sc-settings-link" href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener">
                                 Get a free TMDB key ↗
                             </a>
+
+                            <label class="sc-settings-toggle-label sc-settings-divider">
+                                <span class="sc-toggle-row">
+                                    <input type="checkbox" id="sc-input-lineuptiming" ${lineupTimingEnabled() ? 'checked' : ''} />
+                                    <span class="sc-toggle-text">Coming Attractions live timing (Experimental)</span>
+                                </span>
+                                <span class="sc-settings-note">Shows NOW PLAYING and estimated start times in Tonight's Lineup. Needs TMDB above for movie runtimes — without it, estimates can't guess well. Off by default, still being tuned.</span>
+                            </label>
                         </div>
                     </div>
 
@@ -788,6 +796,12 @@ import tvCss from './styles/tv.css';
             } else {
                 movieState.lastMovieTitle = ''; // force a re-inject so links appear now
             }
+        });
+
+        // ── Coming Attractions live timing toggle (Experimental; applies next lineup open) ─
+        const lineupTiming = document.getElementById('sc-input-lineuptiming');
+        if (lineupTiming) lineupTiming.addEventListener('change', () => {
+            setKey(LS_LINEUP_TIMING, lineupTiming.checked ? 'on' : 'off');
         });
 
         // ── App update check / release notes / in-app install ────────────────

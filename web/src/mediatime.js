@@ -15,7 +15,20 @@ function parseTimeToSeconds(t) {
 export function getCurrentMediaSeconds() {
     if (mediaState.currentMediaSeconds > 0) return mediaState.currentMediaSeconds;
     const el = document.querySelector('#queue .queue_active .qe_time, #queue .queue_entry.active .qe_time');
-    return el ? parseTimeToSeconds(el.textContent) : 0;
+    if (el) {
+        const t = parseTimeToSeconds(el.textContent);
+        if (t > 0) return t;
+    }
+    // Last resort: the actual <video> element's own reported duration -- real and accurate
+    // (confirmed live 2026-07-19 on the sibling userscript against the true remaining runtime)
+    // whenever a same-origin file plays directly, covering exactly what the two checks above
+    // miss: the WebView (re)loaded mid-movie, before any changeMedia event has arrived to
+    // populate mediaState.currentMediaSeconds. Doesn't help for YouTube -- that player's video
+    // element, when present at all, reports the iframe's own internal state inconsistently for
+    // this purpose -- so that case still falls through to 0, same as before.
+    const v = document.querySelector('#videowrap video');
+    if (v && isFinite(v.duration) && v.duration > 0) return v.duration;
+    return 0;
 }
 // Current playhead in seconds — the live <video> when present (raw/Drive), otherwise
 // the last position CyTube broadcast via mediaUpdate (YouTube and other embeds).
