@@ -8167,9 +8167,6 @@
           _scSignalReady();
         }
       };
-      // Chat-only mode intentionally never plays media (see enterChatOnly/_coStopMedia), so
-      // _mediaIsPlaying() below would never go true and this would sit out the full 45s cap
-      // on every launch. Skip the wait entirely when that's the mode we're restoring into.
       let chatMode = "sidebar";
       try {
         chatMode = localStorage.getItem("sc_chat_mode") || "sidebar";

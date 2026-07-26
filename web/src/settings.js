@@ -1307,8 +1307,7 @@ import tvCss from './styles/tv.css';
     // card (no flicker / no movie flash), hold 3s, then fade the card to the movie.
     function initIntroSequence() {
         const start = Date.now();
-        let playingSince = 0, preloadStarted = false, done = false;
-        _scStatus('Waiting for stream…');
+        let playingSince = 0, preloadStarted = false, done = false, iv;
 
         const reveal = () => {
             if (done) return;
@@ -1331,7 +1330,17 @@ import tvCss from './styles/tv.css';
             }
         };
 
-        const iv = setInterval(() => {
+        // Chat-only mode intentionally never plays media (see enterChatOnly/_coStopMedia in
+        // chat/modes.js), so _mediaIsPlaying() below would never go true and this would sit
+        // out the full 45s cap on every launch. Skip the wait when that's the mode we're
+        // restoring into.
+        let chatMode = 'sidebar';
+        try { chatMode = localStorage.getItem('sc_chat_mode') || 'sidebar'; } catch (e) {}
+        if (chatMode === 'chatonly') return reveal();
+
+        _scStatus('Waiting for stream…');
+
+        iv = setInterval(() => {
             if (done) return;
             if (Date.now() - start >= 45000) return reveal(); // hard cap
 
