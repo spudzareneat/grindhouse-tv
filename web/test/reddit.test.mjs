@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { parseFirstEntry, parseDateRange, parseSchedule, itemMatchesTitle } from '../src/lineup/reddit.js';
+import { parseFirstEntry, parseDateRange, parseSchedule, itemMatchesTitle, selectCurrentEntry } from '../src/lineup/reddit.js';
 
 // A real captured feed fragment (r/420Grindhouse/.rss, 2026-07-09) -- one full <entry>
 // wrapped in a minimal <feed> with a second, unrelated entry after it, so parseFirstEntry's
@@ -51,6 +51,54 @@ test('parseDateRange: returns null when the title has no parseable Friday date',
 });
 test('parseDateRange: returns null when publishedAt is missing', () => {
     assert.strictEqual(parseDateRange('Weekend Grindhouse Schedule - Fri 7/10 - Sun 7/12', null), null);
+});
+
+// Shaped like the real feed captured live 2026-07-22: an already-expired schedule post
+// (last weekend, Fri 7/17-Sun 7/19) sits in entry #0, ahead of the brand-new live post
+// (this weekend, Fri 7/24-Sun 7/26, published the same day) in entry #1 -- reproducing
+// the exact bug where the app got stuck showing last week's lineup.
+const STALE_FIRST_ENTRIES = [
+    { postId: 't3_old', title: 'Weekend Grindhouse Schedule - Fri 7/17 - Sun 7/19', publishedAt: '2026-07-15T09:57:08+00:00', contentHtml: '<old>' },
+    { postId: 't3_new', title: 'Weekend Grindhouse Schedule - Fri 7/24 - Sun 7/26', publishedAt: '2026-07-22T06:31:31+00:00', contentHtml: '<new>' },
+];
+
+test('selectCurrentEntry: picks the most recently published schedule post even when an older one sorts first', () => {
+    const entry = selectCurrentEntry(STALE_FIRST_ENTRIES);
+    assert.strictEqual(entry.postId, 't3_new');
+});
+test('selectCurrentEntry: a single live schedule post (the common case) is picked regardless of position', () => {
+    const entries = [
+        { postId: 't3_unrelated', title: '4 Days', publishedAt: '2026-07-20T22:32:40+00:00', contentHtml: '' },
+        { postId: 't3_sched', title: 'Weekend Grindhouse Schedule - Fri 7/24 - Sun 7/26', publishedAt: '2026-07-22T06:31:31+00:00', contentHtml: '<sched>' },
+    ];
+    const entry = selectCurrentEntry(entries);
+    assert.strictEqual(entry.postId, 't3_sched');
+});
+test('selectCurrentEntry: among two schedule-shaped candidates, the more recently published one wins regardless of which weekend is sooner', () => {
+    const entries = [
+        { postId: 't3_near_but_older_post', title: 'Weekend Grindhouse Schedule - Fri 7/24 - Sun 7/26', publishedAt: '2026-07-15T09:57:08+00:00', contentHtml: '' },
+        { postId: 't3_far_but_newer_post', title: 'Weekend Grindhouse Schedule - Fri 7/31 - Sun 8/2', publishedAt: '2026-07-22T06:31:31+00:00', contentHtml: '' },
+    ];
+    const entry = selectCurrentEntry(entries);
+    assert.strictEqual(entry.postId, 't3_far_but_newer_post');
+});
+test('selectCurrentEntry: only scans the top 5 raw feed entries -- a schedule post further down is ignored', () => {
+    const filler = { postId: 't3_filler', title: 'Some other post', publishedAt: '2026-07-21T00:00:00+00:00', contentHtml: '' };
+    const entries = [filler, filler, filler, filler, filler,
+        { postId: 't3_too_late', title: 'Weekend Grindhouse Schedule - Fri 7/24 - Sun 7/26', publishedAt: '2026-07-22T06:31:31+00:00', contentHtml: '' }];
+    assert.strictEqual(selectCurrentEntry(entries), null);
+});
+test('selectCurrentEntry: non-schedule entries (no parseable Fri date) are skipped entirely', () => {
+    const entries = [
+        { postId: 't3_raffle', title: '4th of July 420 Grindhouse raffle results', publishedAt: '2026-07-06T20:00:00+00:00', contentHtml: '' },
+        { postId: 't3_sched', title: 'Weekend Grindhouse Schedule - Fri 7/24 - Sun 7/26', publishedAt: '2026-07-22T06:31:31+00:00', contentHtml: '' },
+    ];
+    const entry = selectCurrentEntry(entries);
+    assert.strictEqual(entry.postId, 't3_sched');
+});
+test('selectCurrentEntry: returns null when nothing in the feed looks like a schedule post', () => {
+    const entries = [{ postId: 't3_raffle', title: '4th of July 420 Grindhouse raffle results', publishedAt: '2026-07-06T20:00:00+00:00', contentHtml: '' }];
+    assert.strictEqual(selectCurrentEntry(entries), null);
 });
 
 test('parseSchedule: groups sections and films under the correct day, in document order', () => {

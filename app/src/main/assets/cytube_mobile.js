@@ -594,23 +594,38 @@
   function decodeHtmlEntities(s) {
     return s.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16))).replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)));
   }
-  function parseFirstEntry(feedXml) {
-    const start = feedXml.indexOf("<entry>");
-    if (start === -1) return null;
-    const end = feedXml.indexOf("</entry>", start);
-    if (end === -1) return null;
-    const entry = feedXml.slice(start, end + "</entry>".length);
-    const idM = entry.match(/<id>([^<]+)<\/id>/);
-    const titleM = entry.match(/<title>([^<]+)<\/title>/);
-    const contentM = entry.match(/<content type="html">([\s\S]*?)<\/content>/);
-    if (!idM || !titleM || !contentM) return null;
-    const pubM = entry.match(/<published>([^<]+)<\/published>/);
-    return {
-      postId: idM[1],
-      title: decodeHtmlEntities(titleM[1]),
-      publishedAt: pubM ? pubM[1] : null,
-      contentHtml: decodeHtmlEntities(contentM[1])
-    };
+  function parseEntries(feedXml) {
+    const entries = [];
+    let searchFrom = 0;
+    while (true) {
+      const start = feedXml.indexOf("<entry>", searchFrom);
+      if (start === -1) break;
+      const end = feedXml.indexOf("</entry>", start);
+      if (end === -1) break;
+      const entry = feedXml.slice(start, end + "</entry>".length);
+      searchFrom = end + "</entry>".length;
+      const idM = entry.match(/<id>([^<]+)<\/id>/);
+      const titleM = entry.match(/<title>([^<]+)<\/title>/);
+      const contentM = entry.match(/<content type="html">([\s\S]*?)<\/content>/);
+      if (!idM || !titleM || !contentM) continue;
+      const pubM = entry.match(/<published>([^<]+)<\/published>/);
+      entries.push({
+        postId: idM[1],
+        title: decodeHtmlEntities(titleM[1]),
+        publishedAt: pubM ? pubM[1] : null,
+        contentHtml: decodeHtmlEntities(contentM[1])
+      });
+    }
+    return entries;
+  }
+  var CANDIDATE_SCAN_LIMIT = 5;
+  function selectCurrentEntry(entries) {
+    let best = null;
+    for (const entry of entries.slice(0, CANDIDATE_SCAN_LIMIT)) {
+      if (!parseDateRange(entry.title, entry.publishedAt)) continue;
+      if (!best || new Date(entry.publishedAt) > new Date(best.publishedAt)) best = entry;
+    }
+    return best;
   }
   function parseDateRange(title, publishedAt) {
     const m = title && title.match(/Fri\D*(\d{1,2})\/(\d{1,2})/i);
@@ -671,8 +686,10 @@
     const { nativeHttpGet: nativeHttpGet2 } = await Promise.resolve().then(() => (init_native(), native_exports));
     const res = await nativeHttpGet2(FEED_URL, BROWSER_HEADERS);
     if (!res || res.status !== 200) throw new Error("Reddit feed HTTP " + (res && res.status));
-    const entry = parseFirstEntry(res.body);
-    if (!entry) throw new Error("no entries found in feed");
+    const entries = parseEntries(res.body);
+    if (!entries.length) throw new Error("no entries found in feed");
+    const entry = selectCurrentEntry(entries);
+    if (!entry) throw new Error("no schedule post found in feed");
     const dateRange = parseDateRange(entry.title, entry.publishedAt);
     if (!dateRange) throw new Error("could not parse weekend date range from title: " + entry.title);
     const days = parseSchedule(entry.contentHtml);

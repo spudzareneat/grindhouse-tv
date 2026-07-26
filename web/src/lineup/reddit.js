@@ -2,10 +2,9 @@
    TONIGHT'S LINEUP -- Reddit schedule fetch.
    r/420Grindhouse's Atom feed (https://www.reddit.com/r/420Grindhouse/.rss) is
    reachable with a browser UA and no login (the .json endpoints 403 the same
-   way generic bots get blocked elsewhere in this app; .rss doesn't). The
-   pinned schedule post sorts FIRST in the feed regardless of nominal sort
-   order (confirmed live) -- "find this week's post" is just "take entry #1",
-   no slug/title matching needed the way Letterboxd's version required.
+   way generic bots get blocked elsewhere in this app; .rss doesn't). The feed
+   does NOT reliably sort the current/pinned schedule post first (see
+   selectCurrentEntry below) -- every entry has to be checked, not just #1.
 
    The post body is a fixed markdown->HTML shape: an intro paragraph, then
    repeating <p><strong>Day</strong></p> headers (Friday/Saturday/Sunday, a
@@ -38,25 +37,62 @@ function decodeHtmlEntities(s) {
         .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)));
 }
 
-// The first <entry> in the feed is the pinned post (verified live). Returns
+// Extracts every <entry> in the feed, in feed order. Reddit does NOT reliably sort the
+// current/pinned schedule post first -- confirmed live 2026-07-22: an already-expired
+// "Fri 7/17 - Sun 7/19" post sat in entry #0 all week while the brand-new "Fri 7/24 -
+// Sun 7/26" post (published same day) sat in entry #1 behind it, apparently ordered by
+// pin slot rather than recency/validity. selectCurrentEntry (below) is what actually
+// picks the right one; this just does the raw extraction for every candidate.
+function parseEntries(feedXml) {
+    const entries = [];
+    let searchFrom = 0;
+    while (true) {
+        const start = feedXml.indexOf('<entry>', searchFrom);
+        if (start === -1) break;
+        const end = feedXml.indexOf('</entry>', start);
+        if (end === -1) break;
+        const entry = feedXml.slice(start, end + '</entry>'.length);
+        searchFrom = end + '</entry>'.length;
+        const idM = entry.match(/<id>([^<]+)<\/id>/);
+        const titleM = entry.match(/<title>([^<]+)<\/title>/);
+        const contentM = entry.match(/<content type="html">([\s\S]*?)<\/content>/);
+        if (!idM || !titleM || !contentM) continue;
+        const pubM = entry.match(/<published>([^<]+)<\/published>/);
+        entries.push({
+            postId: idM[1],
+            title: decodeHtmlEntities(titleM[1]),
+            publishedAt: pubM ? pubM[1] : null,
+            contentHtml: decodeHtmlEntities(contentM[1]),
+        });
+    }
+    return entries;
+}
+
+// Kept for the existing single-entry callers/tests -- just the first extracted entry,
+// with no attempt to pick the *right* one (see selectCurrentEntry for that). Returns
 // null if the feed has no entries or is missing a required field.
 export function parseFirstEntry(feedXml) {
-    const start = feedXml.indexOf('<entry>');
-    if (start === -1) return null;
-    const end = feedXml.indexOf('</entry>', start);
-    if (end === -1) return null;
-    const entry = feedXml.slice(start, end + '</entry>'.length);
-    const idM = entry.match(/<id>([^<]+)<\/id>/);
-    const titleM = entry.match(/<title>([^<]+)<\/title>/);
-    const contentM = entry.match(/<content type="html">([\s\S]*?)<\/content>/);
-    if (!idM || !titleM || !contentM) return null;
-    const pubM = entry.match(/<published>([^<]+)<\/published>/);
-    return {
-        postId: idM[1],
-        title: decodeHtmlEntities(titleM[1]),
-        publishedAt: pubM ? pubM[1] : null,
-        contentHtml: decodeHtmlEntities(contentM[1]),
-    };
+    return parseEntries(feedXml)[0] ?? null;
+}
+
+// The pinned schedule post is expected within the top 3 feed entries; scanning a couple
+// extra costs nothing and covers a mod re-pin landing it one slot further out.
+const CANDIDATE_SCAN_LIMIT = 5;
+
+// Picks the actual current schedule post out of the top of the feed: of the entries
+// whose title looks like a schedule post (parseDateRange returns non-null -- filters out
+// unrelated posts like "4 Days" or a single-film announcement), the one published most
+// recently wins. Confirmed live 2026-07-22: the correct post is always the newest one,
+// even when an older, already-expired schedule post happens to sort ahead of it in raw
+// feed order (seen that day -- last weekend's post stayed in entry #0 while this
+// weekend's, published same-day, sat in entry #1).
+export function selectCurrentEntry(entries) {
+    let best = null;
+    for (const entry of entries.slice(0, CANDIDATE_SCAN_LIMIT)) {
+        if (!parseDateRange(entry.title, entry.publishedAt)) continue; // not a schedule post
+        if (!best || new Date(entry.publishedAt) > new Date(best.publishedAt)) best = entry;
+    }
+    return best;
 }
 
 // Parses "Weekend Grindhouse Schedule - Fri 7/10 - Sun 7/12" into real
@@ -154,8 +190,10 @@ export async function fetchTonightsSchedule() {
     const { nativeHttpGet } = await import('../native.js');
     const res = await nativeHttpGet(FEED_URL, BROWSER_HEADERS);
     if (!res || res.status !== 200) throw new Error('Reddit feed HTTP ' + (res && res.status));
-    const entry = parseFirstEntry(res.body);
-    if (!entry) throw new Error('no entries found in feed');
+    const entries = parseEntries(res.body);
+    if (!entries.length) throw new Error('no entries found in feed');
+    const entry = selectCurrentEntry(entries);
+    if (!entry) throw new Error('no schedule post found in feed');
     const dateRange = parseDateRange(entry.title, entry.publishedAt);
     if (!dateRange) throw new Error('could not parse weekend date range from title: ' + entry.title);
     const days = parseSchedule(entry.contentHtml);
