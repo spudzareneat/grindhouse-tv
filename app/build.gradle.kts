@@ -19,8 +19,8 @@ android {
         applicationId = "com.grindhouse.cytube"
         minSdk = 28
         targetSdk = 35
-        versionCode = 31
-        versionName = "3.0-beta11"
+        versionCode = 32
+        versionName = "3.0-beta12"
     }
 
     signingConfigs {
