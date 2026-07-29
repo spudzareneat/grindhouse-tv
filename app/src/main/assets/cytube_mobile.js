@@ -13,10 +13,7 @@
   // src/native.js
   var native_exports = {};
   __export(native_exports, {
-    canInstallUpdates: () => canInstallUpdates,
-    nativeDownloadAndInstall: () => nativeDownloadAndInstall,
-    nativeHttpGet: () => nativeHttpGet,
-    requestInstallPermission: () => requestInstallPermission
+    nativeHttpGet: () => nativeHttpGet
   });
   function nativeHttpGet(url, headers = {}) {
     return new Promise((resolve, reject) => {
@@ -43,40 +40,7 @@
       }, 1e4);
     });
   }
-  function canInstallUpdates() {
-    try {
-      return !!(window.CytubeNative && CytubeNative.canInstallUpdates && CytubeNative.canInstallUpdates());
-    } catch (e) {
-      return false;
-    }
-  }
-  function requestInstallPermission() {
-    try {
-      if (window.CytubeNative && CytubeNative.requestInstallPermission) CytubeNative.requestInstallPermission();
-    } catch (e) {
-    }
-  }
-  function nativeDownloadAndInstall(url, knownSize, onProgress) {
-    return new Promise((resolve, reject) => {
-      if (!(window.CytubeNative && typeof CytubeNative.downloadAndInstallUpdate === "function")) {
-        reject(new Error("native update install unavailable"));
-        return;
-      }
-      const id = "u" + Math.random().toString(36).slice(2);
-      _scUpdateCbs[id] = (tick) => {
-        if (onProgress) onProgress(tick);
-        if (tick.phase === "installing") resolve(tick);
-        else if (tick.phase === "error") reject(new Error(tick.error || "download failed"));
-      };
-      try {
-        CytubeNative.downloadAndInstallUpdate(id, url, knownSize || 0);
-      } catch (e) {
-        delete _scUpdateCbs[id];
-        reject(e);
-      }
-    });
-  }
-  var _scHttpCbs, _scUpdateCbs;
+  var _scHttpCbs;
   var init_native = __esm({
     "src/native.js"() {
       _scHttpCbs = {};
@@ -87,14 +51,6 @@
             delete _scHttpCbs[id];
             cb(res);
           }
-        };
-      }
-      _scUpdateCbs = {};
-      if (typeof window !== "undefined") {
-        window.__scUpdateProgress = function(id, tick) {
-          const cb = _scUpdateCbs[id];
-          if (cb) cb(tick);
-          if (tick && (tick.phase === "installing" || tick.phase === "error")) delete _scUpdateCbs[id];
         };
       }
     }
@@ -5750,13 +5706,9 @@
                 background: rgba(255,255,255,0.05) !important; border-radius: 6px !important;
                 font-size: 12px !important; line-height: 1.45 !important; color: rgba(255,255,255,0.78) !important;
             }
-            #sc-update-notes.sc-hidden, #sc-update-action.sc-hidden, #sc-update-github-link.sc-hidden,
-            #sc-update-progress-wrap.sc-hidden { display: none !important; }
+            #sc-update-notes.sc-hidden, #sc-update-github-link.sc-hidden { display: none !important; }
             #sc-update-status.sc-update-yes { color: #7dffa0 !important; font-weight: 600 !important; }
             #sc-update-status.sc-update-no  { color: rgba(255,255,255,0.5) !important; }
-            #sc-update-action { margin-top: 8px !important; background: rgba(125,255,160,0.16) !important;
-                color: #7dffa0 !important; border-color: rgba(125,255,160,0.4) !important; }
-            #sc-update-action:hover { background: rgba(125,255,160,0.28) !important; }
             .sc-update-github-link {
                 display: block !important; margin-top: 8px !important; width: 100% !important;
                 background: transparent !important; border: none !important; cursor: pointer !important;
@@ -5764,14 +5716,6 @@
                 color: rgba(255,255,255,0.5) !important; text-decoration: none !important;
             }
             .sc-update-github-link:hover { color: rgba(255,255,255,0.75) !important; }
-            .sc-update-progress-wrap {
-                margin-top: 8px !important; height: 8px !important; border-radius: 999px !important;
-                background: rgba(255,255,255,0.08) !important; overflow: hidden !important;
-            }
-            .sc-update-progress-fill {
-                height: 100% !important; width: 0% !important; background: #7dffa0 !important;
-                border-radius: 999px !important; transition: width 0.2s ease !important;
-            }
             #sc-settings-actions {
                 display: flex !important; gap: 10px !important; justify-content: flex-end !important;
                 margin-top: 4px !important;
@@ -7561,10 +7505,6 @@
                         <div class="sc-settings-input-row">
                             <button id="sc-update-check" class="sc-settings-test" type="button">Check now</button>
                         </div>
-                        <div id="sc-update-progress-wrap" class="sc-update-progress-wrap sc-hidden">
-                            <div id="sc-update-progress-fill" class="sc-update-progress-fill"></div>
-                        </div>
-                        <button id="sc-update-action" class="sc-settings-btn-wide sc-hidden" type="button">Update Now</button>
                         <button id="sc-update-github-link" class="sc-update-github-link sc-hidden" type="button">View release on GitHub ↗</button>
                     </div>
                 </div>
@@ -7735,36 +7675,15 @@
       (function wireUpdateSection() {
         const statusEl = document.getElementById("sc-update-status");
         const notesEl = document.getElementById("sc-update-notes");
-        const actionBtn = document.getElementById("sc-update-action");
         const checkBtn = document.getElementById("sc-update-check");
         const ghLink = document.getElementById("sc-update-github-link");
-        const progWrap = document.getElementById("sc-update-progress-wrap");
-        const progFill = document.getElementById("sc-update-progress-fill");
-        if (!statusEl || !actionBtn || !checkBtn || !ghLink || !progWrap || !progFill) return;
-        let phase = "idle";
-        const fmtSize = (bytes) => typeof bytes === "number" && bytes > 0 ? " (" + (bytes / (1024 * 1024)).toFixed(1) + " MB)" : "";
-        const renderAction = () => {
-          progWrap.classList.add("sc-hidden");
-          actionBtn.classList.add("sc-hidden");
-          checkBtn.disabled = phase === "downloading" || phase === "installing";
-          if (phase === "downloading") {
-            progWrap.classList.remove("sc-hidden");
-            return;
-          }
-          if (phase === "installing") {
-            return;
-          }
-          if (!_updateInfo || !_updateInfo.available) return;
-          actionBtn.classList.remove("sc-hidden");
-          actionBtn.textContent = canInstallUpdates() ? "Update Now" + fmtSize(_updateInfo.apkSize) : "Allow installs from Grindhouse →";
-        };
+        if (!statusEl || !checkBtn || !ghLink) return;
         const render = (info) => {
           statusEl.className = "sc-settings-note";
           notesEl.classList.add("sc-hidden");
           ghLink.classList.add("sc-hidden");
           if (!info) {
             statusEl.textContent = "Checking for updates…";
-            renderAction();
             return;
           }
           if (info.available) {
@@ -7779,47 +7698,10 @@
             statusEl.classList.add("sc-update-no");
             statusEl.textContent = info.latest ? "✓ You’re on the latest version (" + info.latest + ")" : "✓ You’re on the latest version";
           }
-          renderAction();
-        };
-        window.__scAppResumed = () => {
-          if (overlay.isConnected) renderAction();
         };
         if (_updateInfo) render(_updateInfo);
         checkForUpdate(false).then(render).catch(() => {
           if (!_updateInfo) statusEl.textContent = "Couldn’t reach GitHub to check.";
-        });
-        actionBtn.addEventListener("click", () => {
-          if (!canInstallUpdates()) {
-            requestInstallPermission();
-            return;
-          }
-          if (!_updateInfo || !_updateInfo.apkUrl) {
-            phase = "error";
-            statusEl.className = "sc-settings-note";
-            statusEl.textContent = "No installable update found — use the GitHub link below";
-            renderAction();
-            return;
-          }
-          phase = "downloading";
-          progFill.style.width = "0%";
-          statusEl.className = "sc-settings-note";
-          statusEl.textContent = "Downloading… 0%";
-          renderAction();
-          nativeDownloadAndInstall(_updateInfo.apkUrl, _updateInfo.apkSize, (tick) => {
-            if (tick.phase === "downloading") {
-              progFill.style.width = tick.pct + "%";
-              statusEl.textContent = "Downloading… " + tick.pct + "%";
-            } else if (tick.phase === "installing") {
-              phase = "installing";
-              statusEl.textContent = "Opening installer…";
-              renderAction();
-            }
-          }).catch(() => {
-            phase = "error";
-            statusEl.className = "sc-settings-note";
-            statusEl.textContent = "Download failed — check connection";
-            renderAction();
-          });
         });
         ghLink.addEventListener("click", () => {
           const url = _updateInfo && _updateInfo.url || GH_RELEASES_PAGE;
