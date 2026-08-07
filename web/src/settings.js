@@ -19,8 +19,8 @@ import { initPhoneKeyboard } from './chat/keyboard.js';
 import { renderQrToCanvas } from './vendor/qr.js';
 import { _appVersion, checkForUpdate, initUpdateCheck, _updateInfo, GH_RELEASES_PAGE } from './update.js';
 import {
-    LS_TMDB, LS_ONBOARDED, LS_SPELLCHECK, LS_CHAT_FONT, LS_MOVIE_LINKS, LS_COUCH, LS_WATCHALONG, LS_CAST_MUTE, LS_LINEUP_TIMING,
-    getKey, setKey, hasKey, spellCheckEnabled, movieLinksEnabled, couchModeEnabled, watchAlongEnabled, castFallbackMuted, lineupTimingEnabled,
+    LS_TMDB, LS_ONBOARDED, LS_SPELLCHECK, LS_CHAT_FONT, LS_MOVIE_LINKS, LS_COUCH, LS_WATCHALONG, LS_CAST_MUTE, LS_LINEUP_TIMING, LS_AUTOEMBED,
+    getKey, setKey, hasKey, spellCheckEnabled, movieLinksEnabled, couchModeEnabled, watchAlongEnabled, castFallbackMuted, lineupTimingEnabled, autoEmbedEnabled,
 } from './store.js';
 import { fetchImdbParentalGuide } from './metadata/imdb.js';
 import { isTv } from './tvdetect.js';
@@ -30,6 +30,8 @@ import { triggerTitleInject, watchMovieTitle } from './titleinject.js';
 import { initGoogleDrive } from './player/drive.js';
 import { initMediaWatcher } from './player/resync.js';
 import { openExternalUrl } from './player/drm.js';
+import { getMovieLeadSec, setMovieLeadSec, initMovieLeadOffset, MOVIE_LEAD_MIN, MOVIE_LEAD_MAX } from './player/leadtime.js';
+import { startImageEmbedObserver } from './chat/imageembed.js';
 import baseCss from './styles/base.css';
 import overlaysCss from './styles/overlays.css';
 import tvCss from './styles/tv.css';
@@ -426,8 +428,10 @@ import tvCss from './styles/tv.css';
         document.querySelectorAll('#messagebuffer [class*="chat-msg-"]').forEach(el => {
             const cls = [...el.classList].find(c => c.startsWith('chat-msg-'));
             if (!cls) return;
+            const u = cls.replace('chat-msg-', '');
             const span = el.querySelector('.username');
-            if (span) { span.style.color = usernameToColor(cls.replace('chat-msg-', '')); span.style.fontWeight = '700'; }
+            if (span) { span.style.color = usernameToColor(u); span.style.fontWeight = '700'; }
+            el.classList.toggle('sc-own-msg', !!(window.CLIENT && CLIENT.name && u === CLIENT.name));
         });
     }
     let _colorObserverStarted = false;
@@ -562,6 +566,14 @@ import tvCss from './styles/tv.css';
                             <span class="sc-settings-note">For physical keyboard users — tapping a text field won't pop up the Android keyboard</span>
                         </label>
                     </div>
+
+                    <div class="sc-settings-group sc-settings-divider">
+                        <label class="sc-settings-label">
+                            Movie lead time (seconds ahead of sync)
+                            <span class="sc-settings-note">Keeps you a few seconds ahead of the group during movies (not YouTube) — cushions against your own buffering. 0 = off.</span>
+                        </label>
+                        <input id="sc-input-leadsec" class="sc-settings-input" type="number" min="${MOVIE_LEAD_MIN}" max="${MOVIE_LEAD_MAX}" step="1" value="${getMovieLeadSec()}" style="width:5em" />
+                    </div>
                 </div>
 
                 ${isTv ? `
@@ -606,6 +618,16 @@ import tvCss from './styles/tv.css';
                                 <span class="sc-toggle-text">Watch-Only Mode</span>
                             </span>
                             <span class="sc-settings-note">Hides the chat input and the guest-login box — just read along, no typing</span>
+                        </label>
+                    </div>
+
+                    <div class="sc-settings-group sc-settings-divider">
+                        <label class="sc-settings-toggle-label">
+                            <span class="sc-toggle-row">
+                                <input type="checkbox" id="sc-input-autoembed" ${autoEmbedEnabled() ? 'checked' : ''} />
+                                <span class="sc-toggle-text">Auto-embed image links in chat</span>
+                            </span>
+                            <span class="sc-settings-note">Shows a thumbnail preview under messages that link directly to an image, marked "🖼 embedded"</span>
                         </label>
                     </div>
                 </div>
@@ -800,6 +822,19 @@ import tvCss from './styles/tv.css';
             setKey(LS_LINEUP_TIMING, lineupTiming.checked ? 'on' : 'off');
         });
 
+        // ── Auto-embed chat image links toggle (re-scans the visible backlog when re-enabled) ─
+        const autoembed = document.getElementById('sc-input-autoembed');
+        if (autoembed) autoembed.addEventListener('change', () => {
+            setKey(LS_AUTOEMBED, autoembed.checked ? 'on' : 'off');
+            startImageEmbedObserver();
+        });
+
+        // ── Movie lead-time-ahead-of-sync (applies live — read fresh on every mediaUpdate tick) ─
+        const leadsec = document.getElementById('sc-input-leadsec');
+        if (leadsec) leadsec.addEventListener('change', () => {
+            leadsec.value = setMovieLeadSec(parseInt(leadsec.value, 10));
+        });
+
         // ── App update check / release notes / external-browser link ──────────
         (function wireUpdateSection() {
             const statusEl = document.getElementById('sc-update-status');
@@ -984,6 +1019,7 @@ import tvCss from './styles/tv.css';
             addFloatingButtons();
             addSettingsButton();
             startUserColorObserver();
+            startImageEmbedObserver();
             // Disconnect once all one-time elements are in place
             if (
                 document.getElementById('sc-chat-textarea') &&
@@ -1032,6 +1068,7 @@ import tvCss from './styles/tv.css';
         initNowPlayingWatcher();
         initTopBar();
         initDesyncButton();
+        initMovieLeadOffset();
         initChatHeader();
         initUserCount();
         initPollWatcher();

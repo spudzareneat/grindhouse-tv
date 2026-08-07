@@ -208,6 +208,17 @@
             /* ── TV: larger text, focus ring on interactive items ─ */
             body.sc-tv #messagebuffer { font-size: 18px !important; }
             body.sc-tv #sc-chat-textarea { font-size: 18px !important; }
+            /* Base highlight tints (base.css) are tuned for a phone held at arm's length --
+               too faint to read from couch distance on a TV. Punch up opacity/border for both. */
+            body.sc-tv #messagebuffer .sc-own-msg {
+                background: rgba(125, 200, 255, 0.22) !important;
+                border-left: 2px solid rgba(125, 200, 255, 0.7) !important;
+                margin: 0 -4px 0 -6px !important; padding: 1px 4px 1px 4px !important;
+            }
+            body.sc-tv #messagebuffer .nick-highlight {
+                background: rgba(185, 130, 255, 0.32) !important;
+                border-left: 3px solid rgba(185, 130, 255, 0.95) !important;
+            }
             body.sc-tv #sc-desync-btn, body.sc-tv #fs-toggle-btn,
             body.sc-tv #sc-settings-btn {
                 width: 52px !important; height: 52px !important; font-size: 22px !important;

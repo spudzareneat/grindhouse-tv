@@ -19,6 +19,7 @@ test('defaults when unset', async () => {
     assert.strictEqual(getSetting('onboarded'), false);
     assert.strictEqual(getSetting('spellcheck'), true);   // offbool, default true
     assert.strictEqual(getSetting('movieLinks'), true);   // offbool, default true
+    assert.strictEqual(getSetting('autoEmbed'), true);    // offbool, default true
     assert.strictEqual(getSetting('couchMode'), false);    // onbool, default false
     assert.strictEqual(getSetting('watchAlong'), false);
     assert.strictEqual(getSetting('castMute'), false);

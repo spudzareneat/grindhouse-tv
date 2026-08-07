@@ -126,13 +126,25 @@ function parseListItems(ulInnerHtml) {
     let lm;
     while ((lm = liRe.exec(ulInnerHtml))) {
         const display = lm[1].replace(/<strong>[^<]*<\/strong>\s*/, '').replace(/<[^>]+>/g, '').trim();
+        if (!display) continue;
         const [primary, ...akaParts] = display.split(/\s+aka\s+/i);
-        const ym = primary.trim().match(/^(.*)\s\((\d{4})\)$/);
-        if (!ym) continue;
         const akas = akaParts
             .map(a => a.replace(/\s*\(\d{4}\)\s*$/, '').trim())
             .filter(Boolean);
-        items.push({ title: ym[1].trim(), year: ym[2], display, akas });
+        // Non-greedy up to the FIRST "(YYYY)" -- tolerates trailing typos/garbage after
+        // it (seen live 2026-08-07 on the sibling userscript: a mod typo left
+        // "Decampitated (1998))" with an extra closing paren, which the old
+        // exact-end-anchored regex rejected outright).
+        const ym = primary.trim().match(/^(.*?)\s*\((\d{4})\)/);
+        if (ym) {
+            items.push({ title: ym[1].trim(), year: ym[2], display, akas });
+        } else {
+            // No parseable year at all -- still show it instead of silently vanishing
+            // the film from the lineup. TMDB lookup runs yearless off the raw text; the
+            // card just won't have a poster/overview if that search comes up empty too.
+            console.warn('[SC] lineup: could not parse title/year from schedule item, showing raw text:', display);
+            items.push({ title: primary.trim(), year: null, display, akas });
+        }
     }
     return items;
 }
@@ -159,8 +171,16 @@ export function parseSchedule(contentHtml) {
     while ((m = re.exec(contentHtml))) {
         if (m[1] !== undefined) {
             const text = m[1].trim();
-            if (DAY_NAMES.includes(text)) {
-                currentDay = { day: text, sections: [] };
+            // Mods sometimes wrap the day header in extra markdown emphasis inside the
+            // bold ("==Friday=="), which survives entity-decoding as literal '=' characters
+            // -- strip any leading/trailing non-letters before comparing so decoration
+            // doesn't stop currentDay from ever being set (seen live 2026-08-07 on the
+            // sibling userscript: an "==Friday==" header silently produced zero parsed
+            // days). The cleaned name, not the decorated text, is stored since it's used
+            // later as dateByDay's Friday/Saturday/Sunday lookup key in fetchTonightsSchedule.
+            const dayName = text.replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, '');
+            if (DAY_NAMES.includes(dayName)) {
+                currentDay = { day: dayName, sections: [] };
                 days.push(currentDay);
                 pendingSectionName = null;
             } else {

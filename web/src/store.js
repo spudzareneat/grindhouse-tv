@@ -9,6 +9,8 @@ export const LS_ONBOARDED  = 'sc_onboarded';  // set once the settings have been
 export const LS_SPELLCHECK = 'sc_spellcheck'; // 'off' to disable, anything else = enabled
 export const LS_CHAT_FONT  = 'sc_chat_fontsize';
 export const LS_MOVIE_LINKS = 'sc_movie_links'; // 'off' to hide IMDb/Letterboxd/Wiki links
+export const LS_AUTOEMBED  = 'sc_autoembed_images'; // 'off' to disable auto-embedding chat image links
+export const LS_MOVIE_LEAD = 'sc_movie_lead_sec'; // seconds to run ahead of sync during movies (not YouTube); 0 = off
 export const LS_COUCH      = 'sc_couch_mode'; // 'on' = chat input grows big & readable while typing
 export const LS_WATCHALONG = 'sc_watch_along'; // 'on' = hide the chat input + guest login (read-only)
 export const LS_CAST_MUTE  = 'sc_cast_fallback_mute'; // 'on' = mute fallback (YouTube) playback on this device while casting
@@ -22,6 +24,7 @@ export const hasKey   = id => !!getKey(id);
 // and normalizes what these already did).
 export const spellCheckEnabled = () => getSetting('spellcheck');
 export const movieLinksEnabled = () => getSetting('movieLinks');
+export const autoEmbedEnabled  = () => getSetting('autoEmbed');
 export const couchModeEnabled  = () => getSetting('couchMode');
 export const watchAlongEnabled = () => getSetting('watchAlong');
 export const castFallbackMuted = () => getSetting('castMute'); // default: unmuted

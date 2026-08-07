@@ -4,7 +4,9 @@ const DEFS = {
     onboarded:    { key: 'sc_onboarded',          type: 'flag',   def: false },          // set = true
     spellcheck:   { key: 'sc_spellcheck',         type: 'offbool', def: true },          // 'off' disables
     movieLinks:   { key: 'sc_movie_links',        type: 'offbool', def: true },
+    autoEmbed:    { key: 'sc_autoembed_images',   type: 'offbool', def: true },          // 'off' disables
     chatFontSize: { key: 'sc_chat_fontsize',      type: 'string', def: '' },
+    movieLead:    { key: 'sc_movie_lead_sec',     type: 'string', def: '' },             // clamped 0-10 in player/leadtime.js, like chatFontSize
     couchMode:    { key: 'sc_couch_mode',         type: 'onbool', def: false },          // 'on' enables
     watchAlong:   { key: 'sc_watch_along',        type: 'onbool', def: false },
     castMute:     { key: 'sc_cast_fallback_mute', type: 'onbool', def: false },

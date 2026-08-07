@@ -4,7 +4,7 @@ import { movieState, LINK_DEFS, lookupMovie } from './metadata/tmdb.js';
 import { npState, showNowPlayingCard, _npCardEnabled } from './cards/nowplaying.js';
 import { getCurrentMediaSeconds } from './mediatime.js';
 
-function isYouTubeMedia() {
+export function isYouTubeMedia() {
     // CyTube exposes current media on the global PLAYER or window.player object.
     // The type field is 'yt' for YouTube. Also check for the YouTube iframe directly.
     try {

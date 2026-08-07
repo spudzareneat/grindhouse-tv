@@ -677,6 +677,7 @@
                 width: 100% !important; box-sizing: border-box !important;
                 padding-left: 0 !important; padding-right: 0 !important; margin: 0 !important;
                 background: transparent !important; color: white !important; border: none !important;
+                font-family: 'Inter', 'Roboto', system-ui, sans-serif !important;
                 font-size: 14px !important; overflow-x: hidden !important; overflow-y: auto !important; padding-bottom: 5px !important;
             }
             /* Long usernames / links must wrap, never widen the panel */
@@ -684,6 +685,40 @@
                 overflow-wrap: anywhere !important; word-break: break-word !important;
                 max-width: 100% !important;
             }
+            #messagebuffer .sc-own-msg {
+                background: rgba(125, 200, 255, 0.07) !important;
+                margin: 0 -4px !important; padding: 1px 4px !important;
+                border-radius: 3px !important;
+            }
+            /* Mention ping -- overrides CyTube's default flat-gray .nick-highlight */
+            #messagebuffer .nick-highlight {
+                background: rgba(185, 130, 255, 0.14) !important;
+                border-left: 2px solid rgba(185, 130, 255, 0.75) !important;
+                margin: 0 -4px 0 -6px !important; padding: 1px 4px 1px 4px !important;
+                border-radius: 3px !important;
+            }
+            .sc-img-embed { display: block !important; margin-top: 4px !important; }
+            .sc-img-embed img {
+                display: block !important;
+                max-width: 100% !important;
+                border-radius: 4px !important;
+                cursor: pointer !important;
+            }
+            .sc-img-embed-badge {
+                display: flex !important;
+                align-items: center !important;
+                gap: 5px !important;
+                font-size: 10px !important;
+                color: rgba(244,244,242,0.45) !important;
+                margin-top: 2px !important;
+            }
+            .sc-img-embed-toggle {
+                cursor: pointer !important;
+                font-size: 11px !important;
+                opacity: 0.6 !important;
+                line-height: 1 !important;
+            }
+            .sc-img-embed-toggle:hover { opacity: 1 !important; }
             #sc-chat-textarea {
                 width: 100% !important; min-height: 44px !important; max-height: 120px !important;
                 background: rgba(255,255,255,0.1) !important; color: white !important;

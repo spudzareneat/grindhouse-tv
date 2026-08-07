@@ -232,6 +232,9 @@ async function refetchAndCache() {
     } catch (e) {
         // Keep whatever we already had (in-memory and/or cached) -- a failed background
         // revalidation is silent; _fetchFailed only matters when we have nothing at all.
+        // Logged (not swallowed silently) so a stale-cache report is diagnosable after
+        // the fact instead of leaving zero trace of why it didn't update.
+        console.warn('[SC] lineup refetch failed, keeping existing cache:', e && e.message);
     } finally {
         _revalidating = false;
     }
@@ -253,6 +256,16 @@ async function ensureSchedule() {
     if (_scheduleCache) {
         if (scheduleExpired(_scheduleCache)) {
             await refetchAndCache(); // the cached weekend is over -- there IS a new post, wait for it
+            // Unlike routine revalidation (below), a still-expired cache here is known to be
+            // wrong, not just possibly stale -- worth one immediate retry before accepting a
+            // transient failure (rate limit, flaky network) as the final answer for however
+            // long this session stays open before the Lineup screen is opened again.
+            if (scheduleExpired(_scheduleCache)) {
+                await refetchAndCache();
+                if (scheduleExpired(_scheduleCache)) {
+                    console.warn('[SC] lineup schedule still expired after refetch retry -- showing stale cached schedule:', _scheduleCache.title);
+                }
+            }
         } else if (Date.now() - (_scheduleCache.fetchedAt || 0) > CACHE_MAX_AGE_MS) {
             refetchAndCache(); // just routine revalidation (e.g. a same-weekend post edit) -- fire-and-forget
         }
@@ -265,6 +278,7 @@ async function ensureSchedule() {
         writeCache(result);
     } catch (e) {
         _fetchFailed = true;
+        console.warn('[SC] lineup initial fetch failed, falling back:', e && e.message);
     }
 }
 

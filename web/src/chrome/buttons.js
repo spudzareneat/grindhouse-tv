@@ -8,6 +8,15 @@
    DESYNC BUTTON — temporarily pause CyTube's sync
 ========================================================== */
 
+// Socket.IO v2/v3 stores listeners under _callbacks['$eventName']
+// Socket.IO v4 stores them under _events or via listeners()
+export function getMediaUpdateListeners() {
+    const key = '$mediaUpdate';
+    if (socket._callbacks?.[key]) return { store: '_callbacks', key };
+    if (socket._events?.mediaUpdate) return { store: '_events', key: 'mediaUpdate' };
+    return null;
+}
+
 export function initDesyncButton() {
     const btn = document.createElement('button');
     btn.id = 'sc-desync-btn';
@@ -18,15 +27,6 @@ export function initDesyncButton() {
 
     let desynced = false;
     let savedListeners = null;
-
-    const getMediaUpdateListeners = () => {
-        // Socket.IO v2/v3 stores listeners under _callbacks['$eventName']
-        // Socket.IO v4 stores them under _events or via listeners()
-        const key = '$mediaUpdate';
-        if (socket._callbacks?.[key]) return { store: '_callbacks', key };
-        if (socket._events?.mediaUpdate) return { store: '_events', key: 'mediaUpdate' };
-        return null;
-    };
 
     const freezeSync = () => {
         const loc = getMediaUpdateListeners();
