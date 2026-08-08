@@ -114,21 +114,28 @@ export function initMediaWatcher() {
             // CyTube re-emits changeMedia on reconnect/resume (e.g. coming back
             // from PiP), which must not re-trigger the lookup/announcement card.
             const key = (data && (data.id || '')) + '|' + (data && (data.title || ''));
-            if (key === _lastMediaKey) return;
-            _lastMediaKey = key;
-            movieState.lastMovieTitle = '';                 // force a fresh lookup
-            // Forget the previous film's metadata up front so the title observer
-            // can't rebuild a stale Trivia button over the next video (e.g. a short
-            // bumper with no trivia). It's recreated only once the new lookup lands
-            // on a real movie. Drop the button now too in case one is showing.
-            npState.data = null;
-            const _staleTrivia = document.getElementById('sc-trivia-btn');
-            if (_staleTrivia) _staleTrivia.remove();
-            // New media: drop any DRM overlay, and (for YouTube) start watching for the
-            // no-Widevine failure that DRM "YouTube Movies" titles hit on this device.
-            clearTimeout(drmState.checkTimer);
-            hideDrmOverlay();
-            if (mediaState.currentMediaType === 'yt') drmState.checkTimer = setTimeout(() => checkYtDrm(0), 1500);
+            if (key !== _lastMediaKey) {
+                _lastMediaKey = key;
+                movieState.lastMovieTitle = '';                 // force a fresh lookup
+                // Forget the previous film's metadata up front so the title observer
+                // can't rebuild a stale Trivia button over the next video (e.g. a short
+                // bumper with no trivia). It's recreated only once the new lookup lands
+                // on a real movie. Drop the button now too in case one is showing.
+                npState.data = null;
+                const _staleTrivia = document.getElementById('sc-trivia-btn');
+                if (_staleTrivia) _staleTrivia.remove();
+                // New media: drop any DRM overlay, and (for YouTube) start watching for the
+                // no-Widevine failure that DRM "YouTube Movies" titles hit on this device.
+                clearTimeout(drmState.checkTimer);
+                hideDrmOverlay();
+                if (mediaState.currentMediaType === 'yt') drmState.checkTimer = setTimeout(() => checkYtDrm(0), 1500);
+            }
+            // Always re-run title injection, even for a repeat changeMedia of the SAME
+            // film: CyTube re-renders the title header's DOM on every changeMedia
+            // (including reconnect re-syncs, e.g. resuming after a long background),
+            // which wipes out our injected clean-title span. injectMovieLinks() detects
+            // the unchanged title and reapplies the cached clean title cheaply — no
+            // network re-lookup — instead of leaving the raw filename on screen.
             setTimeout(triggerTitleInject, 350); // let the title DOM settle first
         } catch (e) {}
     });

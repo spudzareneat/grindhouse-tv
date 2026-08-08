@@ -1752,12 +1752,10 @@
       clearInterval(_npProgTimer);
       if (progWrap) progWrap.style.display = "none";
     }
-    const revealMs = _autoScrollOverview();
+    _autoScrollOverview();
     clearTimeout(_npHideTimer);
     if (opts.autoHide) {
-      const v = document.querySelector("#videowrap video");
-      const playing = v && !v.paused;
-      if (playing || !v) _npHideTimer = setTimeout(hideNowPlayingCard, Math.max(7e3, revealMs + 2500));
+      _npHideTimer = setTimeout(hideNowPlayingCard, 2e4);
     }
   }
   function hideNowPlayingCard() {
@@ -5030,9 +5028,36 @@
     if (document.querySelector('#ytapiplayer[src*="youtube.com"]')) return true;
     return false;
   }
+  function applyCleanTitleDom(titleEl, movieData) {
+    const { cleanTitle, cleanYear } = movieData;
+    if (!cleanTitle || !titleEl) return;
+    const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : "");
+    let span = titleEl.querySelector(":scope > #sc-title-text") || document.getElementById("sc-title-text");
+    if (!span) {
+      span = document.createElement("span");
+      span.id = "sc-title-text";
+      span.style.cursor = "pointer";
+      span.title = "Movie info";
+      span.dataset.noTvCaption = "1";
+      span.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
+      });
+      const textNode = [...titleEl.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
+      if (textNode) textNode.parentNode.replaceChild(span, textNode);
+      else titleEl.insertBefore(span, titleEl.firstChild);
+    }
+    span.textContent = newText;
+  }
   function injectMovieLinks(titleEl) {
     const rawTitle = titleEl.textContent.trim().replace(/^currently\s+playing[:\s]*/i, "").replace(/^now\s+playing[:\s]*/i, "").trim();
-    if (!rawTitle || rawTitle === movieState.lastMovieTitle || rawTitle.length < 2) return;
+    if (!rawTitle || rawTitle.length < 2) return;
+    if (rawTitle === movieState.lastMovieTitle) {
+      if (npState.data && !titleEl.querySelector("#sc-title-text")) {
+        applyCleanTitleDom(titleEl, npState.data);
+      }
+      return;
+    }
     movieState.lastMovieTitle = rawTitle;
     ["sc-movie-links", "sc-movie-stats", "sc-trivia-btn"].forEach((id) => {
       const el = document.getElementById(id);
@@ -5072,25 +5097,7 @@
       }
       npState.data = movieData;
       if (_npCardEnabled() && npState.introDone) showNowPlayingCard(movieData, { autoHide: true });
-      if (cleanTitle && titleEl) {
-        const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : "");
-        let span = titleEl.querySelector(":scope > #sc-title-text") || document.getElementById("sc-title-text");
-        if (!span) {
-          span = document.createElement("span");
-          span.id = "sc-title-text";
-          span.style.cursor = "pointer";
-          span.title = "Movie info";
-          span.dataset.noTvCaption = "1";
-          span.addEventListener("click", (e) => {
-            e.stopPropagation();
-            if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
-          });
-          const textNode = [...titleEl.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
-          if (textNode) textNode.parentNode.replaceChild(span, textNode);
-          else titleEl.insertBefore(span, titleEl.firstChild);
-        }
-        span.textContent = newText;
-      }
+      applyCleanTitleDom(titleEl, movieData);
       const currentRow = document.getElementById("sc-movie-links");
       if (currentRow) {
         currentRow.innerHTML = "";
@@ -5409,15 +5416,16 @@
         mediaState.currentMediaSeconds = data && typeof data.seconds === "number" ? data.seconds : 0;
         mediaState.currentMediaType = data && data.type ? data.type : "";
         const key = (data && (data.id || "")) + "|" + (data && (data.title || ""));
-        if (key === _lastMediaKey) return;
-        _lastMediaKey = key;
-        movieState.lastMovieTitle = "";
-        npState.data = null;
-        const _staleTrivia = document.getElementById("sc-trivia-btn");
-        if (_staleTrivia) _staleTrivia.remove();
-        clearTimeout(drmState.checkTimer);
-        hideDrmOverlay();
-        if (mediaState.currentMediaType === "yt") drmState.checkTimer = setTimeout(() => checkYtDrm(0), 1500);
+        if (key !== _lastMediaKey) {
+          _lastMediaKey = key;
+          movieState.lastMovieTitle = "";
+          npState.data = null;
+          const _staleTrivia = document.getElementById("sc-trivia-btn");
+          if (_staleTrivia) _staleTrivia.remove();
+          clearTimeout(drmState.checkTimer);
+          hideDrmOverlay();
+          if (mediaState.currentMediaType === "yt") drmState.checkTimer = setTimeout(() => checkYtDrm(0), 1500);
+        }
         setTimeout(triggerTitleInject, 350);
       } catch (e) {
       }

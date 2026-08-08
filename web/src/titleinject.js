@@ -18,12 +18,50 @@ export function isYouTubeMedia() {
     return false;
 }
 
+// Builds/updates the clickable clean-title span inside titleEl from resolved movie data.
+// Shared by the fresh-lookup path below and the cache-reapply path (same movie, but CyTube
+// reset the title header's DOM out from under us -- see the reapply branch in
+// injectMovieLinks for why that happens).
+function applyCleanTitleDom(titleEl, movieData) {
+    const { cleanTitle, cleanYear } = movieData;
+    if (!cleanTitle || !titleEl) return;
+    const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : '');
+    let span = titleEl.querySelector(':scope > #sc-title-text') || document.getElementById('sc-title-text');
+    if (!span) {
+        span = document.createElement('span');
+        span.id = 'sc-title-text';
+        span.style.cursor = 'pointer';
+        span.title = 'Movie info';
+        span.dataset.noTvCaption = '1'; // title text is self-explanatory; no remote caption
+        span.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
+        });
+        const textNode = [...titleEl.childNodes].find(n => n.nodeType === 3 && n.textContent.trim());
+        if (textNode) textNode.parentNode.replaceChild(span, textNode);
+        else titleEl.insertBefore(span, titleEl.firstChild);
+    }
+    span.textContent = newText;
+}
+
 function injectMovieLinks(titleEl) {
     const rawTitle = titleEl.textContent.trim()
         .replace(/^currently\s+playing[:\s]*/i, '')
         .replace(/^now\s+playing[:\s]*/i, '').trim();
 
-    if (!rawTitle || rawTitle === movieState.lastMovieTitle || rawTitle.length < 2) return;
+    if (!rawTitle || rawTitle.length < 2) return;
+
+    if (rawTitle === movieState.lastMovieTitle) {
+        // Same movie we've already resolved this session. CyTube re-renders the title
+        // header on every socket reconnect (e.g. resuming after a long background) --
+        // that wipes the clean-title span we inject below, reverting the display to the
+        // raw filename even though nothing about the movie changed. Reapply it from the
+        // cached lookup: cheap, synchronous, no network call, no re-announcing the card.
+        if (npState.data && !titleEl.querySelector('#sc-title-text')) {
+            applyCleanTitleDom(titleEl, npState.data);
+        }
+        return;
+    }
     movieState.lastMovieTitle = rawTitle;
 
     // Clean up any previous links/stats/trivia button
@@ -78,25 +116,7 @@ function injectMovieLinks(titleEl) {
         // Update the title element with the clean TMDB title, wrapped in a
         // dedicated clickable span so ONLY the title (not the rest of the
         // header) opens the now-playing card.
-        if (cleanTitle && titleEl) {
-            const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : '');
-            let span = titleEl.querySelector(':scope > #sc-title-text') || document.getElementById('sc-title-text');
-            if (!span) {
-                span = document.createElement('span');
-                span.id = 'sc-title-text';
-                span.style.cursor = 'pointer';
-                span.title = 'Movie info';
-                span.dataset.noTvCaption = '1'; // title text is self-explanatory; no remote caption
-                span.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
-                });
-                const textNode = [...titleEl.childNodes].find(n => n.nodeType === 3 && n.textContent.trim());
-                if (textNode) textNode.parentNode.replaceChild(span, textNode);
-                else titleEl.insertBefore(span, titleEl.firstChild);
-            }
-            span.textContent = newText;
-        }
+        applyCleanTitleDom(titleEl, movieData);
         // ── Icon links row (skipped entirely when links are disabled) ──────
         const currentRow = document.getElementById('sc-movie-links');
         if (currentRow) {

@@ -659,6 +659,25 @@ class MainActivity : AppCompatActivity() {
             // Drive streams are no longer intercepted here — the injected JS points them at the
             // localhost LocalMediaProxy instead, so the WebView can SEEK against a real HTTP server
             // (shouldInterceptRequest can only stream linearly, which broke CyTube's sync-seek).
+
+            // Android reclaims the WebView's renderer process under memory pressure after the
+            // app sits backgrounded for a long time (observed after leaving it running
+            // overnight) — with targetSdk 26+, NOT overriding this means the whole app gets
+            // killed with no recovery, which showed up as "looks like Chrome crashed," stuck
+            // until the user force-stopped and relaunched. Recreating the Activity rebuilds
+            // the WebView from scratch and reloads the channel instead of leaving a dead page.
+            override fun onRenderProcessGone(
+                view: WebView,
+                detail: android.webkit.RenderProcessGoneDetail
+            ): Boolean {
+                android.util.Log.w(
+                    "GrindhouseWeb",
+                    "WebView render process gone (didCrash=${detail.didCrash()}) — recreating"
+                )
+                webView.destroy()
+                recreate()
+                return true
+            }
         }
 
         webView.webChromeClient = object : WebChromeClient() {

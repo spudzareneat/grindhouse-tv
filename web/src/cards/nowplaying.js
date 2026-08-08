@@ -200,15 +200,16 @@ export function showNowPlayingCard(data, opts = {}) {
     }
 
     // Reveal a long synopsis by gliding to its bottom after a few seconds.
-    const revealMs = _autoScrollOverview();
+    _autoScrollOverview();
 
     clearTimeout(_npHideTimer);
     if (opts.autoHide) {
-        // Only auto-hide if the video is actually playing
-        const v = document.querySelector('#videowrap video');
-        const playing = v && !v.paused;
-        // Stay up long enough to finish revealing a long description (+ a tail to read it).
-        if (playing || !v) _npHideTimer = setTimeout(hideNowPlayingCard, Math.max(7000, revealMs + 2500));
+        // Fixed 20s dismiss for the new-movie announcement card. (Previously this waited
+        // on the video's paused state and could skip arming the timer entirely if the
+        // player happened to be paused/buffering right as the card appeared, leaving the
+        // card stuck on screen until manually dismissed -- a flat timer always fires.
+        // 20s comfortably covers the synopsis auto-scroll, whose longest reveal is ~18s.)
+        _npHideTimer = setTimeout(hideNowPlayingCard, 20000);
     }
 }
 
