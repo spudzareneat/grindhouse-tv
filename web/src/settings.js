@@ -14,6 +14,7 @@ import {
 } from './chat/modes.js';
 import { initDesyncButton, addFloatingButtons, addCastButton } from './chrome/buttons.js';
 import { usernameToColor } from './usercolors.js';
+import { getExternalUserEmoji } from './useremoji.js';
 import { nativeHttpGet } from './native.js';
 import { initPhoneKeyboard } from './chat/keyboard.js';
 import { renderQrToCanvas } from './vendor/qr.js';
@@ -32,6 +33,7 @@ import { initMediaWatcher } from './player/resync.js';
 import { openExternalUrl } from './player/drm.js';
 import { getMovieLeadSec, setMovieLeadSec, initMovieLeadOffset, MOVIE_LEAD_MIN, MOVIE_LEAD_MAX } from './player/leadtime.js';
 import { startImageEmbedObserver } from './chat/imageembed.js';
+import { initChannelScriptAutoApprove } from './channelscript.js';
 import baseCss from './styles/base.css';
 import overlaysCss from './styles/overlays.css';
 import tvCss from './styles/tv.css';
@@ -430,7 +432,14 @@ import tvCss from './styles/tv.css';
             if (!cls) return;
             const u = cls.replace('chat-msg-', '');
             const span = el.querySelector('.username');
-            if (span) { span.style.color = usernameToColor(u); span.style.fontWeight = '700'; }
+            if (span) {
+                span.style.color = usernameToColor(u);
+                span.style.fontWeight = '700';
+                // data attribute + CSS ::before, not textContent, so autocomplete/mention
+                // matching (which reads the raw name) is unaffected.
+                const emoji = getExternalUserEmoji(u);
+                if (emoji) span.dataset.emoji = emoji;
+            }
             el.classList.toggle('sc-own-msg', !!(window.CLIENT && CLIENT.name && u === CLIENT.name));
         });
     }
@@ -1048,6 +1057,7 @@ import tvCss from './styles/tv.css';
     }
 
 
+    initChannelScriptAutoApprove();
     waitForBody();
 
     /* ==========================================================

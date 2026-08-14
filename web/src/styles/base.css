@@ -685,6 +685,9 @@
                 overflow-wrap: anywhere !important; word-break: break-word !important;
                 max-width: 100% !important;
             }
+            #messagebuffer .username[data-emoji]::before {
+                content: attr(data-emoji) " ";
+            }
             #messagebuffer .sc-own-msg {
                 background: rgba(125, 200, 255, 0.07) !important;
                 margin: 0 -4px !important; padding: 1px 4px !important;

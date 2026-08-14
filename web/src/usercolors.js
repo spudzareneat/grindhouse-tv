@@ -10,8 +10,6 @@ export function hashString(str) {
     return Math.abs(h);
 }
 export function usernameToColor(u) {
-    // Your own name is always a fixed baby blue so it stands out at a glance.
-    try { if (window.CLIENT && CLIENT.name && u === CLIENT.name) return 'hsl(197, 90%, 78%)'; } catch (e) {}
     // Golden-angle stepping (×137.508°) spreads hues as far apart as possible, so
     // distinct usernames get visibly distinct colors instead of clustering.
     const hue = (hashString(u) * 137.508) % 360;
