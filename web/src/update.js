@@ -17,14 +17,29 @@ export function _appVersion() {
     try { if (window.CytubeNative && CytubeNative.appVersion) return String(CytubeNative.appVersion() || ''); } catch (e) {}
     return '';
 }
-// Pull the leading numeric X.Y.Z out of a version/tag string ("v2.6", "2.5-cast-exp-debug").
+// Pull the leading numeric X.Y.Z out of a version/tag string ("v2.6", "2.5-cast-exp-debug"),
+// plus a prerelease stage/number ("3.0-beta17" -> [3, 0, 0, 0, 17], "3.0-rc1" -> [3, 0, 0, 1, 1],
+// "3.0" -> [3, 0, 0, 2, 0]). Stage orders beta < rc < final so e.g. "3.0-rc1" outranks every beta
+// of 3.0 but a plain "3.0" still outranks the rc.
 function _verTuple(s) {
-    const m = String(s || '').match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
-    return m ? [(+m[1] || 0), (+m[2] || 0), (+m[3] || 0)] : [0, 0, 0];
+    const str = String(s || '');
+    const m = str.match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+    const beta = str.match(/beta\.?(\d+)/i);
+    const rc = str.match(/\brc\.?(\d+)/i);
+    let stage = 2, num = 0;
+    if (beta) { stage = 0; num = +beta[1] || 0; }
+    else if (rc) { stage = 1; num = +rc[1] || 0; }
+    return [
+        m ? (+m[1] || 0) : 0,
+        m ? (+m[2] || 0) : 0,
+        m ? (+m[3] || 0) : 0,
+        stage,
+        num,
+    ];
 }
-function _verNewer(a, b) { // true if a is strictly newer than b
+export function _verNewer(a, b) { // true if a is strictly newer than b
     const x = _verTuple(a), y = _verTuple(b);
-    for (let i = 0; i < 3; i++) { if (x[i] !== y[i]) return x[i] > y[i]; }
+    for (let i = 0; i < 5; i++) { if (x[i] !== y[i]) return x[i] > y[i]; }
     return false;
 }
 // Pick the release's installable APK out of its GitHub asset list (every Grindhouse

@@ -686,7 +686,13 @@
                 max-width: 100% !important;
             }
             #messagebuffer .username[data-emoji]::before {
-                content: attr(data-emoji) " ";
+                content: attr(data-emoji);
+                display: inline-block;
+                width: 1.3em;
+                text-align: center;
+                vertical-align: -0.1em;
+                line-height: 1;
+                margin-right: 2px;
             }
             #messagebuffer .sc-own-msg {
                 background: rgba(125, 200, 255, 0.07) !important;
