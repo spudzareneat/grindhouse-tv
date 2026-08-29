@@ -1,9 +1,10 @@
 import { isTv } from '../tvdetect.js';
 import { chromeState } from '../chrome/state.js';
 import { getChatFontSize, applyChatFontSize } from './fontsize.js';
-import { holdScrubber } from '../player/scrubber.js';
+import { holdScrubber, neutralizeVjsInactivityTimer } from '../player/scrubber.js';
 import { onSocket } from '../socket.js';
 import { getSetting } from '../settings/schema.js';
+import { refreshSubtitles } from '../cards/subtitles.js';
 
 /* ==========================================================
    CINEMATIC + CHAT ENHANCEMENTS
@@ -48,32 +49,61 @@ export function initAmbientGlow() {
     setInterval(sample, 2500);
 }
 
-// ── Auto-hiding chrome on TV: fade controls after a few idle seconds
+// ── Auto-hiding chrome: fade controls after a few idle seconds. TV always; phones only in
+// vertical mode, where the settings/desync/chatmode cluster shares the video's own scrubber
+// row (tv.css) and must fade in lockstep with it -- see the neutralizeVjsInactivityTimer
+// comment below for why a single shared timer is needed instead of two independent ones.
 export function initChromeAutohide() {
-    if (!isTv) return;
+    if (!isTv && !document.body.classList.contains('sc-vertical')) return;
+
+    // video.js runs its own ~2s inactivity timer independently of this function's own
+    // idle timer below -- without neutralizing it, the scrubber could visibly fade out
+    // before the docked settings/desync/chatmode buttons do, since only this function's
+    // sc-chrome-hidden class drives those. Retried for the current player instance (may
+    // not exist yet at boot) and re-applied on every changeMedia (a new player instance
+    // per raw/Drive media change resets the option to its default).
+    let neutralizeAttempts = 0;
+    const tryNeutralize = () => {
+        neutralizeVjsInactivityTimer();
+        if (!(window.PLAYER && window.PLAYER.player) && neutralizeAttempts++ < 20) setTimeout(tryNeutralize, 500);
+    };
+    tryNeutralize();
+    onSocket('changeMedia', neutralizeVjsInactivityTimer);
+
     let timer = null;
-    const hide = () => document.body.classList.add('sc-chrome-hidden');
+    // While pinned, the idle timer is fully suspended -- hide() no-ops and show() won't rearm
+    // it. Used by titleinject.js's new-movie stats toast (kill count/parent guide/last aired)
+    // so the scrubber doesn't fade on its own separate idle timer while that's still up; they
+    // read as one announcement and should disappear together (see chromeState.pinChromeVisible/
+    // unpinChromeVisible below).
+    let pinned = false;
+    const hide = () => { if (!pinned) document.body.classList.add('sc-chrome-hidden'); };
     const show = () => {
         document.body.classList.remove('sc-chrome-hidden');
         if (typeof chromeState.topBarWake === 'function') chromeState.topBarWake();
         clearTimeout(timer);
-        timer = setTimeout(hide, 4000);
+        if (!pinned) timer = setTimeout(hide, 4000);
     };
     ['mousemove', 'keydown', 'click', 'touchstart', 'wheel'].forEach(ev =>
         document.addEventListener(ev, show, { passive: true }));
     // Remote D-pad keys are consumed by native and never fire DOM keydown, so the
     // TV nav code re-arms this timer directly via chromeState.chromeWake on every remote press.
     chromeState.chromeWake = show;
+    chromeState.pinChromeVisible = () => { pinned = true; clearTimeout(timer); show(); };
+    // Fades immediately rather than letting a fresh 4s countdown start -- the whole point is
+    // syncing with whatever just finished (the stats toast), not merely resuming normal idle
+    // behavior a few seconds later.
+    chromeState.unpinChromeVisible = () => { pinned = false; clearTimeout(timer); hide(); };
     timer = setTimeout(hide, 4000);
 }
 
-// ── Chat layout modes: sidebar → overlay → hidden
+// ── Chat layout modes: sidebar → overlay → subtitles → hidden
 // Chat-Only is a phone/tablet mode (a keyboard-free chat client) — not offered on TV,
 // where the device is the playback target. Excluding it here drops it from the cycle and
 // makes initChatModes fall back if 'chatonly' was ever persisted on a TV.
-const _CHAT_MODES = isTv ? ['sidebar', 'overlay', 'hidden'] : ['sidebar', 'overlay', 'hidden', 'chatonly'];
-const _CHAT_MODE_ICONS = { sidebar: '▐', overlay: '▣', hidden: '⊠', chatonly: '☰' };
-const _CHAT_MODE_LABELS = { sidebar: 'Sidebar', overlay: 'Overlay', hidden: 'Hidden', chatonly: 'Chat Only' };
+const _CHAT_MODES = isTv ? ['sidebar', 'overlay', 'subtitles', 'hidden'] : ['sidebar', 'overlay', 'subtitles', 'hidden', 'chatonly'];
+const _CHAT_MODE_ICONS = { sidebar: '▐', overlay: '▣', hidden: '⊠', subtitles: '💬', chatonly: '☰' };
+const _CHAT_MODE_LABELS = { sidebar: 'Sidebar', overlay: 'Overlay', hidden: 'Hidden', subtitles: 'Subtitles', chatonly: 'Chat Only' };
 
 // CHAT-ONLY side effects: pause + mute the player so the device is a pure chat client.
 // CyTube's sync conductor keeps trying to resume/seek, so we hold the media down —
@@ -124,6 +154,12 @@ function applyChatMode(mode) {
     _CHAT_MODES.forEach(m => document.body.classList.toggle('sc-chat-' + m, m === mode));
     try { localStorage.setItem('sc_chat_mode', mode); } catch (e) {}
     if (mode === 'chatonly') enterChatOnly(); else exitChatOnly();
+    // Toggling the body class alone doesn't retroactively populate the pill container --
+    // it's only ever filled by the MutationObserver reacting to a NEW message
+    // (startSubtitlesObserver, cards/subtitles.js). Force one render on entry so switching
+    // into this mode immediately shows the last few messages instead of an empty overlay
+    // until the next chat line arrives.
+    if (mode === 'subtitles') refreshSubtitles();
     const btn = document.getElementById('sc-chatmode-btn');
     if (btn) {
         btn.textContent = _CHAT_MODE_ICONS[mode] || '▐';
@@ -131,8 +167,6 @@ function applyChatMode(mode) {
         btn.title = 'Chat: ' + label + ' (press C)';
         btn.dataset.tvLabel = 'Chat: ' + label;
     }
-    const colBtn = document.getElementById('sc-chat-collapse-btn');
-    if (colBtn) colBtn.textContent = mode === 'hidden' ? '‹' : '›';
     applyChatFontSize(getChatFontSize()); // input size depends on the mode (overlay = compact)
     // The layout reflows on a mode change, which loses the scroll position —
     // snap the chat back to the latest message once it settles.

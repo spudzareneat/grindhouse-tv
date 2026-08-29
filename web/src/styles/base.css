@@ -21,7 +21,7 @@
                 cursor: pointer !important;
             }
             body.sc-vertical #sc-video-tap { width: 100vw !important; height: 55vh !important; }
-            body.sc-chat-hidden #sc-video-tap { width: 100vw !important; height: 100vh !important; }
+            body.sc-chat-hidden #sc-video-tap, body.sc-chat-subtitles #sc-video-tap { width: 100vw !important; height: 100vh !important; }
             body.sc-chat-overlay.sc-horizontal #sc-video-tap { width: 100vw !important; }
             body.sc-video-dimmed #sc-video-tap { pointer-events: auto !important; }
             #resize-video-smaller, #resize-video-larger { display: none !important; }
@@ -116,15 +116,19 @@
                 align-items: center !important;
                 gap: 6px !important;
             }
-            body.sc-vertical #videowrap-header .pull-left {
+            /* CyTube's title wrapper is #currenttitle on some rooms/skins and .pull-left on
+               others -- titleinject.js's triggerTitleInject() already tries both selectors
+               for that reason (see its own comment). Missing #currenttitle here meant the
+               title never got flex-grow on this room, so it sat at its own narrow content
+               width and #sc-poster-toggle/#sc-up-next-btn just trailed immediately after it
+               instead of being pushed to the header's right edge. */
+            body.sc-vertical #videowrap-header .pull-left,
+            body.sc-vertical #videowrap-header #currenttitle {
                 flex: 1 1 auto !important;
                 min-width: 0 !important;
                 overflow: hidden !important;
                 text-overflow: ellipsis !important;
                 white-space: nowrap !important;
-            }
-            body.sc-vertical #sc-movie-links {
-                flex-shrink: 0 !important;
             }
             /* Title bar dims text but keeps its solid background */
             body.sc-vertical #videowrap-header.sc-bar-dim {
@@ -161,9 +165,8 @@
                 padding: 0 12px !important;
                 border: none !important; box-shadow: none !important;
             }
-            /* Collapse button not needed in vertical — chatmode btn in band handles it */
-            body.sc-vertical #sc-chat-collapse-btn { display: none !important; }
-            #sc-usercount-btn, #sc-poll-btn {
+            #sc-usercount-btn { display: flex !important; align-items: center !important; }
+            .sc-usercount-part, #sc-poll-btn {
                 background: transparent !important;
                 border: none !important;
                 font-size: 10px !important;
@@ -177,7 +180,8 @@
                 transition: color 0.2s !important;
                 line-height: 28px !important;
             }
-            body.sc-vertical #sc-usercount-btn,
+            .sc-usercount-part { margin: 0 3px !important; }
+            body.sc-vertical .sc-usercount-part,
             body.sc-vertical #sc-poll-btn {
                 line-height: 44px !important;
                 height: 44px !important;
@@ -185,23 +189,9 @@
                 -webkit-appearance: none !important;
                 appearance: none !important;
             }
-            #sc-usercount-btn:hover, #sc-poll-btn:hover { color: rgba(255,255,255,0.9) !important; }
-            #sc-usercount-btn.sc-users-active,
+            .sc-usercount-part:hover, #sc-poll-btn:hover { color: rgba(255,255,255,0.9) !important; }
+            .sc-usercount-part.sc-users-active,
             #sc-poll-btn.sc-poll-btn-active { color: white !important; }
-
-            /* Collapse/cycle button — far right of chat header */
-            #sc-chat-collapse-btn {
-                background: none !important; border: none !important;
-                color: rgba(255,255,255,0.4) !important;
-                font-size: 18px !important; font-weight: 300 !important;
-                cursor: pointer !important; padding: 0 4px !important;
-                line-height: 1 !important; margin-left: auto !important;
-                order: 999 !important; flex-shrink: 0 !important;
-                transition: color 0.2s !important;
-                -webkit-tap-highlight-color: transparent !important;
-            }
-            #sc-chat-collapse-btn:hover { color: rgba(255,255,255,0.9) !important; }
-            body.sc-tv #sc-chat-collapse-btn { font-size: 26px !important; padding: 0 6px !important; }
 
             /* Users panel — drops down from usercount, same style as poll panel */
             #sc-users-panel {
@@ -248,6 +238,17 @@
                 overflow: hidden !important;
                 text-overflow: ellipsis !important;
             }
+            .sc-users-panel-name.sc-users-panel-afk {
+                opacity: 0.55 !important;
+                font-style: italic !important;
+            }
+            /* Same fixed-width emoji slot as #messagebuffer .username[data-emoji]::before */
+            .sc-users-panel-emoji {
+                display: inline-block !important;
+                width: 1.3em !important;
+                margin-right: 0.15em !important;
+                text-align: center !important;
+            }
 
             #videowrap-header .pull-left > span:first-child,
             #videowrap-header .label,
@@ -271,8 +272,16 @@
             /* Pull the control bar out of embed-responsive's constrained box
                and pin it as a fixed element flush to the bottom of the screen.
                Right edge stops just before the settings button. */
-            /* ===== VIDEO.JS CONTROL BAR — pill style matching our UI buttons ===== */
-            .video-js .vjs-control-bar {
+            /* ===== VIDEO.JS CONTROL BAR — pill style matching our UI buttons =====
+               #sc-yt-scrubber (player/ytscrubber.js) shares every one of this bar's
+               positioning rules throughout this file and tv.css -- added directly to
+               each selector list rather than duplicated as parallel rules, so the two
+               can never drift out of sync. It's YouTube's own equivalent: video.js
+               never runs for YouTube media (a raw iframe, no .vjs-control-bar at all),
+               so without this a YouTube-playing room showed no scrubber whatsoever
+               while every other media type did. Read-only (no seek) -- see that file's
+               own header comment for why. */
+            .video-js .vjs-control-bar, #sc-yt-scrubber {
                 position: fixed !important;
                 bottom: 4px !important;
                 left: 4px !important;
@@ -289,15 +298,34 @@
                 align-items: center !important;
                 backdrop-filter: blur(4px) !important;
             }
-            body.sc-vertical .video-js .vjs-control-bar {
-                /* Sit at the bottom of the video (just above the chat header),
-                   not pinned to the screen bottom where it would land over chat.
-                   The video's bottom edge is --sc-split vh from the TOP, i.e.
-                   (100 - --sc-split) vh from the BOTTOM — this is a bottom offset,
-                   so it must use the complement, not --sc-split directly. */
-                bottom: calc((100 - var(--sc-split, 50)) * 1vh + 4px) !important;
-                right: 4px !important;
-                left: 4px !important;
+            /* Vertical-mode positioning (bottom/left/right) for this bar lives in tv.css --
+               it also reserves room for the docked settings/desync/chatmode cluster and
+               fades the bar in sync with them, so keeping one copy avoids the two drifting
+               out of sync (see tv.css's own comment there). */
+
+            /* Free-watch (desync) position readout — "elapsed / total" + "N behind live",
+               shown only while desynced (player/seekhud.js). Echoes the control bar's own
+               pill styling, docked just above it. */
+            #sc-seek-hud {
+                position: fixed !important;
+                bottom: 40px !important; left: 4px !important;
+                z-index: 10001 !important;
+                display: none;
+                align-items: center !important;
+                gap: 8px !important;
+                padding: 4px 10px !important;
+                background: rgba(255,255,255,0.08) !important;
+                border-radius: 999px !important;
+                backdrop-filter: blur(4px) !important;
+                font-size: 12px !important;
+                color: rgba(255,255,255,0.75) !important;
+                font-variant-numeric: tabular-nums !important;
+            }
+            /* Echoes #sc-desync-btn.sc-desync-active's own amber (below) so the HUD visibly
+               matches the desync-active button's color language. */
+            #sc-seek-hud-live { color: #ffcc44 !important; }
+            body.sc-vertical #sc-seek-hud {
+                bottom: calc((100 - var(--sc-split, 50)) * 1vh + 40px) !important;
             }
 
             /* Individual control buttons — match pill button style */
@@ -336,6 +364,24 @@
                 background: rgba(255,255,255,0.1) !important;
                 border-radius: 999px !important;
             }
+
+            /* #sc-yt-scrubber's own internals -- styled to match .vjs-progress-holder/
+               .vjs-play-progress exactly (see player/ytscrubber.js). */
+            #sc-yt-scrubber-elapsed, #sc-yt-scrubber-remain {
+                font-size: 12px !important; color: rgba(255,255,255,0.75) !important;
+                font-variant-numeric: tabular-nums !important; flex-shrink: 0 !important;
+                line-height: 1 !important;
+            }
+            #sc-yt-scrubber-track {
+                flex: 1 1 auto !important; height: 4px !important; margin: 0 8px !important;
+                background: rgba(255,255,255,0.15) !important; border-radius: 999px !important;
+                overflow: hidden !important;
+            }
+            #sc-yt-scrubber-fill {
+                height: 100% !important; width: 0% !important;
+                background: rgba(255,255,255,0.75) !important; border-radius: 999px !important;
+            }
+            body.sc-tv #sc-yt-scrubber-elapsed, body.sc-tv #sc-yt-scrubber-remain { font-size: 15px !important; }
 
             /* Volume slider */
             .video-js .vjs-volume-bar {
@@ -436,14 +482,14 @@
                 body.sc-vertical #videowrap-header {
                     padding-right: max(16px, env(safe-area-inset-right, 0px)) !important;
                 }
-                /* Narrow phones: Coming Attractions and Trivia shrink to icon-only tap
+                /* Narrow phones: Coming Attractions and Up Next shrink to icon-only tap
                    targets so they never compete with the title for space. Real
                    textContent stays as the accessible label/tooltip source (title=
                    attribute); the emoji is a ::before so no JS change is needed here.
                    Tablet-width portrait (outside this media query) keeps the text
                    labels — there's room and this bug is phone-specific. */
                 body.sc-vertical #sc-poster-toggle,
-                body.sc-vertical #sc-trivia-btn {
+                body.sc-vertical #sc-up-next-btn {
                     width: 32px !important;
                     height: 32px !important;
                     padding: 0 !important;
@@ -454,35 +500,9 @@
                    platform's color-emoji font, not a text glyph) — grayscale() is
                    the only way to make them match the header's muted gray chrome. */
                 body.sc-vertical #sc-poster-toggle::before { content: "🍿" !important; font-size: 18px !important; filter: grayscale(1) !important; }
-                body.sc-vertical #sc-trivia-btn::before { content: "💡" !important; font-size: 18px !important; filter: grayscale(1) !important; }
+                body.sc-vertical #sc-up-next-btn::before { content: "⏭" !important; font-size: 18px !important; filter: grayscale(1) !important; }
             }
 
-            /* ===== MOVIE LINKS ===== */
-            #sc-movie-links {
-                display: inline-flex !important;
-                gap: 3px !important;
-                margin-left: 8px !important;
-                vertical-align: middle !important;
-            }
-            /* Dim: override inline background with transparent, fade text to ghost */
-            #sc-movie-links.sc-bar-dim .sc-movie-link {
-                background: transparent !important;
-                color: rgba(255,255,255,0.3) !important;
-                box-shadow: inset 0 0 0 1px rgba(255,255,255,0.15) !important;
-            }
-            .sc-movie-link {
-                display: inline-flex !important;
-                align-items: center !important; justify-content: center !important;
-                width: 17px !important; height: 17px !important;
-                border-radius: 3px !important;
-                font-size: 10px !important; font-weight: 900 !important;
-                text-decoration: none !important;
-                line-height: 1 !important; font-family: Georgia, serif !important;
-                flex-shrink: 0 !important; cursor: pointer !important;
-                transition: background 2s ease, color 2s ease, box-shadow 2s ease, filter 0.2s ease !important;
-            }
-            .sc-movie-link:hover { filter: brightness(1.3) !important; }
-            .sc-movie-loading { font-size: 11px !important; color: rgba(255,255,255,0.3) !important; margin-left: 6px !important; }
             /* Stats bar — floats over bottom-left of video, auto-hides after 12s */
             #sc-movie-stats {
                 position: fixed !important;
@@ -503,6 +523,15 @@
             @keyframes sc-stats-fadein {
                 from { opacity: 0; transform: translateY(6px); }
                 to   { opacity: 1; transform: translateY(0); }
+            }
+            /* Vertical: the base bottom:40px is measured from the whole viewport, which in the
+               portrait video/chat split lands down near the chat panel, not over the video where
+               it reads as "movie info". Anchor it to the video's own bottom edge instead, same
+               offset as #sc-seek-hud (40px above the seam) so it clears the scrubber row's own
+               controls (tv.css) rather than sitting on top of them. */
+            body.sc-vertical #sc-movie-stats {
+                bottom: calc((100 - var(--sc-split, 50)) * 1vh + 40px) !important;
+                left: 12px !important;
             }
 
 
@@ -531,15 +560,6 @@
                 color: #ffcc44 !important;
                 background: rgba(255,200,50,0.18) !important;
             }
-            body.sc-horizontal #sc-desync-btn {
-                bottom: 6px !important;
-                right: calc(20vw + 38px) !important;
-            }
-            body.sc-vertical #sc-desync-btn {
-                bottom: 43vh !important;
-                right: 46px !important;
-            }
-
             #fs-toggle-btn {
                 position: fixed !important;
                 z-index: 20002 !important;
@@ -728,6 +748,19 @@
                 line-height: 1 !important;
             }
             .sc-img-embed-toggle:hover { opacity: 1 !important; }
+            .sc-img-embed-ban {
+                cursor: pointer !important;
+                font-size: 11px !important;
+                opacity: 0.6 !important;
+                line-height: 1 !important;
+            }
+            .sc-img-embed-ban:hover { opacity: 1 !important; }
+            .sc-img-embed-unban {
+                cursor: pointer !important;
+                opacity: 0.7 !important;
+                text-decoration: underline !important;
+            }
+            .sc-img-embed-unban:hover { opacity: 1 !important; }
             #sc-chat-textarea {
                 width: 100% !important; min-height: 44px !important; max-height: 120px !important;
                 background: rgba(255,255,255,0.1) !important; color: white !important;

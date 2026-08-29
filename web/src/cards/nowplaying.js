@@ -1,7 +1,8 @@
 import { getCurrentMediaSeconds, getCurrentPlaybackSeconds, formatHMS } from '../mediatime.js';
-import { movieState } from '../metadata/tmdb.js';
+import { movieState, LINK_DEFS } from '../metadata/tmdb.js';
 import { isTv } from '../tvdetect.js';
 import { showTriviaCard, toggleTriviaCard } from './trivia.js';
+import { getLastAired } from '../metadata/lastaired.js';
 
 /* ==========================================================
    NOW-PLAYING HERO CARD (cinematic shell)
@@ -56,9 +57,11 @@ function _renderNpProgress() {
     }
 }
 
-// Currently TV-only so the tuned mobile layout is untouched.
-// Flip to `true` to enable the card on phones too.
-export function _npCardEnabled() { return isTv; }
+// Enabled on all devices — the mobile (vertical/horizontal) layout renders correctly, and this
+// card is the only place parent-guide/kill-count/last-aired info surfaces without a manual tap
+// (2026-08-28: was TV-only under the assumption the mobile layout needed tuning first; verified
+// on-device that it doesn't).
+export function _npCardEnabled() { return true; }
 
 // #sc-np-title's base size differs by layout (tv.css sets 44px default / 60px TV / 30px
 // vertical) -- shrink it proportionally for long titles so a wordy one wraps to fewer lines
@@ -134,11 +137,19 @@ export function showNowPlayingCard(data, opts = {}) {
                             <span id="sc-np-prog-total">0:00</span>
                         </div>
                     </div>
+                    <div id="sc-np-actions">
+                        <div id="sc-np-links"></div>
+                        <button id="sc-np-trivia-btn" type="button">Trivia</button>
+                    </div>
                 </div>
             </div>`;
         document.body.appendChild(card);
         // Tapping/clicking the card dismisses it
         card.addEventListener('click', hideNowPlayingCard);
+        card.querySelector('#sc-np-trivia-btn').addEventListener('click', (e) => {
+            e.stopPropagation(); // don't let it bubble to the card's own click-to-dismiss handler
+            showTriviaCard();
+        });
     }
 
     const title  = data.cleanTitle || movieState.lastMovieTitle || '';
@@ -159,6 +170,43 @@ export function showNowPlayingCard(data, opts = {}) {
     const eyebrow = card.querySelector('#sc-np-eyebrow');
     eyebrow.style.display = opts.showProgress !== false ? '' : 'none';
 
+    // Trivia is keyed off the actual now-playing item's IMDb id (npState.data), never the
+    // `data` this card happens to be rendering -- showTriviaCard() always reads
+    // npState.data.imdbId itself, so a lineup-item preview with its own imdbId must still hide
+    // this button, or clicking it would show trivia for whatever's really airing instead.
+    const triviaBtn = card.querySelector('#sc-np-trivia-btn');
+    const showTrivia = opts.showProgress !== false && !!(npState.data && npState.data.imdbId);
+    triviaBtn.style.display = showTrivia ? '' : 'none';
+
+    // IMDb/Letterboxd/Wikipedia links -- phone/tablet only, never on TV (2026-08-28: was a
+    // user setting, now just hardcoded by device -- a TV remote has no real use for a link
+    // that hands off to another app).
+    const linksRow = card.querySelector('#sc-np-links');
+    linksRow.innerHTML = '';
+    if (!isTv && data.links) {
+        LINK_DEFS.forEach(({ key, label, color, fg, char }) => {
+            const url = data.links[key];
+            if (!url) return;
+            const a = document.createElement('a');
+            a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+            a.title = `${label}: "${title}"`;
+            a.className = 'sc-np-link';
+            a.style.background = color;
+            a.style.color = fg;
+            a.textContent = char;
+            // Same native hand-off as the title-row badges (titleinject.js) -- opens in the
+            // IMDb/Letterboxd/Wikipedia app if installed, instead of inside this WebView.
+            a.addEventListener('click', (e) => {
+                e.stopPropagation(); // don't let it bubble to the card's own click-to-dismiss handler
+                if (window.CytubeNative && typeof CytubeNative.openInApp === 'function') {
+                    e.preventDefault();
+                    CytubeNative.openInApp(url);
+                }
+            });
+            linksRow.appendChild(a);
+        });
+    }
+
     const titleEl = card.querySelector('#sc-np-title');
     const titleText = title + year;
     titleEl.textContent = titleText;
@@ -169,6 +217,8 @@ export function showNowPlayingCard(data, opts = {}) {
     if (data.rating)  metaParts.push(`⭐ ${data.rating}`);
     if (data.runtime) metaParts.push(`${Math.floor(data.runtime / 60)}h ${data.runtime % 60}m`);
     if (data.genres && data.genres.length) metaParts.push(data.genres.slice(0, 3).join(' · '));
+    const lastAired = getLastAired(title, data.cleanYear);
+    if (lastAired) metaParts.push(`📅 Last aired ${lastAired.dateStr}`);
     meta.textContent = metaParts.join('     ');
 
     // IMDb Parent Guide chips (color-coded by severity) + kill count
@@ -204,12 +254,15 @@ export function showNowPlayingCard(data, opts = {}) {
 
     clearTimeout(_npHideTimer);
     if (opts.autoHide) {
-        // Fixed 20s dismiss for the new-movie announcement card. (Previously this waited
-        // on the video's paused state and could skip arming the timer entirely if the
-        // player happened to be paused/buffering right as the card appeared, leaving the
-        // card stuck on screen until manually dismissed -- a flat timer always fires.
+        // Flat dismiss timer for the new-movie announcement card, default 20s. (Previously
+        // this waited on the video's paused state and could skip arming the timer entirely
+        // if the player happened to be paused/buffering right as the card appeared, leaving
+        // the card stuck on screen until manually dismissed -- a flat timer always fires.
         // 20s comfortably covers the synopsis auto-scroll, whose longest reveal is ~18s.)
-        _npHideTimer = setTimeout(hideNowPlayingCard, 20000);
+        // opts.autoHideMs lets a caller shorten this (titleinject.js uses 10s on phones,
+        // where the card now also auto-announces -- 2026-08-28 -- but a full 20s of a
+        // synopsis nobody's reading yet felt too long for a device usually held, not TV'd).
+        _npHideTimer = setTimeout(hideNowPlayingCard, opts.autoHideMs || 20000);
     }
 }
 
@@ -241,25 +294,6 @@ export function initNowPlayingWatcher() {
         if (e.key === 'i' || e.key === 'I') toggle();
         else if (e.key === 't' || e.key === 'T') toggleTriviaCard();
     });
-
-    // Click/tap the title bar opens the card; inject a small Trivia button too.
-    const bindTitle = () => {
-        const h = document.getElementById('videowrap-header');
-        if (!h) return;
-        // (The card opens from the title text itself — see #sc-title-text in injectMovieLinks.)
-        // Small "Trivia" button next to the title (only once we have a movie with IMDb id)
-        if (npState.data && npState.data.imdbId && !document.getElementById('sc-trivia-btn')) {
-            const btn = document.createElement('button');
-            btn.id = 'sc-trivia-btn'; btn.type = 'button'; btn.textContent = 'Trivia';
-            btn.addEventListener('click', (e) => { e.stopPropagation(); showTriviaCard(); });
-            // If the top bar is already faded when we (re)create the button, match
-            // that state immediately. Otherwise it pops in at full opacity and only
-            // fades on the next wake→dim cycle — i.e. you'd have to wave the cursor
-            // over it to make it disappear.
-            if (document.body.classList.contains('sc-video-dimmed')) btn.classList.add('sc-bar-dim');
-            h.appendChild(btn);
-        }
-    };
-    bindTitle();
-    new MutationObserver(bindTitle).observe(document.body, { childList: true, subtree: true });
+    // (The card opens from the title text itself — see #sc-title-text in injectMovieLinks.
+    // Trivia now lives inside the card, see the #sc-np-trivia-btn wiring in showNowPlayingCard.)
 }

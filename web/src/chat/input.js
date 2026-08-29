@@ -1,4 +1,5 @@
 import { getChatUsernames } from './usernames.js';
+import { toggleEmotesPanel } from '../cards/emotepicker.js';
 
 /* ==========================================================
    TAB AUTOCOMPLETE
@@ -64,9 +65,12 @@ export function relocateEmoteButton() {
     proxy.dataset.tvLabel = 'Emotes';
     proxy.setAttribute('aria-label', 'Emote Picker');
 
+    // Toggles our own picker panel (cards/emotepicker.js) instead of forwarding to
+    // CyTube's native #emotelist popup -- #emotelistbtn/#emotelist are left
+    // untouched in the DOM, only read from as a data-source fallback.
     proxy.addEventListener('click', e => {
         e.stopPropagation();
-        original.click();
+        toggleEmotesPanel();
     });
 
     // Must go inside the chat input row. If it isn't ready yet, bail and let

@@ -18,6 +18,14 @@
                 width: 36px !important; height: 36px !important; font-size: 15px !important;
                 -webkit-tap-highlight-color: transparent !important;
             }
+            /* #sc-cast-btn already carries its own opacity transition (overlays.css, loaded
+               before this file so it wins there); desync/settings had none anywhere, so they
+               popped instantly on every chrome-hidden toggle while the scrubber and
+               #sc-chatmode-btn (both 0.6s ease) faded smoothly next to them in the same row --
+               same trigger, visibly out of sync. */
+            #sc-desync-btn, #sc-settings-btn {
+                transition: opacity 0.6s ease !important;
+            }
             /* Prevent input zoom on mobile */
             #sc-chat-textarea { font-size: 16px !important; }
 
@@ -32,23 +40,39 @@
             body.sc-vertical #chatwrap       { height: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important; }
             body.sc-vertical #sc-users-panel { bottom: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important; }
             body.sc-vertical #sc-poll-panel  { bottom: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important; }
-            /* Three buttons sit inside the control band — evenly spaced from the right */
-            body.sc-vertical #sc-chatmode-btn {
-                bottom: auto !important; top: calc(var(--sc-split, 50) * 1vh + 4px) !important;
-                right: 8px !important; left: auto !important; transform: none !important;
-                opacity: 1 !important; pointer-events: auto !important;
-            }
-            body.sc-vertical #sc-desync-btn {
-                bottom: auto !important; top: calc(var(--sc-split, 50) * 1vh + 4px) !important;
-                right: 52px !important; left: auto !important;
-                opacity: 1 !important; pointer-events: auto !important;
-            }
+            /* Three buttons sit in the video's own scrubber row (its bottom edge, just above
+               the seam) — same anchor as .vjs-control-bar/#sc-yt-scrubber right below, so they
+               read as an extension of the video's own controls, not the chat header underneath
+               (which lives in the seam band, #sc-vert-ctrl-band, one row down). */
+            /* 32px to match the control bar's own fixed height (base.css), same "extension of
+               the bar" sizing as the horizontal docked row below. */
+            body.sc-vertical #sc-chatmode-btn,
+            body.sc-vertical #sc-desync-btn,
             body.sc-vertical #sc-settings-btn {
-                bottom: auto !important; top: calc(var(--sc-split, 50) * 1vh + 4px) !important;
-                right: 96px !important; left: auto !important;
+                width: 32px !important; height: 32px !important; font-size: 13px !important;
+                top: auto !important; bottom: calc((100 - var(--sc-split, 50)) * 1vh + 4px) !important;
+                left: auto !important; transform: none !important;
                 opacity: 1 !important; pointer-events: auto !important;
             }
-            body.sc-vertical .video-js .vjs-control-bar { bottom: calc((100 - var(--sc-split, 50)) * 1vh + 4px) !important; left: 4px !important; right: 4px !important; }
+            body.sc-vertical #sc-chatmode-btn { right: 8px !important; }
+            body.sc-vertical #sc-desync-btn   { right: 46px !important; }
+            body.sc-vertical #sc-settings-btn { right: 84px !important; }
+            /* Scrubber stops well short of the docked row -- video.js renders its own PiP/cast/
+               quality-menu icons flush against the bar's own right edge (no reservation of
+               their own), so the gap has to clear THOSE, not just the bar's flex-filled
+               progress track. 200px (bare minimum for our 4 buttons -- cast joined the row
+               below, matching the horizontal layout further down) put them close enough to
+               visually read as overlapping. */
+            body.sc-vertical .video-js .vjs-control-bar, body.sc-vertical #sc-yt-scrubber { bottom: calc((100 - var(--sc-split, 50)) * 1vh + 4px) !important; left: 4px !important; right: 200px !important; }
+            /* Fade together with the scrubber on idle (see initChromeAutohide/
+               neutralizeVjsInactivityTimer, chat/modes.js + player/scrubber.js) instead of
+               staying permanently visible while the scrubber fades on its own timer. */
+            body.sc-vertical.sc-chrome-hidden #sc-chatmode-btn,
+            body.sc-vertical.sc-chrome-hidden #sc-desync-btn,
+            body.sc-vertical.sc-chrome-hidden #sc-settings-btn,
+            body.sc-vertical.sc-chrome-hidden #sc-cast-btn {
+                opacity: 0 !important; pointer-events: none !important;
+            }
 
             /* Control band element — dark strip between video and chat; also the drag handle
                for resizing the split (see initVertControlBand). */
@@ -72,33 +96,11 @@
                 pointer-events: none !important;
             }
             body.sc-vertical #sc-vert-ctrl-band.sc-dragging::before { background: rgba(255,255,255,0.5) !important; }
-            /* Right-zone slide drawer — buttons hidden off-screen right, revealed on edge swipe */
-            body.sc-vertical #sc-chatmode-btn,
-            body.sc-vertical #sc-desync-btn,
-            body.sc-vertical #sc-settings-btn {
-                opacity: 0 !important; pointer-events: none !important;
-                transform: translateX(16px) !important;
-                transition: opacity 0.25s ease, transform 0.25s ease !important;
-            }
-            body.sc-vertical.sc-rightzone #sc-chatmode-btn,
-            body.sc-vertical.sc-rightzone #sc-desync-btn,
-            body.sc-vertical.sc-rightzone #sc-settings-btn {
-                opacity: 1 !important; pointer-events: auto !important;
-                transform: translateX(0) !important;
-            }
-            /* Grip — thin pill on the right edge of the control band */
+            /* Grip — thin pill on the right edge of the control band. Used to reveal
+               #sc-cast-btn (initRightZone's sole purpose); cast is docked permanently now
+               (overlays.css), so sc-rightzone no longer controls anything -- nothing left
+               to hint at, so the grip itself stays hidden. */
             #sc-vert-ctrl-grip { display: none !important; }
-            body.sc-vertical #sc-vert-ctrl-grip {
-                display: block !important;
-                position: fixed !important; right: 0 !important; top: calc(var(--sc-split, 50) * 1vh) !important;
-                width: 4px !important; height: 44px !important;
-                background: rgba(255,255,255,0.22) !important;
-                z-index: 10002 !important; cursor: pointer !important;
-                border-radius: 2px 0 0 2px !important;
-                transition: width 0.15s ease, background 0.2s ease !important;
-            }
-            body.sc-vertical #sc-vert-ctrl-grip:active { background: rgba(255,255,255,0.5) !important; width: 6px !important; }
-            body.sc-vertical.sc-rightzone #sc-vert-ctrl-grip { opacity: 0 !important; pointer-events: none !important; }
 
             /* Hide ctrl band, grip, and buttons while keyboard is up */
             body.sc-kb-open.sc-vertical #sc-vert-ctrl-band,
@@ -153,6 +155,7 @@
                 bottom: var(--sc-kb-h) !important;
             }
             /* Lift floating buttons above the keyboard */
+            body.sc-kb-open.sc-horizontal #sc-chatmode-btn,
             body.sc-kb-open.sc-horizontal #sc-desync-btn,
             body.sc-kb-open.sc-horizontal #fs-toggle-btn,
             body.sc-kb-open.sc-horizontal #sc-settings-btn {
@@ -160,50 +163,38 @@
             }
 
             /* ── HORIZONTAL (landscape phone / tablet / TV) ──── */
-            /* Control cluster — vertical stack pinned to the mid-left edge.
-               Hidden until the mouse moves to the left side (sc-leftzone),
-               then revealed and clickable; fades out again afterwards. */
+            /* Control row — docked immediately left of the chat sidebar, in a gap reserved by
+               narrowing the seek bar's own right edge, so the row reads as a genuine extension
+               of it: same 32px height as .vjs-control-bar (base.css), same 4px bottom offset,
+               identical on TV as everywhere else (the bar itself never scales for TV). Always
+               visible -- #sc-cast-btn (mobile-only) joins this row too, see overlays.css. */
             body.sc-horizontal #sc-chatmode-btn,
             body.sc-horizontal #sc-desync-btn,
             body.sc-horizontal #sc-settings-btn {
-                left: 10px !important; right: auto !important; bottom: auto !important;
-                opacity: 0 !important; pointer-events: none !important;
-                transform: translateX(-14px) !important;
-                transition: opacity 0.25s ease, transform 0.25s ease !important;
+                left: auto !important; bottom: 4px !important; top: auto !important;
+                width: 32px !important; height: 32px !important; font-size: 13px !important;
+                opacity: 1 !important; pointer-events: auto !important; transform: none !important;
+                transition: opacity 0.3s ease, transform 0.3s ease !important;
             }
-            /* Slide/fade in when the mouse reaches the left edge (or the grip) */
-            body.sc-horizontal.sc-leftzone #sc-chatmode-btn,
-            body.sc-horizontal.sc-leftzone #sc-desync-btn,
-            body.sc-horizontal.sc-leftzone #sc-settings-btn {
-                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
+            body.sc-horizontal #sc-chatmode-btn { right: calc(19vw + 8px)  !important; }
+            body.sc-horizontal #sc-desync-btn   { right: calc(19vw + 46px) !important; }
+            body.sc-horizontal #sc-settings-btn { right: calc(19vw + 84px) !important; }
+            /* Slide out to the right in sync with the scrubber's own idle fade (same
+               body.sc-chrome-hidden trigger that fades .vjs-control-bar itself, below) --
+               mirrors the desktop userscript's "gap buttons slide out to the right on idle". */
+            body.sc-tv.sc-chrome-hidden #sc-chatmode-btn,
+            body.sc-tv.sc-chrome-hidden #sc-desync-btn,
+            body.sc-tv.sc-chrome-hidden #sc-settings-btn {
+                transform: translateX(60px) !important; opacity: 0 !important; pointer-events: none !important;
             }
 
-            /* Subtle drawer "grip" — the only thing visible until you reach the edge */
+            /* Drawer "grip" — used to reveal the leftzone cluster, but the only thing that
+               ever lived there was #sc-cast-btn, now docked permanently in the row above
+               (overlays.css) instead of hidden behind this. Nothing left to hint at. */
             #sc-cluster-grip { display: none !important; }
-            body.sc-horizontal #sc-cluster-grip {
-                display: block !important;
-                position: fixed !important; left: 0 !important; top: 50% !important;
-                transform: translateY(-50%) !important;
-                width: 5px !important; height: 56px !important;
-                border-radius: 0 4px 4px 0 !important;
-                background: rgba(255,255,255,0.16) !important;
-                z-index: 20049 !important; cursor: pointer !important;
-                transition: background 0.2s ease, width 0.15s ease, opacity 0.25s ease !important;
-            }
-            body.sc-horizontal #sc-cluster-grip:hover { background: rgba(255,255,255,0.5) !important; width: 7px !important; }
-            body.sc-tv.sc-horizontal #sc-cluster-grip { height: 72px !important; width: 6px !important; }
-            /* Hide the grip once the cluster is open */
-            body.sc-leftzone #sc-cluster-grip { opacity: 0 !important; pointer-events: none !important; }
-            /* Vertical positions (44px buttons, 56px pitch) */
-            body.sc-horizontal #sc-chatmode-btn { top: calc(50% - 56px) !important; }
-            body.sc-horizontal #sc-desync-btn   { top: 50% !important; }
-            body.sc-horizontal #sc-settings-btn { top: calc(50% + 56px) !important; }
-            /* TV — bigger buttons, wider pitch */
-            body.sc-tv.sc-horizontal #sc-chatmode-btn { top: calc(50% - 64px) !important; }
-            body.sc-tv.sc-horizontal #sc-desync-btn   { top: 50% !important; }
-            body.sc-tv.sc-horizontal #sc-settings-btn { top: calc(50% + 64px) !important; }
-            /* Seek bar (raw video only) spans the video, stopping at the chat edge */
-            body.sc-horizontal .video-js .vjs-control-bar { left: 4px !important; right: calc(19vw + 12px) !important; }
+            /* Seek bar stops short of the docked row (matching bottom so the row reads as one
+               continuous control strip). Reservation sized for the 32px buttons above. */
+            body.sc-horizontal .video-js .vjs-control-bar, body.sc-horizontal #sc-yt-scrubber { left: 4px !important; right: calc(19vw + 162px) !important; }
 
             /* ── TV: larger text, focus ring on interactive items ─ */
             body.sc-tv #messagebuffer { font-size: 18px !important; }
@@ -218,10 +209,6 @@
             body.sc-tv #messagebuffer .nick-highlight {
                 background: rgba(185, 130, 255, 0.32) !important;
                 border-left: 3px solid rgba(185, 130, 255, 0.95) !important;
-            }
-            body.sc-tv #sc-desync-btn, body.sc-tv #fs-toggle-btn,
-            body.sc-tv #sc-settings-btn {
-                width: 52px !important; height: 52px !important; font-size: 22px !important;
             }
             body.sc-tv :focus { outline: 3px solid rgba(255,255,255,0.8) !important; }
             /* D-pad focus highlight (remote navigation) */
@@ -265,6 +252,12 @@
                 outline: none !important;
                 border-color: rgba(224,112,26,0.85) !important;
                 box-shadow: 0 0 0 1px rgba(224,112,26,0.30), 0 0 20px rgba(224,112,26,0.22) !important;
+            }
+            /* The message log is a large scrollable region -- an outline box around all of it
+               would be visual noise, so focus reads as an inset accent edge instead. */
+            body.sc-tv #messagebuffer.sc-tv-focus {
+                outline: none !important;
+                box-shadow: inset 4px 0 0 #e0701a, inset -4px 0 0 rgba(224,112,26,0.25) !important;
             }
             body.sc-tv #sc-send-btn {
                 width: 50px !important; height: 50px !important; font-size: 20px !important;
@@ -471,6 +464,45 @@
                 font-size: 14px !important; color: rgba(255,255,255,0.85) !important;
             }
             #sc-np-prog-remain { color: rgba(255,255,255,0.6) !important; font-size: 13px !important; }
+            /* Actions row -- links (phone/tablet only, see nowplaying.js) + Trivia, grouped
+               together so both read as the card's "do something" affordances. */
+            #sc-np-actions {
+                display: flex !important; align-items: center !important;
+                gap: 12px !important; flex-wrap: wrap !important;
+                margin-top: 14px !important;
+            }
+            #sc-np-links { display: flex !important; gap: 10px !important; }
+            /* IMDb/Letterboxd/Wikipedia badges -- 48px clears the ~44px minimum comfortable
+               touch target (phone/tablet only; TV never renders these -- see nowplaying.js). */
+            .sc-np-link {
+                display: inline-flex !important; align-items: center !important; justify-content: center !important;
+                width: 48px !important; height: 48px !important;
+                border-radius: 12px !important;
+                font-size: 20px !important; font-weight: 900 !important;
+                text-decoration: none !important;
+                line-height: 1 !important; font-family: Georgia, serif !important;
+                flex-shrink: 0 !important; cursor: pointer !important;
+                box-shadow: 0 4px 14px rgba(0,0,0,0.4) !important;
+                transition: transform 0.15s ease, filter 0.2s ease !important;
+            }
+            .sc-np-link:hover { filter: brightness(1.15) !important; }
+            .sc-np-link:active { transform: scale(0.92) !important; }
+            /* Trivia entry point -- same size/style as .sc-np-link above (they sit in the same
+               #sc-np-actions row) rather than its own bespoke pill. */
+            #sc-np-trivia-btn {
+                display: inline-flex !important; align-items: center !important; justify-content: center !important;
+                height: 48px !important; padding: 0 20px !important;
+                border-radius: 12px !important;
+                font-size: 15px !important; font-weight: 900 !important;
+                color: rgba(255,255,255,0.92) !important;
+                background: rgba(255,255,255,0.14) !important;
+                border: none !important;
+                cursor: pointer !important;
+                box-shadow: 0 4px 14px rgba(0,0,0,0.4) !important;
+                transition: transform 0.15s ease, filter 0.2s ease, background 0.2s ease !important;
+            }
+            #sc-np-trivia-btn:hover { background: rgba(255,255,255,0.22) !important; filter: brightness(1.15) !important; }
+            #sc-np-trivia-btn:active { transform: scale(0.92) !important; }
             body.sc-tv #sc-np-prog-bar { height: 8px !important; }
             body.sc-tv #sc-np-prog-times { font-size: 18px !important; }
             body.sc-tv #sc-np-prog-remain { font-size: 16px !important; }
@@ -495,8 +527,8 @@
             body.sc-tv #sc-np-overview { font-size: 20px !important; }
             body.sc-tv .sc-np-chip { font-size: 16px !important; padding: 7px 16px !important; }
 
-            /* ── TRIVIA LINK (subtle, top-right next to Coming Attractions) + CARD ── */
-            #sc-trivia-btn {
+            /* ── UP NEXT LINK (subtle, top-right next to Coming Attractions) ── */
+            #sc-up-next-btn {
                 position: fixed !important; top: 0 !important;
                 right: calc(20vw + 150px) !important; left: auto !important;
                 z-index: 10003 !important;
@@ -509,17 +541,99 @@
                 opacity: 1 !important; transition: opacity 1.5s ease, color 0.2s ease !important;
                 -webkit-tap-highlight-color: transparent !important;
             }
-            #sc-trivia-btn:hover { color: rgba(255,255,255,0.9) !important; }
-            #sc-trivia-btn.sc-bar-dim { opacity: 0 !important; }
+            #sc-up-next-btn:hover { color: rgba(255,255,255,0.9) !important; }
+            #sc-up-next-btn.sc-bar-dim { opacity: 0 !important; }
             /* Flows in the header's flex row instead of computing its own
                position from the viewport — see the #videowrap-header flex
                rules in base.css. Previously hidden entirely in vertical
                because the old fixed-position math had nowhere to put it. */
-            body.sc-vertical #sc-trivia-btn {
+            body.sc-vertical #sc-up-next-btn {
                 position: static !important;
                 flex-shrink: 0 !important;
             }
-            body.sc-tv #sc-trivia-btn { font-size: 12px !important; }
+            body.sc-tv #sc-up-next-btn { font-size: 12px !important; }
+
+            /* ── UP NEXT CARD — embeds the channel's schedule/queue bot dashboard,
+               matching the desktop userscript's own panel exactly (iframe, not a
+               native reimplementation -- see cards/upnext.js). ─────────────────── */
+            #sc-upnext-card {
+                position: fixed !important;
+                top: 60px !important; right: 8px !important;
+                width: min(760px, calc(100vw - 10px)) !important;
+                height: 70vh !important;
+                z-index: 20800 !important;
+                background: rgba(10,10,20,0.95) !important;
+                border: 1px solid #aaaaaa !important;
+                border-radius: 8px !important;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.7) !important;
+                overflow: hidden !important;
+                opacity: 0 !important; pointer-events: none !important;
+                transition: opacity 0.3s ease !important;
+                display: flex !important; flex-direction: column !important;
+            }
+            #sc-upnext-card.sc-upnext-visible { opacity: 1 !important; pointer-events: auto !important; }
+            body.sc-vertical #sc-upnext-card { right: 5px !important; left: 5px !important; width: auto !important; height: 50vh !important; top: 60px !important; }
+            #sc-upnext-head {
+                display: flex !important; align-items: center !important; justify-content: space-between !important;
+                padding: 8px 12px !important;
+                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+                flex-shrink: 0 !important;
+                font-size: 12px !important; font-weight: 700 !important;
+                letter-spacing: 0.04em !important; text-transform: uppercase !important;
+                color: rgba(255,255,255,0.7) !important;
+            }
+            #sc-upnext-close {
+                background: rgba(255,255,255,0.1) !important; border: none !important; color: #fff !important;
+                width: 24px !important; height: 24px !important; border-radius: 50% !important;
+                cursor: pointer !important; font-size: 11px !important; flex-shrink: 0 !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
+            }
+            #sc-upnext-close:hover { background: rgba(255,255,255,0.2) !important; }
+            /* overflow-x: hidden, not auto -- the zoomed iframe below is sized to fit
+               within 100% width exactly (with a safety margin), so there's nothing to
+               scroll sideways; allowing horizontal scroll here just let content get
+               silently clipped past the right edge with no way back to it. */
+            #sc-upnext-body { flex: 1 !important; min-height: 0 !important; overflow-y: auto !important; overflow-x: hidden !important; }
+            #sc-upnext-body::-webkit-scrollbar { width: 10px !important; }
+            #sc-upnext-body::-webkit-scrollbar-track { background: rgba(255,255,255,0.05) !important; border-radius: 10px !important; margin: 6px 0 !important; }
+            #sc-upnext-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.28) !important; border-radius: 10px !important; border: 2px solid transparent !important; background-clip: padding-box !important; }
+            #sc-upnext-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.45) !important; background-clip: padding-box !important; }
+            body.sc-tv #sc-upnext-body::-webkit-scrollbar { width: 14px !important; }
+            /* Not !important -- cards/upnext.js toggles the iframe's own style.display
+               between 'none' (waiting on load/timeout) and 'block' (once it loads); an
+               !important rule here would always beat that inline style and permanently
+               show a blank frame instead of the loading/error state underneath it. */
+            #sc-upnext-frame { width: 100% !important; height: 100% !important; border: none !important; }
+            .sc-upnext-loading, .sc-upnext-error {
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                height: 100% !important; padding: 20px !important;
+                color: rgba(255,255,255,0.5) !important; font-size: 13px !important; text-align: center !important;
+            }
+            body.sc-tv #sc-upnext-head { font-size: 13px !important; padding: 6px 10px !important; }
+            body.sc-tv #sc-upnext-close { width: 26px !important; height: 26px !important; font-size: 12px !important; }
+            body.sc-tv .sc-upnext-loading, body.sc-tv .sc-upnext-error { font-size: 19px !important; }
+            /* TV: the bot's dashboard is a desktop-sized page (tables/text sized for a
+               monitor an arm's length away) rendered 1:1 in the iframe -- on a big screen
+               that reads as one or two giant rows with everything else needing a scroll
+               most viewers won't think to try. Two fixes together: a much bigger panel
+               (more screen real estate to work with), and `zoom` on the iframe itself to
+               shrink the page's effective rendering so more of the schedule is visible at
+               once without scrolling. `zoom` (not `transform: scale`) is used because it
+               actually reflows the child page at the smaller size instead of just
+               rescaling a rasterized layer, so its own internal proportions/line-wrapping
+               stay sane instead of just shrinking blurrily. The iframe's width/height are
+               scaled up by the inverse of the zoom factor first, since `zoom` shrinks the
+               box's rendered size along with its content -- without the compensation the
+               iframe would visually occupy less than the full panel, leaving empty space
+               around it, instead of filling it while showing more content within it.
+               Width is deliberately UNDER the exact inverse (166.7%) -- #sc-upnext-body now
+               has overflow-x: hidden (no sideways scroll, see above), so any width overrun
+               would silently clip content with no way to reach it; a few percent of unused
+               space on the right is a far better failure mode than that. Height has no such
+               constraint (vertical overflow is the whole point -- that's what the scrollbar
+               is for), so it stays at the exact inverse. */
+            body.sc-tv #sc-upnext-card { width: min(1200px, 94vw) !important; height: 84vh !important; top: 30px !important; }
+            body.sc-tv #sc-upnext-frame { zoom: 0.6 !important; width: 160% !important; height: 166.7% !important; }
 
             #sc-trivia-card {
                 position: fixed !important; inset: 0 !important; z-index: 21800 !important;
@@ -854,16 +968,37 @@
                 margin: 0 !important; background: #000 !important;
             }
             html body.sc-pip #chatwrap, html body.sc-pip #sc-chat-header, html body.sc-pip #sc-ambient,
-            html body.sc-pip #sc-top-bar, html body.sc-pip #videowrap-header, html body.sc-pip #sc-movie-links,
+            html body.sc-pip #sc-top-bar, html body.sc-pip #videowrap-header,
             html body.sc-pip #sc-movie-stats, html body.sc-pip #sc-poster-toggle,
-            html body.sc-pip #sc-trivia-btn, html body.sc-pip #sc-chatmode-btn, html body.sc-pip #sc-cluster-grip,
+            html body.sc-pip #sc-up-next-btn, html body.sc-pip #sc-chatmode-btn, html body.sc-pip #sc-cluster-grip,
             html body.sc-pip #sc-desync-btn, html body.sc-pip #sc-settings-btn,
             html body.sc-pip #sc-users-panel, html body.sc-pip #sc-poll-panel,
-            html body.sc-pip #sc-np-card, html body.sc-pip #sc-trivia-card,
+            html body.sc-pip #sc-np-card, html body.sc-pip #sc-trivia-card, html body.sc-pip #sc-subtitles-overlay,
+            html body.sc-pip #sc-upnext-card, html body.sc-pip #sc-link-pip-panel, html body.sc-pip #sc-link-pip-prompt,
             html body.sc-pip #sc-lineup-screen,
-            html body.sc-pip #sc-mobile-input-row, html body.sc-pip .video-js .vjs-control-bar {
+            html body.sc-pip #sc-mobile-input-row, html body.sc-pip .video-js .vjs-control-bar,
+            html body.sc-pip #sc-yt-scrubber, html body.sc-pip #sc-seek-hud {
                 display: none !important;
             }
+            /* Chat-Only + PiP: the video is deliberately paused/muted/hidden in this mode
+               (see enterChatOnly, chat/modes.js), so the general rule above just leaves a
+               blank window behind the "Paused · Muted" banner -- a movie-shaped PiP window
+               makes no sense here. Show the chat itself instead (read-only -- no room/point
+               typing into a floating PiP window, so the input row stays hidden same as
+               above). Higher specificity than both the general PiP hide-list and chatonly's
+               own #chatwrap rule (2 body classes vs. their 1), so this wins over each. */
+            html body.sc-pip.sc-chat-chatonly #chatwrap {
+                display: flex !important; flex-direction: column !important;
+                position: fixed !important; inset: 0 !important;
+                width: 100vw !important; height: 100vh !important;
+                z-index: 2147483647 !important;
+                background: #0c0a14 !important;
+                padding: 6px !important; box-sizing: border-box !important;
+            }
+            html body.sc-pip.sc-chat-chatonly #messagebuffer {
+                font-size: 11px !important; line-height: 1.3 !important;
+            }
+            html body.sc-pip.sc-chat-chatonly #sc-chatonly-banner { display: none !important; }
 
             /* ── CAST MODE: phone becomes a chat remote with a top control bar ─────
                While casting, the movie plays on the TV, so on the device we hide the
@@ -922,7 +1057,7 @@
             /* Neutralise each relocated control's own fixed positioning / hover-hide so
                they simply flow inside the bar. */
             html body.sc-cast #sc-cast-bar #sc-poster-toggle,
-            html body.sc-cast #sc-cast-bar #sc-trivia-btn,
+            html body.sc-cast #sc-cast-bar #sc-up-next-btn,
             html body.sc-cast #sc-cast-bar #sc-usercount-btn,
             html body.sc-cast #sc-cast-bar #sc-poll-btn,
             html body.sc-cast #sc-cast-bar #sc-settings-btn,
@@ -967,7 +1102,6 @@
             html body.sc-cast #fs-toggle-btn,
             html body.sc-cast #sc-cast-btn,
             html body.sc-cast #sc-top-bar,
-            html body.sc-cast #sc-movie-links,
             html body.sc-cast #sc-movie-stats,
             html body.sc-cast #sc-vert-ctrl-band,
             html body.sc-cast #sc-vert-ctrl-grip {
@@ -975,45 +1109,87 @@
             }
 
             /* ── AUTO-HIDING CHROME (TV) ─────────────────────── */
-            body.sc-tv .video-js .vjs-control-bar { transition: opacity 0.6s ease !important; }
+            body.sc-tv .video-js .vjs-control-bar, body.sc-tv #sc-yt-scrubber, body.sc-tv #sc-seek-hud { transition: opacity 0.6s ease !important; }
             /* The control cluster is governed by the left-edge reveal, not this.
                Here we just fade the seek bar + hide the cursor when idle. */
-            body.sc-tv.sc-chrome-hidden .video-js .vjs-control-bar {
+            body.sc-tv.sc-chrome-hidden .video-js .vjs-control-bar,
+            body.sc-tv.sc-chrome-hidden #sc-yt-scrubber,
+            body.sc-tv.sc-chrome-hidden #sc-seek-hud {
                 opacity: 0 !important; pointer-events: none !important;
             }
+            body.sc-tv #sc-seek-hud { font-size: 15px !important; bottom: 44px !important; }
             body.sc-tv.sc-chrome-hidden { cursor: none !important; }
 
+            /* ── AUTO-HIDING CHROME (vertical phone) ───────────── */
+            /* Same idea as TV above, but here the docked cluster (#sc-chatmode-btn etc.,
+               earlier in this file) shares the row and must fade with it -- see
+               initChromeAutohide's vertical-mode branch (chat/modes.js). */
+            body.sc-vertical .video-js .vjs-control-bar, body.sc-vertical #sc-yt-scrubber, body.sc-vertical #sc-seek-hud { transition: opacity 0.6s ease !important; }
+            body.sc-vertical.sc-chrome-hidden .video-js .vjs-control-bar,
+            body.sc-vertical.sc-chrome-hidden #sc-yt-scrubber,
+            body.sc-vertical.sc-chrome-hidden #sc-seek-hud {
+                opacity: 0 !important; pointer-events: none !important;
+            }
+
             /* ── CHAT LAYOUT MODES ───────────────────────────── */
-            /* Hidden: full-bleed cinema — drop chat AND the title / coming-attractions chrome */
-            body.sc-chat-hidden #chatwrap, body.sc-chat-hidden #sc-chat-header,
-            body.sc-chat-hidden #sc-users-panel, body.sc-chat-hidden #sc-poll-panel,
-            body.sc-chat-hidden #sc-top-bar, body.sc-chat-hidden #videowrap-header,
-            body.sc-chat-hidden #sc-poster-toggle,
-            body.sc-chat-hidden #sc-movie-links { display: none !important; }
-            body.sc-chat-hidden.sc-horizontal #videowrap,
-            body.sc-chat-hidden.sc-horizontal #videowrap .embed-responsive,
-            body.sc-chat-hidden.sc-horizontal #ytapiplayer { width: 100vw !important; }
-            body.sc-chat-hidden.sc-horizontal .video-js .vjs-control-bar { right: 16px !important; }
-            body.sc-chat-hidden.sc-vertical #videowrap,
-            body.sc-chat-hidden.sc-vertical #videowrap .embed-responsive,
-            body.sc-chat-hidden.sc-vertical #ytapiplayer { height: 100vh !important; }
-            /* chat-hidden vertical: suppress the ctrl band (no black bar mid-screen); slide buttons from bottom-right */
-            body.sc-chat-hidden.sc-vertical #sc-vert-ctrl-band { display: none !important; }
-            body.sc-chat-hidden.sc-vertical #sc-vert-ctrl-grip {
+            /* Hidden: full-bleed cinema — drop chat AND the title / coming-attractions chrome.
+               Subtitles shares every one of these rules (it's the same full-bleed layout,
+               just with #sc-subtitles-overlay drawn on top instead of losing chat entirely --
+               see the CHAT-AS-SUBTITLES block further down) -- each selector below lists
+               body.sc-chat-subtitles right alongside body.sc-chat-hidden. */
+            body.sc-chat-hidden #chatwrap, body.sc-chat-subtitles #chatwrap,
+            body.sc-chat-hidden #sc-chat-header, body.sc-chat-subtitles #sc-chat-header,
+            body.sc-chat-hidden #sc-users-panel, body.sc-chat-subtitles #sc-users-panel,
+            body.sc-chat-hidden #sc-poll-panel, body.sc-chat-subtitles #sc-poll-panel,
+            body.sc-chat-hidden #sc-top-bar, body.sc-chat-subtitles #sc-top-bar,
+            body.sc-chat-hidden #videowrap-header, body.sc-chat-subtitles #videowrap-header,
+            body.sc-chat-hidden #sc-poster-toggle, body.sc-chat-subtitles #sc-poster-toggle { display: none !important; }
+            body.sc-chat-hidden.sc-horizontal #videowrap, body.sc-chat-subtitles.sc-horizontal #videowrap,
+            body.sc-chat-hidden.sc-horizontal #videowrap .embed-responsive, body.sc-chat-subtitles.sc-horizontal #videowrap .embed-responsive,
+            body.sc-chat-hidden.sc-horizontal #ytapiplayer, body.sc-chat-subtitles.sc-horizontal #ytapiplayer { width: 100vw !important; }
+            /* Widened from a bare 16px to match the docked button row's own reservation
+               math (base horizontal rule, "19vw + 124px") minus the now-absent chat
+               sidebar's 19vw -- without this the buttons stayed anchored to where the
+               sidebar edge WOULD be and sat directly on top of the (now much wider,
+               chat-less) scrubber instead of docking beside it. */
+            body.sc-chat-hidden.sc-horizontal .video-js .vjs-control-bar, body.sc-chat-subtitles.sc-horizontal .video-js .vjs-control-bar,
+            body.sc-chat-hidden.sc-horizontal #sc-yt-scrubber, body.sc-chat-subtitles.sc-horizontal #sc-yt-scrubber { right: 162px !important; }
+            body.sc-chat-hidden.sc-horizontal #sc-chatmode-btn, body.sc-chat-subtitles.sc-horizontal #sc-chatmode-btn { right: 8px   !important; }
+            body.sc-chat-hidden.sc-horizontal #sc-desync-btn,   body.sc-chat-subtitles.sc-horizontal #sc-desync-btn   { right: 46px  !important; }
+            body.sc-chat-hidden.sc-horizontal #sc-settings-btn, body.sc-chat-subtitles.sc-horizontal #sc-settings-btn { right: 84px  !important; }
+            body.sc-chat-hidden.sc-horizontal #sc-cast-btn,     body.sc-chat-subtitles.sc-horizontal #sc-cast-btn     { right: 122px !important; }
+            body.sc-chat-hidden.sc-vertical #videowrap, body.sc-chat-subtitles.sc-vertical #videowrap,
+            body.sc-chat-hidden.sc-vertical #videowrap .embed-responsive, body.sc-chat-subtitles.sc-vertical #videowrap .embed-responsive,
+            body.sc-chat-hidden.sc-vertical #ytapiplayer, body.sc-chat-subtitles.sc-vertical #ytapiplayer { height: 100vh !important; }
+            /* chat-hidden/subtitles vertical: suppress the ctrl band (no black bar mid-screen); slide buttons from bottom-right */
+            body.sc-chat-hidden.sc-vertical #sc-vert-ctrl-band, body.sc-chat-subtitles.sc-vertical #sc-vert-ctrl-band { display: none !important; }
+            body.sc-chat-hidden.sc-vertical #sc-vert-ctrl-grip,
+            body.sc-chat-subtitles.sc-vertical #sc-vert-ctrl-grip {
                 top: auto !important; bottom: 0 !important;
             }
-            /* The control row sits just ABOVE the bottom scrubber (≈32px tall at bottom:4px)
-               so the two don't overlap; the cast button joins the row (it otherwise floats
-               mid-screen at the --sc-split control-band position). */
+            /* Same row as the scrubber (bottom:4px below), not stacked above it -- the
+               scrubber's own base rule already reserves right:160px for this cluster, so
+               there's no horizontal overlap to dodge by floating the buttons higher. Read as
+               one control strip, and (via #sc-desync-btn/#sc-settings-btn's shared transition
+               above, plus #sc-chatmode-btn's and the scrubber's own) fades with it as one.
+               The cast button joins the row (it otherwise floats mid-screen at the
+               --sc-split control-band position). */
             body.sc-chat-hidden.sc-vertical #sc-chatmode-btn,
+            body.sc-chat-subtitles.sc-vertical #sc-chatmode-btn,
             body.sc-chat-hidden.sc-vertical #sc-desync-btn,
+            body.sc-chat-subtitles.sc-vertical #sc-desync-btn,
             body.sc-chat-hidden.sc-vertical #sc-settings-btn,
-            body.sc-chat-hidden.sc-vertical #sc-cast-btn {
-                top: auto !important; bottom: 48px !important;
+            body.sc-chat-subtitles.sc-vertical #sc-settings-btn,
+            body.sc-chat-hidden.sc-vertical #sc-cast-btn,
+            body.sc-chat-subtitles.sc-vertical #sc-cast-btn {
+                top: auto !important; bottom: 4px !important;
             }
             /* Video-only fills the screen, so the scrubber belongs at the screen bottom —
                not at the --sc-split "above the chat header" spot used when chat is present. */
-            body.sc-chat-hidden.sc-vertical .video-js .vjs-control-bar {
+            body.sc-chat-hidden.sc-vertical .video-js .vjs-control-bar,
+            body.sc-chat-subtitles.sc-vertical .video-js .vjs-control-bar,
+            body.sc-chat-hidden.sc-vertical #sc-yt-scrubber,
+            body.sc-chat-subtitles.sc-vertical #sc-yt-scrubber {
                 bottom: 4px !important;
             }
 
@@ -1027,12 +1203,12 @@
             body.sc-chat-chatonly .video-js,
             body.sc-chat-chatonly .vjs-tech,
             body.sc-chat-chatonly .video-js .vjs-control-bar,
+            body.sc-chat-chatonly #sc-yt-scrubber,
             body.sc-chat-chatonly #sc-top-bar,
             body.sc-chat-chatonly #videowrap-header,
-            body.sc-chat-chatonly #sc-movie-links,
             body.sc-chat-chatonly #sc-movie-stats,
             body.sc-chat-chatonly #sc-poster-toggle,
-            body.sc-chat-chatonly #sc-trivia-btn,
+            body.sc-chat-chatonly #sc-up-next-btn,
             body.sc-chat-chatonly #sc-desync-btn,
             body.sc-chat-chatonly #fs-toggle-btn,
             body.sc-chat-chatonly #sc-cast-btn,
@@ -1040,34 +1216,23 @@
                 display: none !important;
             }
             body.sc-chat-chatonly #sc-cluster-grip { display: none !important; }
-            /* The top header doubles as a control band (like the draggable vertical band, but
-               pinned to the top): a right-edge grip slides the chat-mode + settings buttons
-               out. Reuses the right-zone drawer (right-edge swipe in portrait, or tap the grip). */
-            body.sc-chat-chatonly #sc-vert-ctrl-grip {
-                display: block !important;
-                position: fixed !important; right: 0 !important; top: 0 !important; bottom: auto !important;
-                height: 32px !important; width: 4px !important;
-                border-radius: 2px 0 0 2px !important;
-                background: rgba(255,255,255,0.3) !important;
-                z-index: 10012 !important; cursor: pointer !important;
-            }
-            body.sc-chat-chatonly.sc-rightzone #sc-vert-ctrl-grip { opacity: 0 !important; pointer-events: none !important; }
+            /* No reveal drawer here on purpose -- a gesture-gated escape is exactly what
+               trapped a user in landscape (the swipe only worked in portrait, leaving a
+               near-invisible corner sliver as the only way out). These two buttons are the
+               way out of Chat-Only, so they're permanently visible/tappable in the top header
+               band instead, in both orientations -- same "just dock it, no reveal" pattern
+               the Hidden (video-only) mode already uses successfully above. */
+            body.sc-chat-chatonly #sc-vert-ctrl-grip { display: none !important; }
             body.sc-chat-chatonly #sc-chatmode-btn,
             body.sc-chat-chatonly #sc-settings-btn {
                 display: flex !important;
                 position: fixed !important;
                 top: -2px !important; bottom: auto !important; left: auto !important;
-                opacity: 0 !important; pointer-events: none !important;
-                transform: translateX(16px) !important;
-                transition: opacity 0.25s ease, transform 0.25s ease !important;
+                opacity: 1 !important; pointer-events: auto !important;
                 z-index: 10012 !important;
             }
             body.sc-chat-chatonly #sc-chatmode-btn { right: 8px !important; }
             body.sc-chat-chatonly #sc-settings-btn { right: 50px !important; }
-            body.sc-chat-chatonly.sc-rightzone #sc-chatmode-btn,
-            body.sc-chat-chatonly.sc-rightzone #sc-settings-btn {
-                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
-            }
             /* Chat header is a clean full-width top bar; the fly-out grip on its right edge
                (above) is the way out, so the inline "›" collapse button is hidden here. */
             body.sc-chat-chatonly #sc-chat-header {
@@ -1078,11 +1243,10 @@
                 z-index: 10010 !important;
                 padding: 0 10px !important; box-sizing: border-box !important;
             }
-            body.sc-chat-chatonly #sc-chat-collapse-btn { display: none !important; }
             /* Explicit "video is paused/muted" indicator — chat-only silently stops the
                player (_coStopMedia); this makes that state visible instead of a mystery.
-               Sits inside the 32px header bar, whose only other content (the collapse
-               button) is already hidden in chat-only mode, so there's nothing to overlap. */
+               Sits inside the 32px header bar, which has nothing else in chat-only mode
+               to overlap. */
             #sc-chatonly-banner { display: none !important; }
             body.sc-chat-chatonly #sc-chatonly-banner {
                 display: flex !important; align-items: center !important; justify-content: center !important;
@@ -1121,13 +1285,20 @@
             body.sc-chat-overlay.sc-horizontal #videowrap .embed-responsive,
             body.sc-chat-overlay.sc-horizontal #ytapiplayer { width: 100vw !important; }
             /* No sidebar in overlay — the scrubber spans the full video width (the default
-               horizontal rule reserves 19vw for the chat column that isn't there here). */
-            body.sc-chat-overlay.sc-horizontal .video-js .vjs-control-bar { right: 16px !important; }
+               horizontal rule reserves 19vw for the chat column that isn't there here).
+               Widened from a bare 16px, and the docked buttons get the matching
+               zero-sidebar offsets, for the same reason as chat-hidden mode above --
+               otherwise they sit on top of the now-wider scrubber instead of beside it. */
+            body.sc-chat-overlay.sc-horizontal .video-js .vjs-control-bar,
+            body.sc-chat-overlay.sc-horizontal #sc-yt-scrubber { right: 162px !important; }
+            body.sc-chat-overlay.sc-horizontal #sc-chatmode-btn { right: 8px   !important; }
+            body.sc-chat-overlay.sc-horizontal #sc-desync-btn   { right: 46px  !important; }
+            body.sc-chat-overlay.sc-horizontal #sc-settings-btn { right: 84px  !important; }
+            body.sc-chat-overlay.sc-horizontal #sc-cast-btn     { right: 122px !important; }
 
             /* Hide every bit of chrome — title bar, coming attractions, user/poll header */
             body.sc-chat-overlay.sc-horizontal #sc-top-bar,
             body.sc-chat-overlay.sc-horizontal #videowrap-header,
-            body.sc-chat-overlay.sc-horizontal #sc-movie-links,
             body.sc-chat-overlay.sc-horizontal #sc-movie-stats,
             body.sc-chat-overlay.sc-horizontal #sc-poster-toggle,
             body.sc-chat-overlay.sc-horizontal #sc-chat-header { display: none !important; }
@@ -1175,18 +1346,134 @@
                 right: 2vw !important; top: calc(46vh - 38px) !important; bottom: auto !important;
             }
 
+            /* ── OVERLAY (vertical): same idea as the horizontal version above -- full-height
+               video, chat floats as a translucent panel in the top-right corner (previously
+               this mode had no vertical styling at all, so picking it while in portrait did
+               nothing -- looked identical to Sidebar). Buttons/scrubber stay docked at the
+               screen BOTTOM (unlike horizontal, where they share the chat panel's top-right
+               row) so they don't collide with the chat panel up top. */
+            /* top:0 is required, not just height:100vh -- #videowrap's vertical-mode base
+               rule starts it at top:36px to reserve the title strip (#videowrap-header),
+               which overlay hides below for full immersion; without resetting top too, a
+               36px gap at the very top exposes the native CyTube navbar underneath it. */
+            body.sc-chat-overlay.sc-vertical #videowrap,
+            body.sc-chat-overlay.sc-vertical #videowrap .embed-responsive,
+            body.sc-chat-overlay.sc-vertical #ytapiplayer { top: 0 !important; height: 100vh !important; }
+            /* No control band/seam in overlay -- video is full-bleed -- so the docked
+               button row and scrubber pin to the screen bottom instead of the --sc-split
+               seam, same fix chat-hidden's vertical mode already applies above. Same
+               bottom:4px as the scrubber below (not stacked above it) -- its own base rule
+               already reserves right:160px for this cluster, so there's no horizontal
+               overlap to dodge by floating the buttons higher; read as one control strip and
+               fade with it as one. Cast stays gesture-revealed (sc-rightzone) as normal,
+               just repositioned to match. */
+            body.sc-chat-overlay.sc-vertical #sc-vert-ctrl-band { display: none !important; }
+            body.sc-chat-overlay.sc-vertical #sc-vert-ctrl-grip { display: none !important; }
+            body.sc-chat-overlay.sc-vertical #sc-chatmode-btn,
+            body.sc-chat-overlay.sc-vertical #sc-desync-btn,
+            body.sc-chat-overlay.sc-vertical #sc-settings-btn,
+            body.sc-chat-overlay.sc-vertical #sc-cast-btn {
+                top: auto !important; bottom: 4px !important;
+            }
+            body.sc-chat-overlay.sc-vertical .video-js .vjs-control-bar,
+            body.sc-chat-overlay.sc-vertical #sc-yt-scrubber {
+                bottom: 4px !important;
+            }
+            /* Hide every bit of chrome — title bar, coming attractions, chat header —
+               same full-immersion intent as the horizontal overlay above. */
+            body.sc-chat-overlay.sc-vertical #sc-top-bar,
+            body.sc-chat-overlay.sc-vertical #videowrap-header,
+            body.sc-chat-overlay.sc-vertical #sc-movie-stats,
+            body.sc-chat-overlay.sc-vertical #sc-poster-toggle,
+            body.sc-chat-overlay.sc-vertical #sc-chat-header { display: none !important; }
+
+            /* Chat = small top-right corner panel, dark transparent, no borders */
+            body.sc-chat-overlay.sc-vertical #chatwrap {
+                top: 0 !important; bottom: auto !important; left: auto !important; right: 0 !important;
+                width: 62vw !important; height: 40vh !important;
+                background: rgba(8,6,12,0.42) !important;
+                border: none !important; border-radius: 0 0 0 10px !important;
+                padding: 10px !important; box-sizing: border-box !important;
+                z-index: 10002 !important;
+            }
+            body.sc-chat-overlay.sc-vertical #messagebuffer {
+                text-shadow: 0 1px 4px rgba(0,0,0,0.9) !important;
+            }
+            body.sc-chat-overlay.sc-vertical #chatwrap,
+            body.sc-chat-overlay.sc-vertical #chatwrap *,
+            body.sc-chat-overlay.sc-vertical #messagebuffer,
+            body.sc-chat-overlay.sc-vertical #sc-mobile-input-row,
+            body.sc-chat-overlay.sc-vertical #chatwrap .input-group,
+            body.sc-chat-overlay.sc-vertical #chatwrap .form-control {
+                border: none !important; box-shadow: none !important; outline: none !important;
+            }
+            /* Shrink posted images / emotes to a quarter size in the corner chat */
+            body.sc-chat-overlay.sc-vertical #messagebuffer img {
+                zoom: 0.25 !important;
+                max-width: 100% !important; height: auto !important;
+            }
+            /* One-line, borderless, no-placeholder input on the same transparent bg */
+            body.sc-chat-overlay.sc-vertical #sc-mobile-input-row { padding: 2px 0 0 !important; }
+            body.sc-chat-overlay.sc-vertical #sc-chat-textarea {
+                min-height: 0 !important; height: 26px !important; max-height: 26px !important;
+                background: rgba(0,0,0,0.5) !important; border: none !important; box-shadow: none !important;
+                border-radius: 6px !important;
+                padding: 3px 8px !important; font-size: 13px !important; line-height: 1.4 !important;
+                overflow-y: auto !important; resize: none !important;
+            }
+            body.sc-chat-overlay.sc-vertical #sc-chat-textarea:focus {
+                background: rgba(0,0,0,0.68) !important; border: none !important;
+            }
+            body.sc-chat-overlay.sc-vertical #sc-chat-textarea::placeholder { color: transparent !important; }
+            body.sc-chat-overlay.sc-vertical #sc-newmsg-pill {
+                right: 2vw !important; top: calc(40vh - 38px) !important; bottom: auto !important;
+            }
+
+            /* ── CHAT-AS-SUBTITLES (cards/subtitles.js) ───────────────────────────────
+               A chatMode value (chat/modes.js), not an independent toggle -- reached the
+               same way sidebar/overlay/hidden/chat-only are, via the header chat button or
+               'C'. Behaves like Hidden (full-bleed cinema, chat chrome hidden) with recent
+               messages rendered as pills over the bottom of the video instead of losing
+               them entirely -- see the "body.sc-chat-hidden..." selectors throughout this
+               file, each of which also lists "body.sc-chat-subtitles..." alongside it.
+               --sc-subtitle-opacity/--sc-subtitle-fontsize are set on <body> by
+               applySubtitleOpacity/applySubtitleFontSize (cards/subtitles.js), same
+               "JS sets a custom prop, CSS reads it" idiom as --sc-split. */
+            #sc-subtitles-overlay {
+                display: none !important;
+                position: fixed !important; z-index: 10001 !important;
+                left: 6vw !important; right: 6vw !important; bottom: 48px !important;
+                flex-direction: column !important; align-items: center !important;
+                gap: 4px !important; pointer-events: none !important;
+            }
+            body.sc-chat-subtitles #sc-subtitles-overlay { display: flex !important; }
+            .sc-subtitle-pill {
+                max-width: 100% !important; box-sizing: border-box !important;
+                background: rgba(0,0,0,var(--sc-subtitle-opacity, 0.6)) !important;
+                color: #fff !important;
+                border-radius: 8px !important;
+                padding: 4px 12px !important;
+                font-family: 'Inter', 'Roboto', system-ui, sans-serif !important;
+                font-size: var(--sc-subtitle-fontsize, 15px) !important;
+                line-height: 1.35 !important;
+                text-shadow: 0 1px 4px rgba(0,0,0,0.9) !important;
+                overflow-wrap: anywhere !important; word-break: break-word !important;
+            }
+            .sc-subtitle-pill img { max-height: 1.4em !important; vertical-align: middle !important; }
+            .sc-subtitle-emoji { display: inline-block !important; width: 1.3em !important; text-align: center !important; margin-right: 2px !important; }
+            .sc-subtitle-name { font-weight: 700 !important; }
+
             /* Sidebar: header matches the chat panel exactly (same box, same padding) */
             body.sc-horizontal #sc-chat-header {
                 right: 0 !important; width: 19vw !important;
                 box-sizing: border-box !important; padding: 0 8px !important;
             }
 
-            /* Control cluster — chat-mode icon on top, then emote / free-watch / settings
-               in a row beneath it, pinned to the mid-left edge over the video.
-               Clear of YouTube's own controls and the chat, so everything clicks. */
+            /* Shape/color only -- position (left/right/top/bottom) is owned entirely by the
+               docked-row rules (horizontal) and the control-band rules (vertical) earlier in
+               this file, so none of that is set here. */
             #sc-chatmode-btn {
                 position: fixed !important;
-                left: 10px !important; top: calc(50% - 60px) !important;
                 z-index: 20050 !important;
                 width: 36px !important; height: 36px !important; border-radius: 50% !important;
                 background: rgba(0,0,0,0.6) !important;
@@ -1198,7 +1485,6 @@
                 -webkit-tap-highlight-color: transparent !important;
             }
             #sc-chatmode-btn:hover { background: rgba(0,0,0,0.85) !important; }
-            body.sc-tv #sc-chatmode-btn { width: 52px !important; height: 52px !important; font-size: 22px !important; top: calc(50% - 70px) !important; }
 
             /* ── NEW-MESSAGES PILL ───────────────────────────── */
             #sc-newmsg-pill {
@@ -1233,3 +1519,238 @@
             #sc-mention-toast.sc-show { opacity: 1 !important; transform: translateX(-50%) translateY(0) !important; pointer-events: auto !important; }
             #sc-mention-toast .sc-mt-name { color: var(--np-accent, #ff5b73) !important; font-weight: 800 !important; margin-right: 6px !important; }
             body.sc-tv #sc-mention-toast { font-size: 21px !important; padding: 16px 26px !important; top: 40px !important; }
+
+            /* ── LINK PIP PROMPT — auto-focused "View this?" pill for a new YouTube link
+               posted in chat. Styled on #sc-mention-toast's conventions. ─────────────── */
+            #sc-link-pip-prompt {
+                position: fixed !important; top: 26px !important; left: 50% !important;
+                transform: translateX(-50%) translateY(-20px) !important;
+                z-index: 21600 !important;
+                opacity: 0 !important; pointer-events: none !important;
+                transition: opacity 0.35s ease, transform 0.35s ease !important;
+            }
+            #sc-link-pip-prompt.sc-show { opacity: 1 !important; transform: translateX(-50%) translateY(0) !important; pointer-events: auto !important; }
+            #sc-link-pip-prompt-btn {
+                display: flex !important; align-items: center !important; gap: 10px !important;
+                background: rgba(20,8,14,0.97) !important; color: #fff !important;
+                border: 1px solid var(--np-accent, #ff5b73) !important;
+                border-radius: 999px !important; padding: 12px 20px !important;
+                box-shadow: 0 10px 36px rgba(0,0,0,0.65) !important;
+                cursor: pointer !important; font-size: 14px !important; line-height: 1.3 !important;
+            }
+            #sc-link-pip-prompt-btn .sc-lpp-label { color: rgba(255,255,255,0.65) !important; }
+            #sc-link-pip-prompt-btn .sc-lpp-action { font-weight: 800 !important; color: var(--np-accent, #ff5b73) !important; }
+            body.sc-tv #sc-link-pip-prompt { top: 40px !important; }
+            body.sc-tv #sc-link-pip-prompt-btn { font-size: 21px !important; padding: 16px 26px !important; }
+
+            /* ── LINK PIP PANEL — floating YouTube preview opened from the prompt ──────── */
+            #sc-link-pip-panel {
+                position: fixed !important; right: 24px !important; bottom: 24px !important;
+                width: min(420px, 44vw) !important;
+                background: rgba(14,10,18,0.97) !important;
+                border: 1px solid rgba(255,255,255,0.14) !important;
+                border-radius: 12px !important; overflow: hidden !important;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.7) !important;
+                z-index: 21200 !important;
+                opacity: 0 !important; pointer-events: none !important;
+                transition: opacity 0.3s ease !important;
+            }
+            #sc-link-pip-panel.sc-link-pip-visible { opacity: 1 !important; pointer-events: auto !important; }
+            #sc-link-pip-head {
+                display: flex !important; align-items: center !important; justify-content: space-between !important;
+                padding: 8px 12px !important; color: rgba(255,255,255,0.75) !important;
+                font-size: 13px !important; font-weight: 700 !important;
+                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+            }
+            #sc-link-pip-close {
+                background: rgba(255,255,255,0.1) !important; border: none !important; color: #fff !important;
+                width: 26px !important; height: 26px !important; border-radius: 50% !important;
+                cursor: pointer !important; font-size: 12px !important; flex-shrink: 0 !important;
+            }
+            #sc-link-pip-close:hover { background: rgba(255,255,255,0.2) !important; }
+            #sc-link-pip-body { position: relative !important; width: 100% !important; aspect-ratio: 16 / 9 !important; }
+            .sc-link-pip-frame { position: absolute !important; inset: 0 !important; width: 100% !important; height: 100% !important; border: none !important; }
+            body.sc-tv #sc-link-pip-panel { width: min(560px, 38vw) !important; right: 32px !important; bottom: 32px !important; }
+            body.sc-tv #sc-link-pip-head { font-size: 17px !important; padding: 12px 16px !important; }
+            body.sc-tv #sc-link-pip-close { width: 38px !important; height: 38px !important; font-size: 16px !important; }
+
+            /* ── EMOTE PICKER — replaces CyTube's native #emotelist popup ──────── */
+            #sc-emotes-panel {
+                position: fixed !important;
+                z-index: 30002 !important;
+                width: 340px !important; max-width: 92vw !important;
+                max-height: 56vh !important;
+                display: flex !important; flex-direction: column !important;
+                background: #0c0c0e !important;
+                border: 1px solid rgba(244,244,242,0.14) !important;
+                border-radius: 12px !important;
+                box-shadow: 0 12px 40px rgba(0,0,0,0.6) !important;
+                color: #f4f4f2 !important; font-size: 13px !important;
+                font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif !important;
+            }
+            #sc-emotes-head {
+                display: flex !important; align-items: center !important; justify-content: space-between !important;
+                flex: none !important;
+                padding: 10px 16px !important;
+                border-bottom: 1px solid rgba(244,244,242,0.08) !important;
+                font-weight: 700 !important; font-size: 14px !important; color: #3ecbff !important;
+                letter-spacing: 0.01em !important;
+                cursor: grab !important; user-select: none !important; touch-action: none !important;
+            }
+            #sc-emotes-head.sc-emotes-dragging { cursor: grabbing !important; }
+            #sc-emotes-close {
+                background: transparent !important; border: none !important; color: rgba(244,244,242,0.62) !important;
+                font-size: 15px !important; cursor: pointer !important; padding: 0 4px !important;
+                transition: color 120ms ease !important;
+            }
+            #sc-emotes-close:hover { color: #f4f4f2 !important; }
+            #sc-emotes-body {
+                padding: 10px 12px 12px !important;
+                display: flex !important; flex-direction: column !important; gap: 8px !important;
+                flex: 1 1 auto !important; min-height: 0 !important;
+            }
+            .sc-emotes-search {
+                flex: none !important;
+                background: rgba(255,255,255,0.06) !important; color: #f4f4f2 !important;
+                border: 1px solid rgba(255,255,255,0.18) !important; border-radius: 6px !important;
+                padding: 6px 10px !important; font-size: 13px !important;
+                box-sizing: border-box !important; width: 100% !important;
+                transition: border-color 120ms ease !important;
+            }
+            .sc-emotes-search:hover, .sc-emotes-search:focus { border-color: rgba(62,203,255,0.5) !important; }
+            .sc-emotes-search::placeholder { color: rgba(244,244,242,0.34) !important; }
+            .sc-emotes-grid {
+                flex: 1 1 auto !important; min-height: 0 !important; overflow-y: auto !important;
+                display: grid !important;
+                grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)) !important;
+                gap: 6px !important;
+                align-content: start !important;
+                scrollbar-width: thin !important; scrollbar-color: rgba(244,244,242,0.2) #000 !important;
+            }
+            .sc-emotes-grid::-webkit-scrollbar { width: 10px !important; }
+            .sc-emotes-grid::-webkit-scrollbar-track { background: #000 !important; }
+            .sc-emotes-grid::-webkit-scrollbar-thumb {
+                background: rgba(244,244,242,0.2) !important; border-radius: 6px !important; border: 2px solid #000 !important;
+            }
+            .sc-emotes-grid::-webkit-scrollbar-thumb:hover { background: #3ecbff !important; }
+            .sc-emotes-tile {
+                position: relative !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                background: rgba(244,244,242,0.04) !important;
+                border: 1px solid rgba(244,244,242,0.08) !important; border-radius: 6px !important;
+                padding: 4px !important; height: 60px !important; box-sizing: border-box !important;
+                cursor: pointer !important;
+                transition: background-color 120ms ease, border-color 120ms ease !important;
+            }
+            .sc-emotes-tile:hover, .sc-emotes-tile:focus-visible, .sc-emotes-tile.sc-tv-focus {
+                background: rgba(62,203,255,0.14) !important; border-color: #3ecbff !important;
+                outline: none !important;
+            }
+            .sc-emotes-tile img {
+                max-width: 100% !important; max-height: 46px !important;
+                display: block !important; pointer-events: none !important;
+                opacity: 0 !important; transition: opacity 150ms ease !important;
+            }
+            .sc-emotes-tile.sc-emotes-img-loaded img { opacity: 1 !important; }
+            .sc-emotes-spinner {
+                position: absolute !important; top: 50% !important; left: 50% !important;
+                transform: translate(-50%, -50%) !important;
+                width: 18px !important; height: 18px !important; box-sizing: border-box !important;
+                border: 2px solid rgba(244,244,242,0.18) !important;
+                border-top-color: #3ecbff !important;
+                border-radius: 50% !important;
+                animation: sc-emotes-spin 700ms linear infinite !important;
+                pointer-events: none !important;
+            }
+            .sc-emotes-tile.sc-emotes-img-loaded .sc-emotes-spinner { display: none !important; }
+            @keyframes sc-emotes-spin { to { transform: translate(-50%, -50%) rotate(360deg); } }
+            .sc-emotes-tile-actions {
+                position: absolute !important; top: 2px !important; right: 2px !important;
+                pointer-events: none !important;
+            }
+            .sc-emotes-star {
+                pointer-events: auto !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                width: 16px !important; height: 16px !important;
+                font-size: 12px !important; line-height: 1 !important;
+                color: rgba(244,244,242,0.5) !important;
+                background: rgba(0,0,0,0.4) !important;
+                border-radius: 4px !important;
+                cursor: pointer !important;
+                transition: color 120ms ease, transform 120ms ease !important;
+            }
+            .sc-emotes-star:hover, .sc-emotes-star:focus-visible, .sc-emotes-star.sc-tv-focus {
+                color: #f4f4f2 !important; outline: none !important; transform: scale(1.12) !important;
+            }
+            .sc-emotes-star-active { color: #ffd24a !important; }
+            .sc-emotes-star-active:hover, .sc-emotes-star-active:focus-visible { color: #ffdd70 !important; }
+            .sc-emotes-empty {
+                grid-column: 1 / -1 !important;
+                padding: 18px 4px !important; text-align: center !important;
+                color: rgba(244,244,242,0.4) !important; font-size: 12px !important;
+            }
+            #sc-emotes-tabs { display: flex !important; gap: 4px !important; flex: none !important; }
+            .sc-emotes-tab {
+                flex: 1 1 0 !important;
+                background: rgba(255,255,255,0.04) !important; color: rgba(244,244,242,0.62) !important;
+                border: 1px solid rgba(255,255,255,0.1) !important; border-radius: 6px !important;
+                padding: 6px 8px !important; font-size: 12px !important; font-weight: 600 !important;
+                cursor: pointer !important; text-align: center !important;
+                transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease !important;
+            }
+            .sc-emotes-tab:hover { color: #f4f4f2 !important; border-color: rgba(62,203,255,0.4) !important; }
+            .sc-emotes-tab-active {
+                background: rgba(62,203,255,0.16) !important; color: #3ecbff !important; border-color: #3ecbff !important;
+            }
+
+            /* Default spawn point -- anchored near #sc-emote-proxy's own position in each
+               layout (base.css), offset past its footprint so the trigger stays clickable
+               once the panel is open. Only applies while no saved drag position exists. */
+            body.sc-horizontal #sc-emotes-panel {
+                bottom: 54px !important; right: 8px !important;
+                width: 340px !important; max-height: 50vh !important;
+            }
+            body.sc-vertical #sc-emotes-panel {
+                bottom: 60px !important; right: 8px !important;
+                width: 280px !important; max-height: 60vh !important;
+            }
+            body.sc-vertical .sc-emotes-grid {
+                grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)) !important;
+            }
+            body.sc-tv .sc-emotes-tile { height: 76px !important; }
+            body.sc-tv .sc-emotes-search { font-size: 17px !important; padding: 9px 12px !important; }
+            body.sc-tv .sc-emotes-tab { font-size: 15px !important; padding: 8px 10px !important; }
+            body.sc-tv #sc-emotes-head { font-size: 17px !important; }
+            body.sc-tv #sc-emotes-close { width: 32px !important; height: 32px !important; font-size: 19px !important; }
+
+            /* Floating GIF preview -- appended to <body>, not the grid, so it's never
+               clipped by .sc-emotes-grid's own overflow:auto. */
+            #sc-emotes-preview {
+                position: fixed !important;
+                z-index: 30003 !important;
+                display: none !important;
+                pointer-events: none !important;
+                background: #0c0c0e !important;
+                border: 1px solid rgba(244,244,242,0.14) !important;
+                border-radius: 10px !important;
+                box-shadow: 0 12px 40px rgba(0,0,0,0.6) !important;
+                padding: 6px !important;
+                box-sizing: border-box !important;
+            }
+            #sc-emotes-preview img {
+                display: block !important;
+                width: 176px !important; height: 176px !important;
+                object-fit: contain !important;
+                opacity: 0 !important;
+                transition: opacity 100ms ease !important;
+            }
+            #sc-emotes-preview.sc-emotes-preview-loaded img { opacity: 1 !important; }
+            #sc-emotes-preview.sc-emotes-preview-loaded .sc-emotes-spinner { display: none !important; }
+            #sc-emotes-preview-name {
+                display: block !important;
+                width: 176px !important; max-width: 176px !important;
+                margin-top: 6px !important;
+                color: #f4f4f2 !important; font-size: 12px !important; text-align: center !important;
+                white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important;
+                box-sizing: border-box !important;
+            }

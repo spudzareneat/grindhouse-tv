@@ -1,8 +1,24 @@
 import { parseMovieFilename, parseYouTubeTitle } from './parse.js';
-import { movieLinksEnabled } from './store.js';
-import { movieState, LINK_DEFS, lookupMovie } from './metadata/tmdb.js';
+import { movieState, lookupMovie } from './metadata/tmdb.js';
 import { npState, showNowPlayingCard, _npCardEnabled } from './cards/nowplaying.js';
-import { getCurrentMediaSeconds } from './mediatime.js';
+import { getCurrentMediaSeconds, mediaState } from './mediatime.js';
+import { nativeHttpGet } from './native.js';
+import { getLastAired } from './metadata/lastaired.js';
+import { isTv } from './tvdetect.js';
+import { chromeState } from './chrome/state.js';
+
+// Auto-announce hold time for the Now-Playing card (see showNowPlayingCard's opts.autoHideMs).
+const NP_AUTO_HIDE_MS = isTv ? 10000 : 8000;
+
+// Auto-announce the hero card only for a genuine feature: a non-YouTube item at least
+// 45 min long. Filters out main-server bumpers/shorts (raw files) that happen to match a
+// TMDB title; YouTube is excluded outright (its shorts already fall through below, and
+// even hour+ YT "movies" don't need the auto-card). Manual summon (i key / title tap /
+// Tonight's Lineup) is unaffected -- this only gates the automatic pop.
+const NP_AUTO_MIN_SECONDS = 45 * 60;
+function _npShouldAutoAnnounce(isYt) {
+    return !isYt && getCurrentMediaSeconds() >= NP_AUTO_MIN_SECONDS;
+}
 
 export function isYouTubeMedia() {
     // CyTube exposes current media on the global PLAYER or window.player object.
@@ -16,6 +32,35 @@ export function isYouTubeMedia() {
     if (document.querySelector('#ytapiplayer iframe[src*="youtube.com"]')) return true;
     if (document.querySelector('#ytapiplayer[src*="youtube.com"]')) return true;
     return false;
+}
+
+// Fallback when changeMedia hasn't fired yet this session (e.g. a fresh/refreshed page
+// load) -- reads the video id straight from the YouTube iframe's src, the same element
+// isYouTubeMedia() above checks.
+function _domYtVideoId() {
+    const el = document.querySelector('#ytapiplayer iframe[src*="youtube.com"]');
+    if (!el) return '';
+    const src = el.getAttribute('src') || '';
+    const m = src.match(/[?&]v=([\w-]{11})/) || src.match(/\/embed\/([\w-]{11})/);
+    return m ? m[1] : '';
+}
+
+// Free, no-key YouTube oEmbed lookup -- title/channel/thumbnail only, no year/plot/rating/
+// imdbId. Used only as a fallback for short clips the main TMDB path below skips entirely
+// (trailers/bumpers/ads) -- but real short films (e.g. "Our Robocop Remake") do run under
+// the hour cutoff too, and oEmbed's title is straight from the video itself, so it beats
+// showing nothing. Resolves null on any failure instead of throwing, so callers need no
+// .catch(). Ported from the sibling PC userscript's movie-title-links module, swapping its
+// GM_xmlhttpRequest (a Tampermonkey API that doesn't exist in this native WebView) for the
+// CytubeNative CORS bridge.
+function fetchYtOembed(videoId) {
+    if (!videoId) return Promise.resolve(null);
+    const watchUrl = 'https://www.youtube.com/watch?v=' + encodeURIComponent(videoId);
+    const url = 'https://www.youtube.com/oembed?url=' + encodeURIComponent(watchUrl) + '&format=json';
+    return nativeHttpGet(url).then((res) => {
+        if (!res || res.status !== 200) return null;
+        try { return JSON.parse(res.body); } catch (e) { return null; }
+    }).catch(() => null);
 }
 
 // Builds/updates the clickable clean-title span inside titleEl from resolved movie data.
@@ -64,8 +109,8 @@ function injectMovieLinks(titleEl) {
     }
     movieState.lastMovieTitle = rawTitle;
 
-    // Clean up any previous links/stats/trivia button
-    ['sc-movie-links', 'sc-movie-stats', 'sc-trivia-btn'].forEach(id => {
+    // Clean up any previous stats bar/trivia button
+    ['sc-movie-stats', 'sc-trivia-btn'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.remove();
     });
@@ -82,86 +127,107 @@ function injectMovieLinks(titleEl) {
     let ytSeconds = 0;
     if (isYt) {
         ytSeconds = getCurrentMediaSeconds();
-        if (ytSeconds < 3600) return; // short YouTube clip — skip
+        if (ytSeconds < 3600) {
+            // Short clip -- most are trailers/bumpers/ads with no real IMDb match, but
+            // real short films (e.g. "Our Robocop Remake") run under an hour too. oEmbed
+            // is free and gives the actual video title straight from YouTube, so use it
+            // instead of leaving the raw, unparsed CyTube title on screen. Unlike the
+            // PC script (which only surfaces this via its 'i' keyboard shortcut, out of
+            // scope here -- remote/TV first, no hotkeys), also make the title clickable/
+            // focusable the same way a real TMDB match does, so it's reachable on TV.
+            const videoId = mediaState.currentYtVideoId || _domYtVideoId();
+            if (videoId) {
+                fetchYtOembed(videoId).then((info) => {
+                    if (!info || !info.title) return; // no data -- leave npState.data untouched
+                    if (movieState.lastMovieTitle !== rawTitle) return; // superseded by a newer title
+                    const movieData = {
+                        cleanTitle: info.title, cleanYear: null,
+                        poster: info.thumbnail_url || null, backdrop: info.thumbnail_url || null,
+                        overview: info.author_name ? `Uploaded by ${info.author_name}` : null,
+                        rating: null, runtime: null, genres: [], parentalGuide: null,
+                        killCount: null, imdbId: null, links: {},
+                    };
+                    npState.data = movieData;
+                    // No auto-card for YouTube (see _npShouldAutoAnnounce) -- this path is
+                    // YT-only. The title stays clickable / summonable via applyCleanTitleDom.
+                    applyCleanTitleDom(titleEl, movieData);
+                });
+            }
+            return;
+        }
     }
 
     const { title, year } = isYt ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
     if (!title || title.length < 2) return;
 
-    // Loading placeholder inline with title (only if movie links are enabled)
-    if (movieLinksEnabled()) {
-        const linkRow = document.createElement('span');
-        linkRow.id = 'sc-movie-links';
-        linkRow.innerHTML = '<span class="sc-movie-loading">…</span>';
-        titleEl.parentElement.insertBefore(linkRow, titleEl.nextSibling);
-    }
-
     lookupMovie(title, year).then((movieData) => {
-        const { links, killCount, parentalGuide, cleanTitle, cleanYear } = movieData;
+        const { killCount, parentalGuide, cleanTitle, cleanYear } = movieData;
 
         // For YouTube guesses, sanity-check the match against the real runtime.
         // If TMDB's runtime is wildly off from the video length, it's probably wrong.
         if (isYt) {
-            if (!cleanTitle) { const r = document.getElementById('sc-movie-links'); if (r) r.remove(); return; }
+            if (!cleanTitle) return;
             if (movieData.runtime && ytSeconds) {
                 const diff = Math.abs(movieData.runtime - ytSeconds / 60);
-                if (diff > 30) { const r = document.getElementById('sc-movie-links'); if (r) r.remove(); return; }
+                if (diff > 30) return;
             }
         }
 
         // Stash for the Now-Playing hero card. The startup intro handles the
-        // first card; only auto-announce SUBSEQUENT films mid-session.
+        // first card; only auto-announce SUBSEQUENT films mid-session. IMDb/Letterboxd/Wiki
+        // links (movieData.links) render inside that card on phone/tablet -- see
+        // nowplaying.js's #sc-np-links -- and not at all on TV (see that file's #sc-np-links
+        // gating and the comment on _npCardEnabled).
         npState.data = movieData;
-        if (_npCardEnabled() && npState.introDone) showNowPlayingCard(movieData, { autoHide: true });
+        if (_npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt)) showNowPlayingCard(movieData, { autoHide: true, autoHideMs: NP_AUTO_HIDE_MS });
         // Update the title element with the clean TMDB title, wrapped in a
         // dedicated clickable span so ONLY the title (not the rest of the
         // header) opens the now-playing card.
         applyCleanTitleDom(titleEl, movieData);
-        // ── Icon links row (skipped entirely when links are disabled) ──────
-        const currentRow = document.getElementById('sc-movie-links');
-        if (currentRow) {
-            currentRow.innerHTML = '';
-            let anyLink = false;
-            LINK_DEFS.forEach(({ key, label, color, fg, char }) => {
-                const url = links[key];
-                if (!url) return;
-                anyLink = true;
-                const a = document.createElement('a');
-                a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
-                a.title = `${label}: "${title}"${year ? ` (${year})` : ''}`;
-                a.className = 'sc-movie-link';
-                a.style.background = color;
-                a.style.color = fg;
-                a.textContent = char;
-                // Route through native so the OS can hand off to the IMDb/Letterboxd/Wikipedia
-                // app if installed, instead of the link navigating inside our WebView.
-                a.addEventListener('click', (e) => {
-                    if (window.CytubeNative && typeof CytubeNative.openInApp === 'function') {
-                        e.preventDefault();
-                        CytubeNative.openInApp(url);
-                    }
-                });
-                currentRow.appendChild(a);
-            });
-            if (!anyLink) currentRow.remove();
-        }
 
-        // ── Stats bar (kill count) ────────────────────────────────────────
+        // ── Stats bar (kill count, parent guide, last aired) ───────────────
         // Stats go in a fixed floating bar over the bottom of the video,
         // not inside #videowrap-header which is too small to contain a div.
         const statParts = [];
         if (killCount !== null) statParts.push(`💀 ${killCount} on-screen kills`);
+        // Color-coded dot + category, "None" severity skipped (nothing to warn about) --
+        // same compact format as the sibling PC userscript's stats bar.
+        if (parentalGuide && parentalGuide.length) {
+            const PG_SEV_DOT = { Severe: '🔴', Moderate: '🟡', Mild: '🟢', None: '' };
+            parentalGuide.forEach(({ category, severity }) => {
+                const dot = PG_SEV_DOT[severity] || '';
+                if (dot) statParts.push(`${dot} ${category}`);
+            });
+        }
+        const lastAired = getLastAired(cleanTitle || title, cleanYear || year);
+        if (lastAired) statParts.push(`📅 Last aired ${lastAired.dateStr}`);
 
         const old = document.getElementById('sc-movie-stats');
         if (old) old.remove();
 
         if (statParts.length) {
-            const statsEl = document.createElement('div');
-            statsEl.id = 'sc-movie-stats';
-            statsEl.textContent = statParts.join('  ·  ');
-            document.body.appendChild(statsEl);
-            // Auto-hide after 12 seconds so it doesn't clutter the screen
-            setTimeout(() => { if (statsEl.parentNode) statsEl.remove(); }, 12000);
+            // The Now-Playing card (full-screen, z-index above this bar) auto-shows over the
+            // same trigger -- starting this bar's 12s visible countdown at the same moment
+            // meant most of it ticked away unseen behind the card. Delay creation until the
+            // card is done (or 0ms if it won't show at all -- before intro/on a device where
+            // it's disabled) so the full 12s is actually visible.
+            const cardWillAutoShow = _npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt);
+            const revealDelay = cardWillAutoShow ? NP_AUTO_HIDE_MS : 0;
+            setTimeout(() => {
+                if (movieState.lastMovieTitle !== rawTitle) return; // superseded by a newer title
+                const statsEl = document.createElement('div');
+                statsEl.id = 'sc-movie-stats';
+                statsEl.textContent = statParts.join('  ·  ');
+                document.body.appendChild(statsEl);
+                // Pin the scrubber bar (+ docked button cluster, vertical mode) open for as
+                // long as this is up -- they read as one announcement and should disappear
+                // together, not the scrubber fading independently on its own idle timer.
+                if (typeof chromeState.pinChromeVisible === 'function') chromeState.pinChromeVisible();
+                setTimeout(() => {
+                    if (statsEl.parentNode) statsEl.remove();
+                    if (typeof chromeState.unpinChromeVisible === 'function') chromeState.unpinChromeVisible();
+                }, 12000);
+            }, revealDelay);
         }
     });
 }

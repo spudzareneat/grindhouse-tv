@@ -4,7 +4,7 @@ import { emoteState, startEmoteWatcher } from './chat/emotemirror.js';
 import { attemptSend } from './chat/grammar.js';
 import { handleTabComplete, clearTabCandidates, relocateEmoteButton, applyInputMode } from './chat/input.js';
 import { chromeState } from './chrome/state.js';
-import { initPosterStrip, initPollWatcher, initUserCount } from './posters.js';
+import { initPosterStrip, initUpNextButton, initPollWatcher, initUserCount } from './posters.js';
 import { getChatFontSize, applyChatFontSize } from './chat/fontsize.js';
 import { initLoginTvNav, initTvNav, tvNavState } from './tvnav.js';
 import {
@@ -20,19 +20,30 @@ import { initPhoneKeyboard } from './chat/keyboard.js';
 import { renderQrToCanvas } from './vendor/qr.js';
 import { _appVersion, checkForUpdate, initUpdateCheck, _updateInfo, GH_RELEASES_PAGE } from './update.js';
 import {
-    LS_TMDB, LS_ONBOARDED, LS_SPELLCHECK, LS_CHAT_FONT, LS_MOVIE_LINKS, LS_COUCH, LS_WATCHALONG, LS_CAST_MUTE, LS_LINEUP_TIMING, LS_AUTOEMBED,
-    getKey, setKey, hasKey, spellCheckEnabled, movieLinksEnabled, couchModeEnabled, watchAlongEnabled, castFallbackMuted, lineupTimingEnabled, autoEmbedEnabled,
+    LS_TMDB, LS_ONBOARDED, LS_SPELLCHECK, LS_CHAT_FONT, LS_COUCH, LS_WATCHALONG, LS_CAST_MUTE, LS_LINEUP_TIMING, LS_AUTOEMBED, LS_TRIVIA_POPUP, LS_TRIVIA_POPUP_FREQ,
+    LS_SUBTITLE_OPACITY, LS_SUBTITLE_FONTSIZE, LS_SUBTITLE_LINES,
+    getKey, setKey, hasKey, spellCheckEnabled, couchModeEnabled, watchAlongEnabled, castFallbackMuted, lineupTimingEnabled, autoEmbedEnabled, triviaPopupEnabled, triviaPopupFrequency,
 } from './store.js';
 import { fetchImdbParentalGuide } from './metadata/imdb.js';
 import { isTv } from './tvdetect.js';
 import { movieState, getKillCountDb, validateTmdbKey } from './metadata/tmdb.js';
 import { npState, showNowPlayingCard, hideNowPlayingCard, initNowPlayingWatcher } from './cards/nowplaying.js';
+import { triviaPopupBoot } from './cards/triviapopup.js';
+import {
+    initSubtitles, startSubtitlesObserver, refreshSubtitles,
+    getSubtitleOpacity, getSubtitleFontSize, getSubtitleLines,
+    applySubtitleOpacity, applySubtitleFontSize,
+} from './cards/subtitles.js';
 import { triggerTitleInject, watchMovieTitle } from './titleinject.js';
+import { loadLastAiredSheet } from './metadata/lastaired.js';
 import { initGoogleDrive } from './player/drive.js';
 import { initMediaWatcher } from './player/resync.js';
+import { initYtScrubber } from './player/ytscrubber.js';
+import { initSeekHud } from './player/seekhud.js';
 import { openExternalUrl } from './player/drm.js';
 import { getMovieLeadSec, setMovieLeadSec, initMovieLeadOffset, MOVIE_LEAD_MIN, MOVIE_LEAD_MAX } from './player/leadtime.js';
 import { startImageEmbedObserver } from './chat/imageembed.js';
+import { startLinkPipObserver } from './chat/linkpip.js';
 import { initChannelScriptAutoApprove } from './channelscript.js';
 import baseCss from './styles/base.css';
 import overlaysCss from './styles/overlays.css';
@@ -533,16 +544,6 @@ import tvCss from './styles/tv.css';
 
                 <div class="sc-settings-pane" data-pane="appearance">
                     <div class="sc-settings-group">
-                        <label class="sc-settings-toggle-label">
-                            <span class="sc-toggle-row">
-                                <input type="checkbox" id="sc-input-movielinks" ${movieLinksEnabled() ? 'checked' : ''} />
-                                <span class="sc-toggle-text">Show movie links (IMDb / Letterboxd / Wiki)</span>
-                            </span>
-                            <span class="sc-settings-note">Adds clickable link badges next to the title — usually unneeded on a TV</span>
-                        </label>
-                    </div>
-
-                    <div class="sc-settings-group sc-settings-divider">
                         <label class="sc-settings-label">
                             Chat font size
                             <span class="sc-settings-note" id="sc-font-val">${getChatFontSize()}px</span>
@@ -582,6 +583,24 @@ import tvCss from './styles/tv.css';
                             <span class="sc-settings-note">Keeps you a few seconds ahead of the group during movies (not YouTube) — cushions against your own buffering. 0 = off.</span>
                         </label>
                         <input id="sc-input-leadsec" class="sc-settings-input" type="number" min="${MOVIE_LEAD_MIN}" max="${MOVIE_LEAD_MAX}" step="1" value="${getMovieLeadSec()}" style="width:5em" />
+                    </div>
+
+                    <div class="sc-settings-group sc-settings-divider">
+                        <label class="sc-settings-toggle-label">
+                            <span class="sc-toggle-row">
+                                <input type="checkbox" id="sc-input-triviapopup" ${triviaPopupEnabled() ? 'checked' : ''} />
+                                <span class="sc-toggle-text">Pop-up trivia bubbles during movies (Experimental)</span>
+                            </span>
+                            <span class="sc-settings-note">Shows a small IMDb trivia fact over the video, VH1 Pop-up Video style, then fades out. Off by default. Cycles without repeats and stops once all trivia for the current movie has been shown.</span>
+                        </label>
+                        <label class="sc-settings-label" style="margin-top:8px">
+                            Pop-up frequency
+                            <select id="sc-input-triviapopup-freq" class="sc-settings-input">
+                                <option value="frequent"   ${triviaPopupFrequency() === 'frequent'   ? 'selected' : ''}>Frequent — about once a minute</option>
+                                <option value="occasional" ${triviaPopupFrequency() === 'occasional' ? 'selected' : ''}>Occasional — every few minutes</option>
+                                <option value="rare"       ${triviaPopupFrequency() === 'rare'       ? 'selected' : ''}>Rare — every 8–15 minutes</option>
+                            </select>
+                        </label>
                     </div>
                 </div>
 
@@ -637,6 +656,33 @@ import tvCss from './styles/tv.css';
                                 <span class="sc-toggle-text">Auto-embed image links in chat</span>
                             </span>
                             <span class="sc-settings-note">Shows a thumbnail preview under messages that link directly to an image, marked "🖼 embedded"</span>
+                        </label>
+                    </div>
+
+                    <div class="sc-settings-group sc-settings-divider">
+                        <label class="sc-settings-label">
+                            Chat as TV subtitles
+                            <span class="sc-settings-note">"Subtitles" is one of the chat layouts now — cycle to it with the header chat button (or press C) to show recent chat as movie-subtitle lines over the video, each with the sender's chat color and emoji. Ported from the idea in <a href="https://github.com/kburna243/mikes-420grindhouse-app" target="_blank" rel="noopener noreferrer">kburna243/mikes-420grindhouse-app</a>'s subtitle-chat overlay. The controls below tune how it looks.</span>
+                        </label>
+                        <label class="sc-settings-label" style="margin-top:8px">
+                            Subtitle opacity
+                            <span class="sc-settings-note" id="sc-subtitle-opacity-val">${Math.round(getSubtitleOpacity() * 100)}%</span>
+                        </label>
+                        <input type="range" id="sc-input-subtitle-opacity" class="sc-settings-range"
+                            min="0.2" max="0.9" step="0.05" value="${getSubtitleOpacity()}" />
+                        <label class="sc-settings-label" style="margin-top:8px">
+                            Subtitle font size
+                            <span class="sc-settings-note" id="sc-subtitle-fontsize-val">${getSubtitleFontSize()}px</span>
+                        </label>
+                        <input type="range" id="sc-input-subtitle-fontsize" class="sc-settings-range"
+                            min="12" max="24" step="1" value="${getSubtitleFontSize()}" />
+                        <label class="sc-settings-label" style="margin-top:8px">
+                            Lines on screen
+                            <select id="sc-input-subtitle-lines" class="sc-settings-input">
+                                <option value="1" ${getSubtitleLines() === 1 ? 'selected' : ''}>1</option>
+                                <option value="2" ${getSubtitleLines() === 2 ? 'selected' : ''}>2</option>
+                                <option value="3" ${getSubtitleLines() === 3 ? 'selected' : ''}>3</option>
+                            </select>
                         </label>
                     </div>
                 </div>
@@ -813,18 +859,6 @@ import tvCss from './styles/tv.css';
             }
         });
 
-        // ── Movie-links toggle (applies on next media; clears current row now) ─
-        const mlinks = document.getElementById('sc-input-movielinks');
-        if (mlinks) mlinks.addEventListener('change', () => {
-            setKey(LS_MOVIE_LINKS, mlinks.checked ? 'on' : 'off');
-            if (!mlinks.checked) {
-                const row = document.getElementById('sc-movie-links');
-                if (row) row.remove();
-            } else {
-                movieState.lastMovieTitle = ''; // force a re-inject so links appear now
-            }
-        });
-
         // ── Coming Attractions live timing toggle (Experimental; applies next lineup open) ─
         const lineupTiming = document.getElementById('sc-input-lineuptiming');
         if (lineupTiming) lineupTiming.addEventListener('change', () => {
@@ -838,10 +872,44 @@ import tvCss from './styles/tv.css';
             startImageEmbedObserver();
         });
 
+        // ── Chat-as-subtitles appearance (applies immediately; the mode itself is toggled via
+        // the header chat button/cycleChatMode, not a setting here) ──────────────────────────
+        const subOpacity = document.getElementById('sc-input-subtitle-opacity');
+        const subOpacityVal = document.getElementById('sc-subtitle-opacity-val');
+        if (subOpacity) subOpacity.addEventListener('input', () => {
+            const v = parseFloat(subOpacity.value);
+            subOpacityVal.textContent = Math.round(v * 100) + '%';
+            setKey(LS_SUBTITLE_OPACITY, String(v));
+            applySubtitleOpacity(v);
+        });
+        const subFontSize = document.getElementById('sc-input-subtitle-fontsize');
+        const subFontSizeVal = document.getElementById('sc-subtitle-fontsize-val');
+        if (subFontSize) subFontSize.addEventListener('input', () => {
+            const px = parseInt(subFontSize.value, 10);
+            subFontSizeVal.textContent = px + 'px';
+            setKey(LS_SUBTITLE_FONTSIZE, String(px));
+            applySubtitleFontSize(px);
+        });
+        const subLines = document.getElementById('sc-input-subtitle-lines');
+        if (subLines) subLines.addEventListener('change', () => {
+            setKey(LS_SUBTITLE_LINES, subLines.value);
+            refreshSubtitles();
+        });
+
         // ── Movie lead-time-ahead-of-sync (applies live — read fresh on every mediaUpdate tick) ─
         const leadsec = document.getElementById('sc-input-leadsec');
         if (leadsec) leadsec.addEventListener('change', () => {
             leadsec.value = setMovieLeadSec(parseInt(leadsec.value, 10));
+        });
+
+        // ── Pop-up trivia bubbles toggle + frequency (both read fresh on every scheduled pop) ─
+        const triviapopup = document.getElementById('sc-input-triviapopup');
+        if (triviapopup) triviapopup.addEventListener('change', () => {
+            setKey(LS_TRIVIA_POPUP, triviapopup.checked ? 'on' : 'off');
+        });
+        const triviapopupFreq = document.getElementById('sc-input-triviapopup-freq');
+        if (triviapopupFreq) triviapopupFreq.addEventListener('change', () => {
+            setKey(LS_TRIVIA_POPUP_FREQ, triviapopupFreq.value);
         });
 
         // ── App update check / release notes / external-browser link ──────────
@@ -920,8 +988,7 @@ import tvCss from './styles/tv.css';
             bar,
             document.getElementById('videowrap-header'),
             document.getElementById('sc-poster-toggle'),
-            document.getElementById('sc-trivia-btn'),
-            document.getElementById('sc-movie-links'),
+            document.getElementById('sc-up-next-btn'),
         ].filter(Boolean);
 
         const dim = () => {
@@ -979,7 +1046,7 @@ import tvCss from './styles/tv.css';
 
         // When the bar is faded, the first tap/click on it only wakes it — it does
         // NOT trigger the title/trivia/links/coming-attractions. A second tap acts.
-        const HEADER_SEL = '#videowrap-header, #sc-top-bar, #sc-title-text, #sc-movie-links, #sc-trivia-btn, #sc-poster-toggle';
+        const HEADER_SEL = '#videowrap-header, #sc-top-bar, #sc-title-text, #sc-up-next-btn, #sc-poster-toggle';
         document.addEventListener('click', (e) => {
             if (!bar.classList.contains('sc-bar-dim')) return;   // not faded → normal behaviour
             if (!e.target.closest(HEADER_SEL)) return;           // tap wasn't on the header
@@ -999,16 +1066,6 @@ import tvCss from './styles/tv.css';
         const header = document.createElement('div');
         header.id = 'sc-chat-header';
         document.body.appendChild(header);
-
-        // Collapse/cycle button on the far-right of the chat header — the most
-        // discoverable affordance for "close the chat panel from the chat side"
-        const colBtn = document.createElement('button');
-        colBtn.id = 'sc-chat-collapse-btn';
-        colBtn.title = 'Cycle chat layout (C)';
-        colBtn.dataset.tvLabel = 'Toggle Chat';
-        colBtn.textContent = '›';
-        colBtn.addEventListener('click', () => { if (typeof cycleChatMode === 'function') cycleChatMode(); });
-        header.appendChild(colBtn);
     }
 
     /* ==========================================================
@@ -1029,6 +1086,8 @@ import tvCss from './styles/tv.css';
             addSettingsButton();
             startUserColorObserver();
             startImageEmbedObserver();
+            startLinkPipObserver();
+            startSubtitlesObserver();
             // Disconnect once all one-time elements are in place
             if (
                 document.getElementById('sc-chat-textarea') &&
@@ -1074,6 +1133,8 @@ import tvCss from './styles/tv.css';
         addCastButton();
         watchMovieTitle();
         initMediaWatcher();
+        initYtScrubber();
+        initSeekHud();
         initChatTimestamps();
         initNowPlayingWatcher();
         initTopBar();
@@ -1084,6 +1145,9 @@ import tvCss from './styles/tv.css';
         initPollWatcher();
         initGoogleDrive();
         initUpdateCheck();
+        loadLastAiredSheet();
+        triviaPopupBoot();
+        initSubtitles();
 
         // First-run settings modal — only the very first launch, never forced again.
         if (!localStorage.getItem(LS_ONBOARDED)) {
@@ -1095,6 +1159,7 @@ import tvCss from './styles/tv.css';
         // this used to open, it doesn't depend on MOTD content at all, so no need to wait
         // for #motdrow images before creating the button.
         initPosterStrip();
+        initUpNextButton();
 
         const style = document.createElement('style');
         style.textContent = baseCss + overlaysCss;
@@ -1354,7 +1419,7 @@ import tvCss from './styles/tv.css';
     (function () {
         // Only controls that currently exist get moved (trivia needs IMDb data, poll
         // needs a live poll, poster toggle needs a Coming-Attractions reel, etc.).
-        const CAST_CONTROL_IDS = ['sc-poster-toggle', 'sc-trivia-btn', 'sc-usercount-btn', 'sc-poll-btn', 'sc-settings-btn'];
+        const CAST_CONTROL_IDS = ['sc-poster-toggle', 'sc-up-next-btn', 'sc-usercount-btn', 'sc-poll-btn', 'sc-settings-btn'];
         let savedSlots = null;   // each relocated element's original DOM position, for restore
 
         function buildBar() {

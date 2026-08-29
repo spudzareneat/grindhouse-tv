@@ -4,7 +4,14 @@
 export const mediaState = {
     currentMediaSeconds: 0,
     currentMediaType: '',
+    currentYtVideoId: '',  // 'yt' media's video id, from changeMedia -- for the oEmbed fallback
     currentPlaybackTime: 0,
+    // Room's live playhead, tracked ONLY while desynced (chrome/buttons.js) via a dedicated
+    // mediaUpdate listener registered after freezeSync() empties the normal one -- see that
+    // file's comment. null = no tick received yet this desync session.
+    desyncLiveSeconds: null,
+    desyncLiveAt: 0,
+    desyncLivePaused: false,
 };
 
 function parseTimeToSeconds(t) {
@@ -36,6 +43,14 @@ export function getCurrentPlaybackSeconds() {
     const v = document.querySelector('#videowrap video');
     if (v && isFinite(v.currentTime) && v.currentTime > 0) return v.currentTime;
     return mediaState.currentPlaybackTime;
+}
+// The room's live playhead while desynced, extrapolated lightly between ~1Hz mediaUpdate
+// ticks (not frame-accurate -- fine for "jump to live" / "don't seek past live", not for
+// tight sync). null until the first tick lands this desync session.
+export function getDesyncLiveSeconds() {
+    if (mediaState.desyncLiveSeconds == null) return null;
+    if (mediaState.desyncLivePaused) return mediaState.desyncLiveSeconds;
+    return mediaState.desyncLiveSeconds + Math.max(0, (Date.now() - mediaState.desyncLiveAt) / 1000);
 }
 export function formatHMS(s) {
     s = Math.max(0, Math.floor(s || 0));

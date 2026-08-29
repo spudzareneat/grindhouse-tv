@@ -110,20 +110,19 @@ export function initMediaWatcher() {
             }
             mediaState.currentMediaSeconds = (data && typeof data.seconds === 'number') ? data.seconds : 0;
             mediaState.currentMediaType    = (data && data.type) ? data.type : '';
+            mediaState.currentYtVideoId    = (data && data.type === 'yt' && data.id) ? data.id : '';
             // Only treat this as a NEW film when the media actually changed —
             // CyTube re-emits changeMedia on reconnect/resume (e.g. coming back
             // from PiP), which must not re-trigger the lookup/announcement card.
             const key = (data && (data.id || '')) + '|' + (data && (data.title || ''));
             if (key !== _lastMediaKey) {
                 _lastMediaKey = key;
+                // Forget the previous film's metadata up front so the Now-Playing card's
+                // Trivia button (gated on npState.data.imdbId, see showNowPlayingCard) hides
+                // itself for a bumper/short with no trivia, until the new lookup lands on a
+                // real movie.
                 movieState.lastMovieTitle = '';                 // force a fresh lookup
-                // Forget the previous film's metadata up front so the title observer
-                // can't rebuild a stale Trivia button over the next video (e.g. a short
-                // bumper with no trivia). It's recreated only once the new lookup lands
-                // on a real movie. Drop the button now too in case one is showing.
                 npState.data = null;
-                const _staleTrivia = document.getElementById('sc-trivia-btn');
-                if (_staleTrivia) _staleTrivia.remove();
                 // New media: drop any DRM overlay, and (for YouTube) start watching for the
                 // no-Widevine failure that DRM "YouTube Movies" titles hit on this device.
                 clearTimeout(drmState.checkTimer);

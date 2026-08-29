@@ -9,7 +9,7 @@ A native **Android app for [CyTube](https://cytu.be)** — built for the couch o
 ## Features
 
 - **Cinematic shell** — branded splash that holds until the video is actually playing, then a 3‑second *Now‑Playing* intro card (TMDB backdrop, rating, runtime, genres).
-- **Four chat layouts** — cycle **Sidebar → Overlay → Hidden → Chat‑Only** (press `C` or the on‑screen control): a translucent corner overlay, full‑bleed cinema, or a keyboard‑free **full‑screen chat** that pauses and mutes the video — handy for using a TV purely as a chat client.
+- **Five chat layouts** — cycle **Sidebar → Overlay → Subtitles → Hidden → Chat‑Only** (press `C` or the on‑screen control): a translucent corner overlay, movie‑style **subtitle lines** over the video (each with the sender's chat color and emoji carried over from the real chat log — *ported from the idea in [kburna243/mikes-420grindhouse-app](https://github.com/kburna243/mikes-420grindhouse-app)'s subtitle‑chat overlay*; opacity/font size/line count adjustable in Settings), full‑bleed cinema, or a keyboard‑free **full‑screen chat** that pauses and mutes the video — handy for using a TV purely as a chat client.
 - **Cast to TV** — from a phone or tablet, send the current video to a Chromecast / Google TV with one tap; the handset becomes a chat remote while the movie plays on the big screen. *(Experimental.)*
 - **Update notifications** — quietly checks GitHub for a newer release and briefly highlights the ⚙ settings gear; the release notes and a one‑tap **download link** live in Settings → App Updates.
 - **Grammar & spell check** — an optional *Review Before Sending* popup (powered by [LanguageTool](https://languagetool.org)) that catches typos and grammar slips, suggests one‑tap fixes, and flags hard‑to‑read messages (ALL CAPS, mashed keys, `!!!!`). Toggle it off in settings.
@@ -37,7 +37,7 @@ A native **Android app for [CyTube](https://cytu.be)** — built for the couch o
 
 ![Coming Attractions poster reel](docs/images/coming-attractions.jpg)
 
-**Chat layouts** — cycle Sidebar → Overlay → Hidden → Chat‑Only with `C`.
+**Chat layouts** — cycle Sidebar → Overlay → Subtitles → Hidden → Chat‑Only with `C`.
 
 | Overlay | Hidden (cinema) |
 |---|---|

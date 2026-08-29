@@ -589,7 +589,12 @@ class MainActivity : AppCompatActivity() {
                     else -> null
                 }
                 if (dir != null) {
-                    webView.evaluateJavascript("window.__scTvKey && window.__scTvKey('$dir')", null)
+                    // repeatCount is 0 on the initial press and auto-increments on each native
+                    // repeat while the button stays held (standard Android key-repeat, resets to
+                    // 0 on the next fresh ACTION_DOWN) -- passed through so the desync seek
+                    // scrubber can ramp its step size the longer Left/Right is held, with no
+                    // custom hold-detection needed on either side.
+                    webView.evaluateJavascript("window.__scTvKey && window.__scTvKey('$dir', ${event.repeatCount})", null)
                     return true
                 }
             }
@@ -655,6 +660,24 @@ class MainActivity : AppCompatActivity() {
                 pageLoaded = true
                 setLoadingStatus("Preparing…")
                 injectScript()
+            }
+
+            // Without this, any outbound link (e.g. a chat image/GIF embed's <a target="_blank">)
+            // navigates this single WebView straight to that URL, wiping out the channel session --
+            // onPageFinished then re-injects cytube_mobile.js onto the foreign page, scattering the
+            // app's floating chrome (Up Next, settings, chatmode...) with nothing behind it, since
+            // none of the channel's containers exist there. Only intercepts main-frame navigation --
+            // isForMainFrame stays false for the YouTube/Drive-proxy/Up-Next-bot/link-pip iframes,
+            // which must keep navigating freely inside the WebView.
+            override fun shouldOverrideUrlLoading(
+                view: WebView,
+                request: android.webkit.WebResourceRequest
+            ): Boolean {
+                if (!request.isForMainFrame) return false
+                val host = request.url.host ?: ""
+                if (host == "cytu.be" || host.endsWith(".cytu.be")) return false
+                openInPreferredApp(request.url.toString())
+                return true
             }
             // Drive streams are no longer intercepted here — the injected JS points them at the
             // localhost LocalMediaProxy instead, so the WebView can SEEK against a real HTTP server

@@ -6,4 +6,6 @@ export const chromeState = {
     leftZoneReveal: null,    // expose so video-tap can trigger both chrome systems together
     rightZoneReveal: null,   // vertical-mode right-edge drawer
     chromeWake: null,        // re-arms the TV chrome auto-hide (remote keys bypass DOM events)
+    pinChromeVisible: null,   // suspends the chrome auto-hide idle timer (set by initChromeAutohide)
+    unpinChromeVisible: null, // resumes it and fades immediately, in sync with whatever pinned it
 };

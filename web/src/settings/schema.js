@@ -3,7 +3,6 @@ const DEFS = {
     tmdbKey:      { key: 'sc_tmdb_key',           type: 'string', def: '' },
     onboarded:    { key: 'sc_onboarded',          type: 'flag',   def: false },          // set = true
     spellcheck:   { key: 'sc_spellcheck',         type: 'offbool', def: true },          // 'off' disables
-    movieLinks:   { key: 'sc_movie_links',        type: 'offbool', def: true },
     autoEmbed:    { key: 'sc_autoembed_images',   type: 'offbool', def: true },          // 'off' disables
     chatFontSize: { key: 'sc_chat_fontsize',      type: 'string', def: '' },
     movieLead:    { key: 'sc_movie_lead_sec',     type: 'string', def: '' },             // clamped 0-10 in player/leadtime.js, like chatFontSize
@@ -11,6 +10,8 @@ const DEFS = {
     watchAlong:   { key: 'sc_watch_along',        type: 'onbool', def: false },
     castMute:     { key: 'sc_cast_fallback_mute', type: 'onbool', def: false },
     lineupTiming: { key: 'sc_lineup_timing',      type: 'onbool', def: false },          // Experimental; off by default
+    triviaPopup:  { key: 'sc_trivia_popup',       type: 'onbool', def: false },          // Experimental; off by default
+    triviaPopupFreq: { key: 'sc_trivia_popup_freq', type: 'string', def: 'occasional' }, // 'frequent' | 'occasional' | 'rare'
     chatMode:     { key: 'sc_chat_mode',          type: 'string', def: 'sidebar' },
     vertSplit:    { key: 'sc_vert_split',         type: 'number', def: 50 },
     updateCache:  { key: 'sc_update_cache',       type: 'json',   def: null },

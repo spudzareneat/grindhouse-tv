@@ -4,11 +4,20 @@ import { chromeState } from './chrome/state.js';
 import { hideTriviaCard } from './cards/trivia.js';
 import { hideNowPlayingCard } from './cards/nowplaying.js';
 import { hideLineupScreen, stepLineupSection } from './lineup/screen.js';
+import { hideUpNextCard } from './cards/upnext.js';
+import { closeLinkPip } from './cards/linkpip.js';
+import { closeEmotesPanel } from './cards/emotepicker.js';
 import { pickDirectional } from './tvnav/geometry.js';
+import { getDesyncLiveSeconds } from './mediatime.js';
 
 // Let other UI (settings modal) place the remote's focus ring on an element.
 // settings.js reads tvNavState.setFocus instead of a bare reassignable binding.
-export const tvNavState = { setFocus: null };
+// preBackHooks: transient, non-overlay popups (e.g. the link-pip "View this?" prompt)
+// that need to consume a Back press without joining the OVERLAY_IDS/overlayFocusStack
+// system register a `() => boolean` here — return true to consume the press. Keeps
+// tvnav.js from having to import those modules directly (they already import
+// tvNavState FROM here to request focus; this avoids a circular import back).
+export const tvNavState = { setFocus: null, preBackHooks: [] };
 
 // Self-contained D-pad navigation for the /login page. None of the channel UI
 // (or its CSS, or the module-level isTv) runs here, so this re-detects TV and
@@ -123,10 +132,12 @@ export function initTvNav() {
     };
 
     // Topmost interactive overlay (poster strip excluded so its toggle stays reachable)
-    const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card', 'sc-lineup-screen'];
+    const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card', 'sc-upnext-card', 'sc-link-pip-panel', 'sc-emotes-panel', 'sc-lineup-screen'];
     const isOverlayOpen = (id, o) => !!(o && isVisible(o) &&
         (id !== 'sc-np-card' || o.classList.contains('sc-np-visible')) &&
+        (id !== 'sc-upnext-card' || o.classList.contains('sc-upnext-visible')) &&
         (id !== 'sc-trivia-card' || o.classList.contains('sc-show')) &&
+        (id !== 'sc-link-pip-panel' || o.classList.contains('sc-link-pip-visible')) &&
         (id !== 'sc-lineup-screen' || o.classList.contains('sc-lineup-visible')));
     const openOverlay = () => {
         for (const id of OVERLAY_IDS) {
@@ -193,8 +204,17 @@ export function initTvNav() {
     // 'sc-drm-open' first so it's the default focus when the DRM fallback is up; it's only a
     // candidate while the overlay exists (getElementById is null otherwise). It lives in the main
     // cluster — NOT OVERLAY_IDS — so the remote can still reach chat and the controls.
+    // 'messagebuffer' (the chat log) is a real landable target, not just something
+    // scrolled while some other element holds focus — see the "Chat cluster" block in
+    // move() below for its Up/Down/boundary behavior.
     const MAIN_IDS = ['sc-drm-open', 'sc-title-text', 'sc-chatmode-btn', 'sc-emote-proxy', 'sc-desync-btn', 'sc-settings-btn',
-        'sc-usercount-btn', 'sc-poll-btn', 'sc-poster-toggle', 'sc-trivia-btn', 'sc-newmsg-pill', 'sc-chat-collapse-btn', 'sc-chat-textarea'];
+        'sc-usercount-connected', 'sc-usercount-online', 'sc-poll-btn', 'sc-poster-toggle', 'sc-up-next-btn', 'sc-newmsg-pill',
+        'messagebuffer', 'sc-chat-textarea'];
+    // Header-row buttons that Left/Right steps between deterministically in x-order
+    // while the ring is on one of them — mirrors the control bar's own x-order
+    // stepping special case in move() below, rather than relying on geometric
+    // nearest-neighbour scoring across a tightly-packed row.
+    const CHAT_HEADER_IDS = ['sc-usercount-connected', 'sc-usercount-online', 'sc-poll-btn'];
     const FOCUS_SEL = 'button, a[href], input:not([type=hidden]), textarea, select, [tabindex]';
 
     const makeFocusable = (el) => {
@@ -269,29 +289,84 @@ export function initTvNav() {
     // Let other UI (settings modal) place the remote's focus ring on an element.
     tvNavState.setFocus = setFocus;
 
-    // Seek the active player by ±delta seconds (free-watch only — the caller guards
-    // on isDesynced()). Works for both video.js (raw/Drive) and a bare <video>.
-    function seekBy(delta) {
+    // Ramped seek step: index = native Android key-repeat count (0 on a fresh press,
+    // auto-incrementing while Left/Right is held — see MainActivity.kt's dispatchKeyEvent).
+    // Resets to the base 10s on every fresh, non-repeated press for free, since Android
+    // itself resets repeatCount to 0 on each new ACTION_DOWN. Clamps past the array's end.
+    const SEEK_RAMP = [10, 10, 10, 10, 30, 30, 30, 60, 60, 120];
+    function seekStepSeconds(repeatCount) {
+        const i = Math.max(0, Math.min(SEEK_RAMP.length - 1, repeatCount | 0));
+        return SEEK_RAMP[i];
+    }
+
+    // Forward seeks (free-watch only) are capped at the room's live position -- backward
+    // is uncapped (only Math.max(0, ...) below). getDesyncLiveSeconds() is null until the
+    // first mediaUpdate tick lands after desync turns on (see chrome/buttons.js); don't
+    // fabricate a cap in that brief window, just let the seek through uncapped.
+    //
+    // Takes `current` (the position BEFORE this seek) so the cap can never move playback
+    // backward: local desynced playback keeps advancing in real time same as the room does,
+    // so it's normal to already be sitting at/past the last-known live tick (which only
+    // updates ~1x/sec) -- clamping straight to `live` in that case would yank the seek
+    // *backward* below where you already were, which reads as a broken "forward" press.
+    // Floor the result at `current` instead: already at/past live -> forward seeking is a
+    // harmless no-op, never a step back.
+    function clampForwardToLive(current, next, delta) {
+        if (delta <= 0) return next;
+        const live = getDesyncLiveSeconds();
+        return (live != null) ? Math.max(current, Math.min(next, live)) : next;
+    }
+
+    // Seek the active player by dirSign * a ramped step (free-watch only — the caller
+    // guards on isDesynced()). Works for both video.js (raw/Drive) and a bare <video>.
+    function seekBy(dirSign, repeatCount) {
+        const delta = dirSign * seekStepSeconds(repeatCount);
         try {
             const p = window.PLAYER && window.PLAYER.player;
             if (p && typeof p.currentTime === 'function') {
-                p.currentTime(Math.max(0, (p.currentTime() || 0) + delta));
+                const current = p.currentTime() || 0;
+                const next = Math.max(0, current + delta);
+                p.currentTime(clampForwardToLive(current, next, delta));
                 wakeVideoControls();
                 return;
             }
         } catch (e) {}
         const v = document.querySelector('#videowrap video');
-        if (v) { try { v.currentTime = Math.max(0, v.currentTime + delta); wakeVideoControls(); } catch (e) {} }
+        if (v) { try { const current = v.currentTime; v.currentTime = clampForwardToLive(current, Math.max(0, current + delta), delta); wakeVideoControls(); } catch (e) {} }
     }
 
-    function move(dir) {
+    // Jump straight to the room's live position (OK on the scrubber while desynced — see
+    // activate() below). A no-op if no mediaUpdate tick has landed yet this desync session
+    // rather than guessing at a fake position.
+    function jumpToLive() {
+        const live = getDesyncLiveSeconds();
+        if (live == null) return;
+        try {
+            const p = window.PLAYER && window.PLAYER.player;
+            if (p && typeof p.currentTime === 'function') { p.currentTime(Math.max(0, live)); wakeVideoControls(); return; }
+        } catch (e) {}
+        const v = document.querySelector('#videowrap video');
+        if (v) { try { v.currentTime = Math.max(0, live); wakeVideoControls(); } catch (e) {} }
+    }
+
+    function move(dir, repeatCount) {
         // Scrubber focused + free-watch on: Left/Right steps through the movie
-        // (±10s) instead of moving focus. candidates() only offers the scrubber
-        // while desynced, so reaching here already implies seeking is allowed.
+        // (ramped by repeatCount) instead of moving focus. candidates() only offers the
+        // scrubber while desynced, so reaching here already implies seeking is allowed.
         if (focusEl && focusEl.classList && focusEl.classList.contains('vjs-progress-control') &&
             (dir === 'left' || dir === 'right')) {
-            if (isDesynced()) seekBy(dir === 'right' ? 10 : -10);
+            if (isDesynced()) seekBy(dir === 'right' ? 1 : -1, repeatCount || 0);
             return;
+        }
+        // Left/Right are claimed for seeking above, so Down is the deliberate way off the
+        // scrubber toward the docked settings/desync/chatmode row that sits directly to its
+        // right (#sc-settings-btn is the nearest of the three) -- without this, Down found no
+        // candidate below the bottom-anchored scrubber and was a dead end (only Up, via the
+        // generic spatial-nav fallback below, reached anywhere). Falls through to that same
+        // generic path if the button isn't there for some reason.
+        if (focusEl && focusEl.classList && focusEl.classList.contains('vjs-progress-control') && dir === 'down') {
+            const next = document.getElementById('sc-settings-btn');
+            if (next && isVisible(next)) { setFocus(next); return; }
         }
 
         // Control bar: Left/Right steps strictly along the bar's own controls in
@@ -379,6 +454,54 @@ export function initTvNav() {
             }
         }
 
+        // Chat cluster: the header row, the message log, and the textarea behave as one
+        // connected strip with their own Left/Right and Up/Down rules, instead of the
+        // whole-page geometric scorer -- the same "special-case one bounded cluster"
+        // pattern already used for the control bar's x-order stepping (above) and the
+        // lineup screen's rail navigation (below). This is scoped to chat only; nothing
+        // else on the page is affected, unlike a page-wide zone system.
+        {
+            const buf = document.getElementById('messagebuffer');
+            const onHeaderBtn = focusEl && CHAT_HEADER_IDS.includes(focusEl.id);
+            const onLog = focusEl && focusEl.id === 'messagebuffer';
+            const onTextarea = focusEl && focusEl.id === 'sc-chat-textarea';
+
+            // Header row: Left/Right steps deterministically in x-order between the
+            // buttons rather than relying on geometric nearest-neighbour scoring across
+            // a tightly-packed row (mirrors the control bar's own special case above).
+            if (onHeaderBtn && (dir === 'left' || dir === 'right')) {
+                const i = CHAT_HEADER_IDS.indexOf(focusEl.id);
+                const step = dir === 'right' ? 1 : -1;
+                for (let ni = i + step; ni >= 0 && ni < CHAT_HEADER_IDS.length; ni += step) {
+                    const el = document.getElementById(CHAT_HEADER_IDS[ni]);
+                    if (el && isVisible(el)) { setFocus(el); return; }
+                }
+                // no next button that way — fall through to normal spatial nav to leave the row
+            }
+            // Down from the header row enters the log; Up from the textarea enters the
+            // log too ("treat the chat input as its own thing" -- Up from it goes to
+            // chat, not silently past it).
+            if (onHeaderBtn && dir === 'down' && buf && isVisible(buf)) { setFocus(buf); return; }
+            if (onTextarea && dir === 'up' && buf && isVisible(buf)) { setFocus(buf); return; }
+            // On the log itself: Up/Down scrolls first, only moving focus on to the
+            // textarea (Down) or back up to the header row (Up) once already at that
+            // scroll boundary (or if there's nothing to scroll at all).
+            if (onLog && buf && (dir === 'up' || dir === 'down')) {
+                const scrollable = buf.scrollHeight > buf.clientHeight;
+                const atTop = buf.scrollTop <= 0;
+                const atBottom = buf.scrollTop + buf.clientHeight >= buf.scrollHeight - 1;
+                if (dir === 'down') {
+                    if (scrollable && !atBottom) { buf.scrollTop += 140; return; }
+                    const ta = document.getElementById('sc-chat-textarea');
+                    if (ta && isVisible(ta)) { setFocus(ta); return; }
+                } else {
+                    if (scrollable && !atTop) { buf.scrollTop -= 140; return; }
+                    const firstHeader = CHAT_HEADER_IDS.map(id => document.getElementById(id)).find(e => e && isVisible(e));
+                    if (firstHeader) { setFocus(firstHeader); return; }
+                }
+            }
+        }
+
         const { scope, list } = candidates();
         if (!list.length) return;
         if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) { setFocus(list[0]); return; }
@@ -388,7 +511,7 @@ export function initTvNav() {
         if (idx !== -1) { setFocus(list[idx]); return; }
         // No neighbour that way — scroll a scrollable region if we're in one
         if (dir === 'up' || dir === 'down') {
-            const sc = (scope.querySelector && scope.querySelector('#sc-trivia-list, #sc-settings-modal, #messagebuffer')) ||
+            const sc = (scope.querySelector && scope.querySelector('#sc-trivia-list, #sc-settings-modal, #sc-upnext-body, #messagebuffer')) ||
                        document.getElementById('messagebuffer');
             if (sc && sc.scrollHeight > sc.clientHeight) sc.scrollTop += (dir === 'down' ? 140 : -140);
         }
@@ -396,9 +519,13 @@ export function initTvNav() {
 
     function activate() {
         if (!focusEl) { move('right'); return; }
-        // OK on the scrubber would click at its origin and jump to 0 — seeking is
-        // Left/Right only, so swallow the press here.
-        if (focusEl.classList && focusEl.classList.contains('vjs-progress-control')) return;
+        // OK on the scrubber (raw click would jump to 0 — seeking is Left/Right only, so
+        // that's never let through) instead jumps to the room's live position while
+        // desynced, a fast way back after scrubbing away from it.
+        if (focusEl.classList && focusEl.classList.contains('vjs-progress-control')) {
+            if (isDesynced()) jumpToLive();
+            return;
+        }
         if (focusEl.tagName === 'TEXTAREA' || focusEl.tagName === 'INPUT') {
             if (focusEl.type === 'checkbox' || focusEl.type === 'range') focusEl.click();
             else { try { focusEl.focus(); } catch (e) {} } // let the on-screen keyboard open (if not suppressed)
@@ -432,6 +559,9 @@ export function initTvNav() {
     }
 
     function closeTop() {
+        // Transient popups outside the OVERLAY_IDS/overlayFocusStack system (e.g. the
+        // link-pip "View this?" prompt) get first crack at consuming Back.
+        for (const hook of tvNavState.preBackHooks) { if (hook()) return true; }
         // Innermost first: an open captions/quality menu closes back to its button.
         const menu = openVjsMenu();
         if (menu) {
@@ -460,6 +590,12 @@ export function initTvNav() {
         if (trivia && trivia.classList.contains('sc-show')) { hideTriviaCard(); restoreFocusAfterOverlayClose(); return true; }
         const np = document.getElementById('sc-np-card');
         if (np && np.classList.contains('sc-np-visible')) { hideNowPlayingCard(); restoreFocusAfterOverlayClose(); return true; }
+        const upNext = document.getElementById('sc-upnext-card');
+        if (upNext && upNext.classList.contains('sc-upnext-visible')) { hideUpNextCard(); restoreFocusAfterOverlayClose(); return true; }
+        const linkPip = document.getElementById('sc-link-pip-panel');
+        if (linkPip && linkPip.classList.contains('sc-link-pip-visible')) { closeLinkPip(); restoreFocusAfterOverlayClose(); return true; }
+        const emotes = document.getElementById('sc-emotes-panel');
+        if (emotes && isVisible(emotes)) { closeEmotesPanel(); restoreFocusAfterOverlayClose(); return true; }
         const lineup = document.getElementById('sc-lineup-screen');
         if (lineup && lineup.classList.contains('sc-lineup-visible')) { hideLineupScreen(); restoreFocusAfterOverlayClose(); return true; }
         for (const id of ['sc-users-panel', 'sc-poll-panel']) {
@@ -480,7 +616,7 @@ export function initTvNav() {
         if (typeof chromeState.topBarWake === 'function') chromeState.topBarWake();
     }
 
-    window.__scTvKey = function (dir) {
+    window.__scTvKey = function (dir, repeatCount) {
         try {
             if (dir === 'back') {
                 if (!closeTop()) { try { if (window.CytubeNative && CytubeNative.tvBack) CytubeNative.tvBack(); } catch (e) {} }
@@ -488,7 +624,7 @@ export function initTvNav() {
             }
             revealChrome();
             if (dir === 'center') activate();
-            else move(dir);
+            else move(dir, repeatCount || 0);
         } catch (e) { /* never let remote nav throw */ }
     };
 }

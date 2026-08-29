@@ -100,14 +100,13 @@
                 50%      { box-shadow: 0 0 0 2px rgba(125,255,160,0.7), 0 0 16px rgba(125,255,160,0.8) !important; }
             }
 
-            body.sc-horizontal #sc-settings-btn {
-                bottom: 6px !important; right: calc(20vw + 102px) !important;
-            }
-            body.sc-vertical #sc-settings-btn {
-                bottom: 43vh !important; right: 122px !important;
-            }
-
-            /* ===== CAST BUTTON (mobile only) — fly-out cluster, one slot past settings ===== */
+            /* ===== CAST BUTTON (mobile only) — fourth slot in the docked scrubber-row
+               cluster, alongside chatmode/desync/settings ===== */
+            /* Used to be a leftzone/rightzone fly-out (hidden behind an edge swipe or a
+               barely-visible grip) -- same discoverability trap as the old Chat-Only escape
+               gesture: effectively invisible until you already knew it was there. Docked
+               permanently instead, same size/pitch/fade as its row-mates, so it reads as
+               "one of the buttons" instead of something to be found by accident. */
             #sc-cast-btn {
                 position: fixed !important;
                 z-index: 20002 !important;
@@ -115,37 +114,30 @@
                 color: rgba(255,255,255,0.55) !important;
                 border: none !important;
                 border-radius: 50% !important;
-                width: 28px !important;
-                height: 28px !important;
                 padding: 0 !important;
                 cursor: pointer !important;
                 display: flex !important;
                 align-items: center !important;
                 justify-content: center !important;
-                transition: color 0.3s ease, background 0.3s ease, opacity 0.25s ease, transform 0.25s ease !important;
+                transition: color 0.3s ease, background 0.3s ease, opacity 0.6s ease !important;
                 line-height: 1 !important;
             }
             #sc-cast-btn:hover { color: white !important; background: rgba(255,255,255,0.22) !important; }
             #sc-cast-btn.sc-cast-active { color: #7dffa0 !important; background: rgba(125,255,160,0.18) !important; }
-            /* Horizontal: vertical stack at the left edge, directly under settings (56px pitch) */
+            /* Horizontal: same row as chatmode/desync/settings, one slot past settings
+               (38px pitch, matching their own 8/46/84 spacing). */
             body.sc-horizontal #sc-cast-btn {
-                left: 10px !important; right: auto !important; bottom: auto !important;
-                top: calc(50% + 112px) !important;
-                opacity: 0 !important; pointer-events: none !important;
-                transform: translateX(-14px) !important;
+                left: auto !important; bottom: 4px !important; top: auto !important;
+                right: calc(19vw + 122px) !important;
+                width: 32px !important; height: 32px !important; font-size: 13px !important;
+                opacity: 1 !important; pointer-events: auto !important; transform: none !important;
             }
-            body.sc-horizontal.sc-leftzone #sc-cast-btn {
-                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
-            }
-            /* Vertical: control-band row, one slot left of settings */
+            /* Vertical: same row, one slot past settings (right:84 + 38px pitch). */
             body.sc-vertical #sc-cast-btn {
-                top: calc(var(--sc-split, 50) * 1vh + 4px) !important; bottom: auto !important;
-                right: 140px !important; left: auto !important;
-                opacity: 0 !important; pointer-events: none !important;
-                transform: translateX(16px) !important;
-            }
-            body.sc-vertical.sc-rightzone #sc-cast-btn {
-                opacity: 1 !important; pointer-events: auto !important; transform: translateX(0) !important;
+                top: auto !important; bottom: calc((100 - var(--sc-split, 50)) * 1vh + 4px) !important;
+                right: 122px !important; left: auto !important;
+                width: 32px !important; height: 32px !important; font-size: 13px !important;
+                opacity: 1 !important; pointer-events: auto !important; transform: none !important;
             }
 
             /* ===== SETTINGS MODAL ===== */
@@ -410,5 +402,64 @@
                 border-radius: 8px !important; padding: 12px 26px !important;
                 font-size: 15px !important; font-weight: 700 !important; cursor: pointer !important;
                 font-family: inherit !important;
+            }
+
+            /* ===== POP-UP TRIVIA BUBBLE ===== */
+            /* Styled after the classic VH1 Pop-up Video caption bubble: plain
+               white card, thick black outline, bold black text, no close
+               button -- it just times out on its own. left/top are set inline
+               (with !important) by triviapopup.js on every pop, clamped to
+               #videowrap's own rect -- see that file's _tpRandomPosition(). */
+            #sc-tp-bubble {
+                position: fixed !important;
+                left: 50% !important;
+                top: 50% !important;
+                z-index: 15500 !important; /* above video chrome, below settings/review modals (~99998+) and the trivia card (21800) */
+                max-width: min(460px, 88vw) !important;
+                display: flex !important;
+                align-items: center !important;
+                padding: 30px 20px 16px 36px !important;
+                background: #ffffff !important;
+                border: 5px solid #000 !important;
+                border-radius: 20px !important;
+                box-shadow: 0 6px 18px rgba(0,0,0,0.55) !important;
+                font-family: 'Arial Rounded MT Bold','Comic Sans MS',sans-serif !important;
+                opacity: 0 !important;
+                transform: scale(0.001) !important;
+                transition: transform 0.28s cubic-bezier(.34,1.56,.64,1), opacity 0.2s ease !important;
+                pointer-events: auto !important;
+                cursor: pointer !important;
+            }
+            #sc-tp-bubble.sc-tp-in {
+                opacity: 0.9 !important;
+                transform: scale(1) !important;
+            }
+            #sc-tp-bubble.sc-tp-out {
+                opacity: 0 !important;
+                transform: scale(0.85) !important;
+                transition-duration: 0.3s !important;
+            }
+            #sc-tp-tail {
+                position: absolute !important;
+                top: -18px !important;
+                left: -22px !important;
+                width: 48px !important;
+                height: 48px !important;
+                overflow: visible !important;
+                filter: drop-shadow(0 2px 3px rgba(0,0,0,0.4)) !important;
+            }
+            #sc-tp-text {
+                color: #0a0a0a !important;
+                font-size: 15px !important;
+                font-weight: 700 !important;
+                line-height: 1.35 !important;
+            }
+            #sc-tp-byline {
+                color: #4a4a4a !important;
+                font-family: 'Arial Rounded MT Bold','Comic Sans MS',sans-serif !important;
+                font-size: 12px !important;
+                font-weight: 400 !important;
+                line-height: 1.3 !important;
+                margin-top: 6px !important;
             }
             .sc-drm-btn:focus { outline: 3px solid #fff !important; outline-offset: 2px !important; }
