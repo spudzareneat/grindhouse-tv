@@ -132,7 +132,7 @@ export function initTvNav() {
     };
 
     // Topmost interactive overlay (poster strip excluded so its toggle stays reachable)
-    const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card', 'sc-upnext-card', 'sc-link-pip-panel', 'sc-emotes-panel', 'sc-lineup-screen'];
+    const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card', 'sc-upnext-card', 'sc-link-pip-panel', 'sc-emotes-panel', 'sc-lineup-screen', 'sc-subtitles-picker', 'sc-subtitles-manage'];
     const isOverlayOpen = (id, o) => !!(o && isVisible(o) &&
         (id !== 'sc-np-card' || o.classList.contains('sc-np-visible')) &&
         (id !== 'sc-upnext-card' || o.classList.contains('sc-upnext-visible')) &&
@@ -208,7 +208,7 @@ export function initTvNav() {
     // scrolled while some other element holds focus — see the "Chat cluster" block in
     // move() below for its Up/Down/boundary behavior.
     const MAIN_IDS = ['sc-drm-open', 'sc-title-text', 'sc-chatmode-btn', 'sc-emote-proxy', 'sc-desync-btn', 'sc-settings-btn',
-        'sc-usercount-connected', 'sc-usercount-online', 'sc-poll-btn', 'sc-poster-toggle', 'sc-up-next-btn', 'sc-newmsg-pill',
+        'sc-usercount-connected', 'sc-usercount-online', 'sc-poll-btn', 'sc-poster-toggle', 'sc-up-next-btn', 'sc-subtitles-btn', 'sc-newmsg-pill',
         'messagebuffer', 'sc-chat-textarea'];
     // Header-row buttons that Left/Right steps between deterministically in x-order
     // while the ring is on one of them — mirrors the control bar's own x-order
@@ -646,6 +646,21 @@ export function initTvNav() {
         for (const id of ['sc-users-panel', 'sc-poll-panel']) {
             const p = document.getElementById(id);
             if (p && isVisible(p)) { p.style.display = 'none'; restoreFocusAfterOverlayClose(); return true; }
+        }
+        // Created/removed outright (no persistent visibility class) -- same click-
+        // delegation as settings/modal above, so it stays decoupled from subtitles/ui.js
+        // (which already imports tvNavState from here; no need for a reverse import).
+        const subsPicker = document.getElementById('sc-subtitles-picker');
+        if (subsPicker && isVisible(subsPicker)) {
+            const c = document.getElementById('sc-subtitles-picker-close');
+            if (c) c.click(); else subsPicker.remove();
+            restoreFocusAfterOverlayClose(); return true;
+        }
+        const subsManage = document.getElementById('sc-subtitles-manage');
+        if (subsManage && isVisible(subsManage)) {
+            const c = document.getElementById('sc-subtitles-manage-close');
+            if (c) c.click(); else subsManage.remove();
+            restoreFocusAfterOverlayClose(); return true;
         }
         return false;
     }

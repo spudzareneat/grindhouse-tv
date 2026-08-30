@@ -192,6 +192,7 @@ export function initChatModes() {
     if (!document.getElementById('sc-chatmode-btn')) {
         const btn = document.createElement('button');
         btn.id = 'sc-chatmode-btn'; btn.type = 'button';
+        btn.className = 'sc-dock-btn';
         btn.title = 'Cycle chat layout (press C)';
         btn.addEventListener('click', cycleChatMode);
         document.body.appendChild(btn);

@@ -13,6 +13,7 @@ import {
     initVideoTapReveal, initVertControlBand, initRightZone,
 } from './chat/modes.js';
 import { initDesyncButton, addFloatingButtons, addCastButton } from './chrome/buttons.js';
+import { layoutDock } from './chrome/dock.js';
 import { usernameToColor } from './usercolors.js';
 import { getExternalUserEmoji } from './useremoji.js';
 import { nativeHttpGet } from './native.js';
@@ -21,12 +22,13 @@ import { renderQrToCanvas } from './vendor/qr.js';
 import { _appVersion, checkForUpdate, initUpdateCheck, _updateInfo, GH_RELEASES_PAGE } from './update.js';
 import {
     LS_TMDB, LS_ONBOARDED, LS_SPELLCHECK, LS_CHAT_FONT, LS_COUCH, LS_WATCHALONG, LS_CAST_MUTE, LS_LINEUP_TIMING, LS_AUTOEMBED, LS_TRIVIA_POPUP, LS_TRIVIA_POPUP_FREQ,
-    LS_SUBTITLE_OPACITY, LS_SUBTITLE_FONTSIZE, LS_SUBTITLE_LINES,
+    LS_SUBTITLE_OPACITY, LS_SUBTITLE_FONTSIZE, LS_SUBTITLE_LINES, LS_OPENSUBTITLES,
     getKey, setKey, hasKey, spellCheckEnabled, couchModeEnabled, watchAlongEnabled, castFallbackMuted, lineupTimingEnabled, autoEmbedEnabled, triviaPopupEnabled, triviaPopupFrequency,
 } from './store.js';
 import { fetchImdbParentalGuide } from './metadata/imdb.js';
 import { isTv } from './tvdetect.js';
 import { movieState, getKillCountDb, validateTmdbKey } from './metadata/tmdb.js';
+import { validateOpensubtitlesKey } from './subtitles/opensubtitles.js';
 import { npState, showNowPlayingCard, hideNowPlayingCard, initNowPlayingWatcher } from './cards/nowplaying.js';
 import { triviaPopupBoot } from './cards/triviapopup.js';
 import {
@@ -38,7 +40,6 @@ import { triggerTitleInject, watchMovieTitle } from './titleinject.js';
 import { loadLastAiredSheet } from './metadata/lastaired.js';
 import { initGoogleDrive } from './player/drive.js';
 import { initMediaWatcher } from './player/resync.js';
-import { initYtScrubber } from './player/ytscrubber.js';
 import { initSeekHud } from './player/seekhud.js';
 import { openExternalUrl } from './player/drm.js';
 import { getMovieLeadSec, setMovieLeadSec, initMovieLeadOffset, MOVIE_LEAD_MIN, MOVIE_LEAD_MAX } from './player/leadtime.js';
@@ -487,6 +488,7 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
         if (old) old.remove();
 
         const tmdbVal  = getKey(LS_TMDB);
+        const opensubtitlesVal = getKey(LS_OPENSUBTITLES);
         // "First run" = the very first time the app is opened, not whether a key exists.
         // The key is always optional; we only use this to show the intro copy once.
         const firstRun = !localStorage.getItem(LS_ONBOARDED);
@@ -536,6 +538,27 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
                                 </span>
                                 <span class="sc-settings-note">Shows NOW PLAYING and estimated start times in Tonight's Lineup. Needs TMDB above for movie runtimes — without it, estimates can't guess well. Off by default, still being tuned.</span>
                             </label>
+                        </div>
+                    </div>
+
+                    <div class="sc-settings-group sc-settings-divider">
+                        <label class="sc-settings-toggle-label">
+                            <span class="sc-toggle-row">
+                                <input type="checkbox" id="sc-input-opensubtitles-enable" ${opensubtitlesVal ? 'checked' : ''} />
+                                <span class="sc-toggle-text">Enable OpenSubtitles</span>
+                            </span>
+                            <span class="sc-settings-note">Adds a Subtitles button for movies this app identifies, to download and show real subtitle files</span>
+                        </label>
+                        <div id="sc-opensubtitles-fields" class="${opensubtitlesVal ? '' : 'sc-hidden'}">
+                            <div class="sc-settings-input-row">
+                                <input id="sc-input-opensubtitles" class="sc-settings-input" type="text"
+                                    placeholder="Paste OpenSubtitles API key…" value="${opensubtitlesVal}" spellcheck="false" />
+                                <button id="sc-test-opensubtitles" class="sc-settings-test" type="button">Test</button>
+                            </div>
+                            <span id="sc-test-opensubtitles-status" class="sc-settings-test-status"></span>
+                            <a class="sc-settings-link" href="https://www.opensubtitles.com/en/consumers" target="_blank" rel="noopener">
+                                Get a free OpenSubtitles API key ↗
+                            </a>
                         </div>
                     </div>
 
@@ -754,18 +777,37 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
             });
         }
 
-        // Persist the non-live settings (TMDB key + spellcheck). The toggles for keyboard,
-        // movie-links and font size already save themselves on change. Used by Save AND by
-        // Login, so navigating to the login page never loses what you just entered.
+        // Same reveal/hide pattern for the OpenSubtitles key
+        const osEnable = document.getElementById('sc-input-opensubtitles-enable');
+        const osFields = document.getElementById('sc-opensubtitles-fields');
+        if (osEnable && osFields) {
+            osEnable.addEventListener('change', () => {
+                osFields.classList.toggle('sc-hidden', !osEnable.checked);
+                if (osEnable.checked) {
+                    const i = document.getElementById('sc-input-opensubtitles');
+                    if (i) { if (tvNavState.setFocus) tvNavState.setFocus(i); else i.focus(); }
+                }
+            });
+        }
+
+        // Persist the non-live settings (TMDB + OpenSubtitles keys + spellcheck). The
+        // toggles for keyboard, movie-links and font size already save themselves on
+        // change. Used by Save AND by Login, so navigating to the login page never
+        // loses what you just entered.
         const persistSettings = () => {
             const enabled = tmdbEnable && tmdbEnable.checked;
             const input = document.getElementById('sc-input-tmdb');
             setKey(LS_TMDB, (enabled && input) ? input.value.trim() : '');
+            const osEnabled = osEnable && osEnable.checked;
+            const osInput = document.getElementById('sc-input-opensubtitles');
+            setKey(LS_OPENSUBTITLES, (osEnabled && osInput) ? osInput.value.trim() : '');
             const sc = document.getElementById('sc-input-spellcheck');
             if (sc) setKey(LS_SPELLCHECK, sc.checked ? 'on' : 'off');
             movieState.movieLinkCache = {};   // flush so the re-lookup hits the network
             movieState.lastMovieTitle = '';   // allow injectMovieLinks to re-run for the current title
-            triggerTitleInject();  // immediately re-fetch with the new key
+            triggerTitleInject();  // immediately re-fetch with the new key(s) -- also
+            // re-evaluates the Subtitles button (titleinject.js's updateSubtitleButton
+            // call) so enabling/disabling OpenSubtitles here takes effect immediately.
         };
 
         document.getElementById('sc-settings-save').addEventListener('click', () => {
@@ -802,6 +844,7 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
             });
         };
         wireTest('sc-test-tmdb', 'sc-input-tmdb', 'sc-test-tmdb-status', validateTmdbKey);
+        wireTest('sc-test-opensubtitles', 'sc-input-opensubtitles', 'sc-test-opensubtitles-status', validateOpensubtitlesKey);
 
         // ── Chat font-size slider (live preview + persist) ───────────────────
         const fontInput  = document.getElementById('sc-input-fontsize');
@@ -974,6 +1017,7 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
         if (document.getElementById('sc-settings-btn')) return;
         const btn = document.createElement('button');
         btn.id = 'sc-settings-btn';
+        btn.className = 'sc-dock-btn';
         btn.textContent = '⚙';
         btn.title = 'Script Settings (API keys)';
         btn.dataset.tvLabel = 'Settings';
@@ -1144,14 +1188,14 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
         addFloatingButtons();
         addSettingsButton();
         addCastButton();
+        initDesyncButton();
+        layoutDock(); // cast/desync/settings all exist now -- chatmode follows in initCinematicChat()
         watchMovieTitle();
         initMediaWatcher();
-        initYtScrubber();
         initSeekHud();
         initChatTimestamps();
         initNowPlayingWatcher();
         initTopBar();
-        initDesyncButton();
         initMovieLeadOffset();
         initChatHeader();
         initUserCount();
@@ -1324,6 +1368,7 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
     function initCinematicChat() {
         [initAmbientGlow, initChromeAutohide, initChatModes, initNewMessagePill, initMentionToast, initChatFont, initLeftZone, initVideoTapReveal, initVertControlBand, initRightZone, applyCouchMode, applyWatchAlong]
             .forEach(fn => { try { fn(); } catch (e) { console.warn('[Grindhouse] init failed:', fn.name, e); } });
+        layoutDock(); // chatmode-btn (initChatModes, above) now exists too -- settle the full dock
     }
     if (document.readyState === 'complete') initCinematicChat();
     else window.addEventListener('load', initCinematicChat);

@@ -3,6 +3,7 @@ import { npState } from './nowplaying.js';
 import { isYouTubeMedia } from '../titleinject.js';
 import { triviaPopupEnabled, triviaPopupFrequency } from '../store.js';
 import { inSubtitlesMode } from './subtitles.js';
+import { isMovieSubtitlesVisible } from '../subtitles/overlay.js';
 
 /* ==========================================================
    POP-UP TRIVIA BUBBLES — "VH1 Pop-up Video" style ambient trivia.
@@ -169,7 +170,12 @@ function _tpAttemptPop() {
     const curId = npState.data && npState.data.imdbId;
     if (curId !== _tpLastImdbId) return; // stale timer from a since-reset movie
 
-    if (!triviaPopupEnabled() || !_tpMoviePlaying()) {
+    // Real downloaded movie subtitles (subtitles/ui.js) already occupy the bottom
+    // of the screen -- a pop-up bubble competing for the same real estate (or
+    // just being a second block of on-screen text at once) is exactly the kind
+    // of collision this blocks, same "recheck soon, don't consume the queue"
+    // treatment as paused/YouTube/disabled below.
+    if (!triviaPopupEnabled() || !_tpMoviePlaying() || isMovieSubtitlesVisible()) {
         // Blocked, not exhausted -- recheck soon without consuming a queue item.
         _tpPopTimer = setTimeout(_tpAttemptPop, TP_RETRY_MS);
         return;

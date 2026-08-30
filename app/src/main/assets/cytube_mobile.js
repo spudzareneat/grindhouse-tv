@@ -13,7 +13,8 @@
   // src/native.js
   var native_exports = {};
   __export(native_exports, {
-    nativeHttpGet: () => nativeHttpGet
+    nativeHttpGet: () => nativeHttpGet,
+    nativeHttpPost: () => nativeHttpPost
   });
   function nativeHttpGet(url, headers = {}) {
     return new Promise((resolve, reject) => {
@@ -28,6 +29,31 @@
       };
       try {
         CytubeNative.httpGet(id, url, JSON.stringify(headers));
+      } catch (e) {
+        delete _scHttpCbs[id];
+        reject(e);
+      }
+      setTimeout(() => {
+        if (_scHttpCbs[id]) {
+          delete _scHttpCbs[id];
+          reject(new Error("timeout"));
+        }
+      }, 1e4);
+    });
+  }
+  function nativeHttpPost(url, headers = {}, body = "") {
+    return new Promise((resolve, reject) => {
+      if (!(window.CytubeNative && typeof CytubeNative.httpPost === "function")) {
+        reject(new Error("native http unavailable"));
+        return;
+      }
+      const id = "h" + Math.random().toString(36).slice(2);
+      _scHttpCbs[id] = (res) => {
+        if (res && res.error) reject(new Error(res.error));
+        else resolve(res);
+      };
+      try {
+        CytubeNative.httpPost(id, url, JSON.stringify(headers), body);
       } catch (e) {
         delete _scHttpCbs[id];
         reject(e);
@@ -153,6 +179,8 @@
 
   // src/store.js
   var LS_TMDB = "sc_tmdb_key";
+  var LS_OPENSUBTITLES = "sc_opensubtitles_key";
+  var LS_SUBTITLE_CACHE = "sc_subtitle_cache_v1";
   var LS_ONBOARDED = "sc_onboarded";
   var LS_SPELLCHECK = "sc_spellcheck";
   var LS_CHAT_FONT = "sc_chat_fontsize";
@@ -3110,7 +3138,7 @@
       const cs = getComputedStyle(el);
       return cs.visibility !== "hidden" && cs.display !== "none";
     };
-    const OVERLAY_IDS = ["sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card", "sc-upnext-card", "sc-link-pip-panel", "sc-emotes-panel", "sc-lineup-screen"];
+    const OVERLAY_IDS = ["sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card", "sc-upnext-card", "sc-link-pip-panel", "sc-emotes-panel", "sc-lineup-screen", "sc-subtitles-picker", "sc-subtitles-manage"];
     const isOverlayOpen = (id, o) => !!(o && isVisible(o) && (id !== "sc-np-card" || o.classList.contains("sc-np-visible")) && (id !== "sc-upnext-card" || o.classList.contains("sc-upnext-visible")) && (id !== "sc-trivia-card" || o.classList.contains("sc-show")) && (id !== "sc-link-pip-panel" || o.classList.contains("sc-link-pip-visible")) && (id !== "sc-lineup-screen" || o.classList.contains("sc-lineup-visible")));
     const openOverlay = () => {
       for (const id of OVERLAY_IDS) {
@@ -3161,6 +3189,7 @@
       "sc-poll-btn",
       "sc-poster-toggle",
       "sc-up-next-btn",
+      "sc-subtitles-btn",
       "sc-newmsg-pill",
       "messagebuffer",
       "sc-chat-textarea"
@@ -3591,6 +3620,22 @@
           restoreFocusAfterOverlayClose();
           return true;
         }
+      }
+      const subsPicker = document.getElementById("sc-subtitles-picker");
+      if (subsPicker && isVisible(subsPicker)) {
+        const c = document.getElementById("sc-subtitles-picker-close");
+        if (c) c.click();
+        else subsPicker.remove();
+        restoreFocusAfterOverlayClose();
+        return true;
+      }
+      const subsManage = document.getElementById("sc-subtitles-manage");
+      if (subsManage && isVisible(subsManage)) {
+        const c = document.getElementById("sc-subtitles-manage-close");
+        if (c) c.click();
+        else subsManage.remove();
+        restoreFocusAfterOverlayClose();
+        return true;
       }
       return false;
     }
@@ -4303,6 +4348,7 @@
       const btn = document.createElement("button");
       btn.id = "sc-chatmode-btn";
       btn.type = "button";
+      btn.className = "sc-dock-btn";
       btn.title = "Cycle chat layout (press C)";
       btn.addEventListener("click", cycleChatMode);
       document.body.appendChild(btn);
@@ -4502,6 +4548,7 @@
   function initDesyncButton() {
     const btn = document.createElement("button");
     btn.id = "sc-desync-btn";
+    btn.className = "sc-dock-btn";
     btn.textContent = "⟳";
     btn.title = "Free watch — click to watch freely, click again to re-sync";
     btn.dataset.tvLabel = "Free Watch";
@@ -4612,6 +4659,7 @@
     if (document.getElementById("sc-cast-btn")) return;
     const btn = document.createElement("button");
     btn.id = "sc-cast-btn";
+    btn.className = "sc-dock-btn";
     btn.type = "button";
     btn.title = "Cast to TV";
     btn.dataset.tvLabel = "Cast";
@@ -4623,6 +4671,19 @@
       }
     });
     document.body.appendChild(btn);
+  }
+
+  // src/chrome/dock.js
+  var DOCK_ORDER = ["sc-chatmode-btn", "sc-settings-btn", "sc-subtitles-btn", "sc-desync-btn", "sc-cast-btn"];
+  function layoutDock() {
+    let slot = 0;
+    for (const id of DOCK_ORDER) {
+      const el = document.getElementById(id);
+      if (!el || el.classList.contains("sc-hidden")) continue;
+      el.style.setProperty("--sc-dock-slot", String(slot));
+      slot++;
+    }
+    document.body.style.setProperty("--sc-dock-count", String(slot));
   }
 
   // src/settings.js
@@ -6457,8 +6518,384 @@
     }, 4e3);
   }
 
+  // src/subtitles/opensubtitles.js
+  init_native();
+  var API_BASE = "https://api.opensubtitles.com/api/v1";
+  var USER_AGENT = "GrindhouseTV v1.0";
+  function authHeaders(key) {
+    return { "Api-Key": key, "User-Agent": USER_AGENT, "Content-Type": "application/json" };
+  }
+  async function validateOpensubtitlesKey(key) {
+    if (!key) return "invalid";
+    try {
+      const r = await nativeHttpPost(`${API_BASE}/download`, authHeaders(key), JSON.stringify({ file_id: 0 }));
+      if (r.status === 503) return "invalid";
+      if (r.status >= 400 && r.status < 500) return "valid";
+      return "error";
+    } catch (e) {
+      return "error";
+    }
+  }
+  async function searchSubtitles(imdbId) {
+    const key = getKey(LS_OPENSUBTITLES);
+    if (!key || !imdbId) return [];
+    const numericId = String(imdbId).replace(/^tt/i, "");
+    try {
+      const r = await nativeHttpGet(
+        `${API_BASE}/subtitles?imdb_id=${encodeURIComponent(numericId)}&languages=en`,
+        authHeaders(key)
+      );
+      if (r.status !== 200) return [];
+      const data = JSON.parse(r.body);
+      return (data.data || []).map((entry) => {
+        const a = entry.attributes || {};
+        const file = (a.files || [])[0];
+        if (!file || !file.file_id) return null;
+        return {
+          fileId: file.file_id,
+          release: a.release || "Unknown release",
+          uploader: a.uploader && a.uploader.name || "Unknown",
+          downloadCount: a.download_count || 0,
+          fromTrusted: !!a.from_trusted,
+          hearingImpaired: !!a.hearing_impaired,
+          machineTranslated: !!(a.machine_translated || a.ai_translated)
+        };
+      }).filter(Boolean).sort((a, b) => b.downloadCount - a.downloadCount).slice(0, 8);
+    } catch (e) {
+      return [];
+    }
+  }
+  async function downloadSubtitle(fileId) {
+    const key = getKey(LS_OPENSUBTITLES);
+    if (!key || !fileId) return null;
+    try {
+      const r = await nativeHttpPost(`${API_BASE}/download`, authHeaders(key), JSON.stringify({ file_id: fileId }));
+      if (r.status !== 200) return null;
+      const data = JSON.parse(r.body);
+      return data.link || null;
+    } catch (e) {
+      return null;
+    }
+  }
+  async function fetchSrtText(link) {
+    if (!link) return null;
+    try {
+      const r = await nativeHttpGet(link);
+      return r.status === 200 ? r.body : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function srtTimeToSeconds(t) {
+    const m = String(t).match(/(\d+):(\d\d):(\d\d)[,.](\d+)/);
+    if (!m) return 0;
+    return +m[1] * 3600 + +m[2] * 60 + +m[3] + +m[4] / 1e3;
+  }
+  var _ALLOWED_TAGS = ["i", "b", "u"];
+  function escapeSubtitleText(raw) {
+    const escaped = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return escaped.replace(/&lt;(\/?)(\w+)&gt;/g, (m, close, tag) => _ALLOWED_TAGS.includes(tag.toLowerCase()) ? `<${close}${tag.toLowerCase()}>` : m);
+  }
+  function parseSrt(text) {
+    if (!text) return [];
+    const noBom = text.charCodeAt(0) === 65279 ? text.slice(1) : text;
+    const clean = noBom.replace(/\r\n/g, "\n");
+    const blocks = clean.split(/\n\n+/);
+    const cues = [];
+    for (const block of blocks) {
+      const lines = block.split("\n").filter((l) => l.trim());
+      if (!lines.length) continue;
+      const timeLineIdx = lines.findIndex((l) => l.includes("-->"));
+      if (timeLineIdx === -1) continue;
+      const [startStr, endStr] = lines[timeLineIdx].split("-->").map((s) => s.trim());
+      const start = srtTimeToSeconds(startStr);
+      const end = srtTimeToSeconds(endStr);
+      if (end <= start) continue;
+      const textLines = lines.slice(timeLineIdx + 1);
+      if (!textLines.length) continue;
+      cues.push({ start, end, text: escapeSubtitleText(textLines.join("\n")) });
+    }
+    return cues;
+  }
+
   // src/titleinject.js
   init_native();
+
+  // src/subtitles/overlay.js
+  var REFRESH_MS = 500;
+  var _cues = [];
+  var _timer = null;
+  var _lastCueIndex = -1;
+  var _offset = 0;
+  function ensureContainer2() {
+    let el = document.getElementById("sc-movie-subtitles-overlay");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "sc-movie-subtitles-overlay";
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+  function findActiveCueIndex(cues, seconds, offset = 0) {
+    const adjusted = seconds - offset;
+    for (let i = 0; i < cues.length; i++) {
+      if (adjusted >= cues[i].start && adjusted <= cues[i].end) return i;
+    }
+    return -1;
+  }
+  function tick() {
+    const idx = findActiveCueIndex(_cues, getCurrentPlaybackSeconds(), _offset);
+    if (idx === _lastCueIndex) return;
+    _lastCueIndex = idx;
+    ensureContainer2().innerHTML = idx >= 0 ? _cues[idx].text.replace(/\n/g, "<br>") : "";
+  }
+  function showMovieSubtitles(cues) {
+    _cues = cues || [];
+    _lastCueIndex = -1;
+    ensureContainer2().classList.add("sc-movie-subtitles-visible");
+    if (!_timer) _timer = setInterval(tick, REFRESH_MS);
+    tick();
+  }
+  function resetSubtitleOffset() {
+    _offset = 0;
+  }
+  function getSubtitleOffset() {
+    return _offset;
+  }
+  function setSubtitleOffset(seconds) {
+    _offset = seconds;
+    _lastCueIndex = -1;
+    if (isMovieSubtitlesVisible()) tick();
+  }
+  function hideMovieSubtitles() {
+    if (_timer) {
+      clearInterval(_timer);
+      _timer = null;
+    }
+    const el = document.getElementById("sc-movie-subtitles-overlay");
+    if (el) {
+      el.classList.remove("sc-movie-subtitles-visible");
+      el.innerHTML = "";
+    }
+  }
+  function isMovieSubtitlesVisible() {
+    const el = document.getElementById("sc-movie-subtitles-overlay");
+    return !!(el && el.classList.contains("sc-movie-subtitles-visible"));
+  }
+
+  // src/subtitles/ui.js
+  var SUBTITLE_CACHE_MAX_ENTRIES = 15;
+  var _subtitleCache = {};
+  function loadSubtitleCache() {
+    try {
+      const raw = localStorage.getItem(LS_SUBTITLE_CACHE);
+      if (raw) _subtitleCache = JSON.parse(raw);
+    } catch (e) {
+      _subtitleCache = {};
+    }
+  }
+  loadSubtitleCache();
+  function persistSubtitleCache() {
+    try {
+      const keys = Object.keys(_subtitleCache);
+      if (keys.length > SUBTITLE_CACHE_MAX_ENTRIES) {
+        const oldestFirst = keys.sort((a, b) => (_subtitleCache[a].ts || 0) - (_subtitleCache[b].ts || 0));
+        for (const k of oldestFirst.slice(0, keys.length - SUBTITLE_CACHE_MAX_ENTRIES)) delete _subtitleCache[k];
+      }
+      localStorage.setItem(LS_SUBTITLE_CACHE, JSON.stringify(_subtitleCache));
+    } catch (e) {
+    }
+  }
+  var _imdbId = null;
+  var _cues2 = null;
+  var _lastResults = [];
+  var _loading = false;
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function ensureButton() {
+    let btn = document.getElementById("sc-subtitles-btn");
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.id = "sc-subtitles-btn";
+      btn.className = "sc-dock-btn";
+      btn.type = "button";
+      btn.title = "Download subtitles for this movie";
+      btn.dataset.tvLabel = "Subtitles";
+      btn.addEventListener("click", onButtonClick);
+      document.body.appendChild(btn);
+    }
+    return btn;
+  }
+  function updateSubtitleButton(imdbId) {
+    if (imdbId !== _imdbId) {
+      _imdbId = imdbId;
+      _cues2 = null;
+      _lastResults = [];
+      closeSubtitlesPicker();
+      closeManageModal();
+      hideMovieSubtitles();
+      const cached = imdbId && _subtitleCache[imdbId];
+      if (cached) {
+        _cues2 = cached.cues;
+        setSubtitleOffset(cached.offset || 0);
+      }
+    }
+    const show = !!(imdbId && hasKey(LS_OPENSUBTITLES));
+    const btn = show ? ensureButton() : document.getElementById("sc-subtitles-btn");
+    if (btn) btn.classList.toggle("sc-hidden", !show);
+    layoutDock();
+  }
+  async function onButtonClick() {
+    if (_loading) return;
+    if (_cues2) {
+      openManageModal();
+      return;
+    }
+    _loading = true;
+    const btn = document.getElementById("sc-subtitles-btn");
+    btn.disabled = true;
+    btn.title = "Searching…";
+    _lastResults = await searchSubtitles(_imdbId);
+    btn.disabled = false;
+    btn.title = "Download subtitles for this movie";
+    _loading = false;
+    openSubtitlesPicker();
+  }
+  function resultBadges(r) {
+    const badges = [];
+    if (r.fromTrusted) badges.push('<span class="sc-subtitles-badge sc-subtitles-badge-trusted">✓ Trusted</span>');
+    if (r.hearingImpaired) badges.push('<span class="sc-subtitles-badge">SDH</span>');
+    if (r.machineTranslated) badges.push('<span class="sc-subtitles-badge sc-subtitles-badge-warn">Machine-translated</span>');
+    return badges.join("");
+  }
+  function openSubtitlesPicker() {
+    closeManageModal();
+    closeSubtitlesPicker();
+    const results = _lastResults;
+    const panel = document.createElement("div");
+    panel.id = "sc-subtitles-picker";
+    panel.innerHTML = `
+        <div id="sc-subtitles-picker-box">
+            <div id="sc-subtitles-picker-head">
+                <span>Choose Subtitles</span>
+                <button id="sc-subtitles-picker-close" type="button">✕</button>
+            </div>
+            <div id="sc-subtitles-picker-body">
+                ${results.length ? results.map((r, i) => `
+                    <button type="button" class="sc-subtitles-result" data-idx="${i}">
+                        <span class="sc-subtitles-result-release">${escapeHtml(r.release)}</span>
+                        <span class="sc-subtitles-result-meta">${escapeHtml(r.uploader)} · ${r.downloadCount.toLocaleString()} downloads</span>
+                        ${resultBadges(r) ? `<span class="sc-subtitles-result-badges">${resultBadges(r)}</span>` : ""}
+                    </button>`).join("") : '<div class="sc-subtitles-empty">No subtitles found for this movie.</div>'}
+            </div>
+            <div id="sc-subtitles-picker-status"></div>
+        </div>`;
+    document.body.appendChild(panel);
+    panel.querySelector("#sc-subtitles-picker-close").addEventListener("click", closeSubtitlesPicker);
+    panel.querySelectorAll(".sc-subtitles-result").forEach((el, i) => {
+      el.addEventListener("click", () => selectResult(results[i]));
+    });
+    const first = panel.querySelector(".sc-subtitles-result") || panel.querySelector("#sc-subtitles-picker-close");
+    if (first && tvNavState.setFocus) tvNavState.setFocus(first);
+  }
+  function closeSubtitlesPicker() {
+    const panel = document.getElementById("sc-subtitles-picker");
+    if (panel) panel.remove();
+  }
+  async function selectResult(result) {
+    const status = document.getElementById("sc-subtitles-picker-status");
+    if (status) status.textContent = "Downloading…";
+    const link = await downloadSubtitle(result.fileId);
+    if (!link) {
+      if (status) status.textContent = "Download failed — try another, or check your key/quota.";
+      return;
+    }
+    const srt = await fetchSrtText(link);
+    const cues = srt ? parseSrt(srt) : [];
+    if (!cues.length) {
+      if (status) status.textContent = "Couldn't read that subtitle file — try another.";
+      return;
+    }
+    _cues2 = cues;
+    resetSubtitleOffset();
+    _subtitleCache[_imdbId] = { cues, offset: 0, release: result.release, uploader: result.uploader, ts: Date.now() };
+    persistSubtitleCache();
+    closeSubtitlesPicker();
+    showMovieSubtitles(_cues2);
+  }
+  var OFFSET_STEP = 0.5;
+  function renderOffsetReadout(modal) {
+    const seconds = getSubtitleOffset();
+    const el = modal.querySelector("#sc-subtitles-offset-val");
+    if (el) el.textContent = (seconds > 0 ? "+" : "") + seconds.toFixed(1) + "s";
+  }
+  function openManageModal() {
+    closeSubtitlesPicker();
+    closeManageModal();
+    const modal = document.createElement("div");
+    modal.id = "sc-subtitles-manage";
+    modal.innerHTML = `
+        <div id="sc-subtitles-manage-box">
+            <div id="sc-subtitles-manage-head">
+                <span>Subtitles</span>
+                <button id="sc-subtitles-manage-close" type="button">✕</button>
+            </div>
+            <button id="sc-subtitles-manage-toggle" type="button" class="sc-settings-btn-wide"></button>
+            <div class="sc-subtitles-offset-row">
+                <span class="sc-subtitles-offset-label">Sync offset</span>
+                <div class="sc-subtitles-offset-controls">
+                    <button id="sc-subtitles-offset-minus" type="button" class="sc-settings-test">−0.5s</button>
+                    <span id="sc-subtitles-offset-val"></span>
+                    <button id="sc-subtitles-offset-plus" type="button" class="sc-settings-test">+0.5s</button>
+                </div>
+            </div>
+            <button id="sc-subtitles-offset-reset" type="button" class="sc-update-github-link">Reset offset</button>
+            <button id="sc-subtitles-manage-different" type="button" class="sc-settings-btn-wide">Download a different one</button>
+        </div>`;
+    document.body.appendChild(modal);
+    const toggleBtn = modal.querySelector("#sc-subtitles-manage-toggle");
+    const syncToggleLabel = () => {
+      toggleBtn.textContent = isMovieSubtitlesVisible() ? "Hide Subtitles" : "Show Subtitles";
+    };
+    syncToggleLabel();
+    toggleBtn.addEventListener("click", () => {
+      if (isMovieSubtitlesVisible()) hideMovieSubtitles();
+      else showMovieSubtitles(_cues2);
+      syncToggleLabel();
+    });
+    const applyOffset = (seconds) => {
+      setSubtitleOffset(seconds);
+      renderOffsetReadout(modal);
+      if (_subtitleCache[_imdbId]) {
+        _subtitleCache[_imdbId].offset = seconds;
+        persistSubtitleCache();
+      }
+    };
+    renderOffsetReadout(modal);
+    modal.querySelector("#sc-subtitles-offset-minus").addEventListener("click", () => applyOffset(getSubtitleOffset() - OFFSET_STEP));
+    modal.querySelector("#sc-subtitles-offset-plus").addEventListener("click", () => applyOffset(getSubtitleOffset() + OFFSET_STEP));
+    modal.querySelector("#sc-subtitles-offset-reset").addEventListener("click", () => applyOffset(0));
+    modal.querySelector("#sc-subtitles-manage-close").addEventListener("click", closeManageModal);
+    modal.querySelector("#sc-subtitles-manage-different").addEventListener("click", async (e) => {
+      if (!_lastResults.length) {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = "Searching…";
+        _lastResults = await searchSubtitles(_imdbId);
+        btn.disabled = false;
+        btn.textContent = "Download a different one";
+      }
+      openSubtitlesPicker();
+    });
+    if (tvNavState.setFocus) tvNavState.setFocus(toggleBtn);
+  }
+  function closeManageModal() {
+    const modal = document.getElementById("sc-subtitles-manage");
+    if (modal) modal.remove();
+  }
+
+  // src/titleinject.js
   var NP_AUTO_HIDE_MS = isTv ? 1e4 : 8e3;
   var NP_AUTO_MIN_SECONDS = 45 * 60;
   function _npShouldAutoAnnounce(isYt) {
@@ -6531,6 +6968,7 @@
       if (el) el.remove();
     });
     npState.data = null;
+    updateSubtitleButton(null);
     const isYt = isYouTubeMedia();
     let ytSeconds = 0;
     if (isYt) {
@@ -6574,6 +7012,7 @@
         }
       }
       npState.data = movieData;
+      updateSubtitleButton(movieData.imdbId);
       if (_npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt)) showNowPlayingCard(movieData, { autoHide: true, autoHideMs: NP_AUTO_HIDE_MS });
       applyCleanTitleDom(titleEl, movieData);
       const statParts = [];
@@ -6740,7 +7179,7 @@
   function _tpAttemptPop() {
     const curId = npState.data && npState.data.imdbId;
     if (curId !== _tpLastImdbId) return;
-    if (!triviaPopupEnabled() || !_tpMoviePlaying()) {
+    if (!triviaPopupEnabled() || !_tpMoviePlaying() || isMovieSubtitlesVisible()) {
       _tpPopTimer = setTimeout(_tpAttemptPop, TP_RETRY_MS);
       return;
     }
@@ -7269,73 +7708,35 @@
     }, 2500);
   }
 
-  // src/player/ytscrubber.js
-  var _el = null;
-  var _timer = null;
-  function ensureEl() {
-    if (_el) return _el;
-    _el = document.createElement("div");
-    _el.id = "sc-yt-scrubber";
-    _el.innerHTML = `
-        <span id="sc-yt-scrubber-elapsed">0:00</span>
-        <div id="sc-yt-scrubber-track"><div id="sc-yt-scrubber-fill"></div></div>
-        <span id="sc-yt-scrubber-remain">-0:00</span>`;
-    document.body.appendChild(_el);
-    return _el;
-  }
-  function render() {
-    if (document.querySelector("#videowrap .vjs-control-bar")) {
-      if (_el) _el.style.display = "none";
-      return;
-    }
-    const dur = getCurrentMediaSeconds();
-    if (!(dur > 0)) {
-      if (_el) _el.style.display = "none";
-      return;
-    }
-    const el = ensureEl();
-    el.style.display = "flex";
-    const elapsed = Math.min(getCurrentPlaybackSeconds(), dur);
-    const pct = Math.max(0, Math.min(100, elapsed / dur * 100));
-    el.querySelector("#sc-yt-scrubber-fill").style.setProperty("width", pct + "%", "important");
-    el.querySelector("#sc-yt-scrubber-elapsed").textContent = formatHMS(elapsed);
-    el.querySelector("#sc-yt-scrubber-remain").textContent = "-" + formatHMS(dur - elapsed);
-  }
-  function initYtScrubber() {
-    if (_timer) return;
-    render();
-    _timer = setInterval(render, 500);
-  }
-
   // src/player/seekhud.js
-  var _el2 = null;
+  var _el = null;
   var _timer2 = null;
   function isDesyncActive() {
     const b = document.getElementById("sc-desync-btn");
     return !!(b && b.classList.contains("sc-desync-active"));
   }
-  function ensureEl2() {
-    if (_el2) return _el2;
-    _el2 = document.createElement("div");
-    _el2.id = "sc-seek-hud";
-    _el2.innerHTML = `
+  function ensureEl() {
+    if (_el) return _el;
+    _el = document.createElement("div");
+    _el.id = "sc-seek-hud";
+    _el.innerHTML = `
         <span id="sc-seek-hud-pos">0:00 / 0:00</span>
         <span id="sc-seek-hud-live"></span>`;
-    document.body.appendChild(_el2);
-    return _el2;
+    document.body.appendChild(_el);
+    return _el;
   }
-  function render2() {
+  function render() {
     if (!isDesyncActive() || !document.querySelector("#videowrap .vjs-control-bar")) {
-      if (_el2) _el2.style.display = "none";
+      if (_el) _el.style.display = "none";
       return;
     }
     const dur = getCurrentMediaSeconds();
     const pos = getCurrentPlaybackSeconds();
     if (!(dur > 0)) {
-      if (_el2) _el2.style.display = "none";
+      if (_el) _el.style.display = "none";
       return;
     }
-    const el = ensureEl2();
+    const el = ensureEl();
     el.style.display = "flex";
     el.querySelector("#sc-seek-hud-pos").textContent = `${formatHMS(pos)} / ${formatHMS(dur)}`;
     const live = getDesyncLiveSeconds();
@@ -7349,8 +7750,8 @@
   }
   function initSeekHud() {
     if (_timer2) return;
-    render2();
-    _timer2 = setInterval(render2, 500);
+    render();
+    _timer2 = setInterval(render, 500);
   }
 
   // src/player/leadtime.js
@@ -7773,11 +8174,11 @@
     }
     seedPrefs();
     dismissPromptIfShown();
-    let tick = 0;
+    let tick2 = 0;
     const timer = setInterval(() => {
       seedPrefs();
       dismissPromptIfShown();
-      if (++tick > 40) clearInterval(timer);
+      if (++tick2 > 40) clearInterval(timer);
     }, 500);
   }
 
@@ -8057,15 +8458,10 @@
                and pin it as a fixed element flush to the bottom of the screen.
                Right edge stops just before the settings button. */
             /* ===== VIDEO.JS CONTROL BAR — pill style matching our UI buttons =====
-               #sc-yt-scrubber (player/ytscrubber.js) shares every one of this bar's
-               positioning rules throughout this file and tv.css -- added directly to
-               each selector list rather than duplicated as parallel rules, so the two
-               can never drift out of sync. It's YouTube's own equivalent: video.js
-               never runs for YouTube media (a raw iframe, no .vjs-control-bar at all),
-               so without this a YouTube-playing room showed no scrubber whatsoever
-               while every other media type did. Read-only (no seek) -- see that file's
-               own header comment for why. */
-            .video-js .vjs-control-bar, #sc-yt-scrubber {
+               YouTube media never runs video.js at all (a raw iframe, no .vjs-control-bar) --
+               there's no custom scrubber for it here; YouTube's own native iframe controls
+               are relied on instead, so only the docked buttons (chrome/dock.js) show. */
+            .video-js .vjs-control-bar {
                 position: fixed !important;
                 bottom: 4px !important;
                 left: 4px !important;
@@ -8148,24 +8544,6 @@
                 background: rgba(255,255,255,0.1) !important;
                 border-radius: 999px !important;
             }
-
-            /* #sc-yt-scrubber's own internals -- styled to match .vjs-progress-holder/
-               .vjs-play-progress exactly (see player/ytscrubber.js). */
-            #sc-yt-scrubber-elapsed, #sc-yt-scrubber-remain {
-                font-size: 12px !important; color: rgba(255,255,255,0.75) !important;
-                font-variant-numeric: tabular-nums !important; flex-shrink: 0 !important;
-                line-height: 1 !important;
-            }
-            #sc-yt-scrubber-track {
-                flex: 1 1 auto !important; height: 4px !important; margin: 0 8px !important;
-                background: rgba(255,255,255,0.15) !important; border-radius: 999px !important;
-                overflow: hidden !important;
-            }
-            #sc-yt-scrubber-fill {
-                height: 100% !important; width: 0% !important;
-                background: rgba(255,255,255,0.75) !important; border-radius: 999px !important;
-            }
-            body.sc-tv #sc-yt-scrubber-elapsed, body.sc-tv #sc-yt-scrubber-remain { font-size: 15px !important; }
 
             /* Volume slider */
             .video-js .vjs-volume-bar {
@@ -8320,6 +8698,11 @@
 
 
             /* ===== FLOATING BUTTONS (body-level, always visible) ===== */
+            /* Shape/color only -- size (width/height/font-size) is owned entirely by the
+               .sc-dock-btn rules (tv.css, chrome/dock.js): a bare #id selector here would
+               win the specificity fight against \`body.sc-horizontal .sc-dock-btn\` (2 classes
+               beats 0) and silently override it, which is exactly the bug that made this
+               button render smaller than its dock row-mates. */
             #sc-desync-btn {
                 position: fixed !important;
                 z-index: 20002 !important;
@@ -8327,9 +8710,7 @@
                 color: rgba(255,255,255,0.55) !important;
                 border: none !important;
                 border-radius: 50% !important;
-                width: 28px !important; height: 28px !important;
                 padding: 0 !important;
-                font-size: 15px !important;
                 cursor: pointer !important;
                 display: flex !important;
                 align-items: center !important;
@@ -8344,6 +8725,38 @@
                 color: #ffcc44 !important;
                 background: rgba(255,200,50,0.18) !important;
             }
+            /* Same circular-icon look as #sc-desync-btn; size comes from .sc-dock-btn
+               (chrome/dock.js, tv.css). The glyph itself is video.js's own captions icon
+               (::before below) -- the exact one the real player control bar uses for its
+               own Captions button (".vjs-subs-caps-button .vjs-icon-placeholder"), so this
+               reads as the same captions icon everywhere in the app rather than a plain "CC"
+               text label. VideoJS's icon font is already loaded globally by the player
+               itself, so no extra asset is needed here. */
+            #sc-subtitles-btn {
+                position: fixed !important;
+                z-index: 20002 !important;
+                background: rgba(255,255,255,0.08) !important;
+                color: rgba(255,255,255,0.55) !important;
+                border: none !important;
+                border-radius: 50% !important;
+                padding: 0 !important;
+                cursor: pointer !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                transition: color 0.3s ease, background 0.3s ease !important;
+            }
+            #sc-subtitles-btn::before {
+                font-family: VideoJS !important;
+                content: "\\f10c" !important;
+                line-height: 1 !important;
+            }
+            #sc-subtitles-btn:hover {
+                color: white !important;
+                background: rgba(255,255,255,0.22) !important;
+            }
+            #sc-subtitles-btn.sc-hidden { display: none !important; }
+            #sc-subtitles-btn:disabled { opacity: 0.5 !important; cursor: default !important; }
             #fs-toggle-btn {
                 position: fixed !important;
                 z-index: 20002 !important;
@@ -8633,6 +9046,9 @@
             #sc-lt-credit a { color: rgba(255,255,255,0.35) !important; }
 
             /* ===== SETTINGS BUTTON ===== */
+            /* Shape/color only -- size comes from .sc-dock-btn (tv.css, chrome/dock.js); see
+               the comment on #sc-desync-btn (base.css) for why a bare #id size here would
+               silently win the specificity fight and override it. */
             #sc-settings-btn {
                 position: fixed !important;
                 z-index: 20002 !important;
@@ -8640,10 +9056,7 @@
                 color: rgba(255,255,255,0.55) !important;
                 border: none !important;
                 border-radius: 50% !important;
-                width: 28px !important;
-                height: 28px !important;
                 padding: 0 !important;
-                font-size: 13px !important;
                 cursor: pointer !important;
                 display: flex !important;
                 align-items: center !important;
@@ -8693,21 +9106,8 @@
             }
             #sc-cast-btn:hover { color: white !important; background: rgba(255,255,255,0.22) !important; }
             #sc-cast-btn.sc-cast-active { color: #7dffa0 !important; background: rgba(125,255,160,0.18) !important; }
-            /* Horizontal: same row as chatmode/desync/settings, one slot past settings
-               (38px pitch, matching their own 8/46/84 spacing). */
-            body.sc-horizontal #sc-cast-btn {
-                left: auto !important; bottom: 4px !important; top: auto !important;
-                right: calc(19vw + 122px) !important;
-                width: 32px !important; height: 32px !important; font-size: 13px !important;
-                opacity: 1 !important; pointer-events: auto !important; transform: none !important;
-            }
-            /* Vertical: same row, one slot past settings (right:84 + 38px pitch). */
-            body.sc-vertical #sc-cast-btn {
-                top: auto !important; bottom: calc((100 - var(--sc-split, 50)) * 1vh + 4px) !important;
-                right: 122px !important; left: auto !important;
-                width: 32px !important; height: 32px !important; font-size: 13px !important;
-                opacity: 1 !important; pointer-events: auto !important; transform: none !important;
-            }
+            /* Position/size/pitch now come from the shared .sc-dock-btn rules
+               (chrome/dock.js, tv.css) alongside chatmode/desync/settings/subtitles. */
 
             /* ===== SETTINGS MODAL ===== */
             #sc-settings-overlay {
@@ -8815,11 +9215,11 @@
                 flex: 0 0 auto !important; cursor: pointer !important; accent-color: #c0b0ff !important;
             }
             .sc-toggle-text { line-height: 1.2 !important; }
-            #sc-tmdb-fields {
+            #sc-tmdb-fields, #sc-opensubtitles-fields {
                 display: flex !important; flex-direction: column !important; gap: 6px !important;
                 margin: 8px 0 0 26px !important;
             }
-            #sc-tmdb-fields.sc-hidden { display: none !important; }
+            #sc-tmdb-fields.sc-hidden, #sc-opensubtitles-fields.sc-hidden { display: none !important; }
             .sc-settings-btn-wide {
                 background: rgba(192,176,255,0.2) !important; color: #c0b0ff !important;
                 border: 1px solid rgba(192,176,255,0.4) !important; border-radius: 6px !important;
@@ -9032,6 +9432,138 @@
                 margin-top: 6px !important;
             }
             .sc-drm-btn:focus { outline: 3px solid #fff !important; outline-offset: 2px !important; }
+
+            /* #sc-subtitles-btn's own base visual style lives in base.css (matches
+               #sc-desync-btn's circular-icon look); position/size/pitch come from the
+               shared .sc-dock-btn rules (chrome/dock.js, tv.css) alongside its dock
+               row-mates. */
+
+            /* ===== SUBTITLES RESULTS PICKER — same centered-dialog language as
+               #sc-modal-overlay/#sc-modal (review modal) ===== */
+            #sc-subtitles-picker {
+                position: fixed !important; inset: 0 !important;
+                background: rgba(0,0,0,0.8) !important; z-index: 99997 !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                font-family: system-ui, sans-serif !important;
+            }
+            #sc-subtitles-picker-box {
+                background: #13131f !important; border: 1px solid rgba(255,255,255,0.15) !important;
+                border-radius: 12px !important; padding: 20px !important;
+                max-width: 520px !important; width: 94vw !important; color: white !important;
+                box-shadow: 0 12px 40px rgba(0,0,0,0.7) !important; max-height: 85vh !important;
+                display: flex !important; flex-direction: column !important;
+            }
+            #sc-subtitles-picker-head {
+                display: flex !important; align-items: center !important; justify-content: space-between !important;
+                font-size: 16px !important; font-weight: 700 !important; color: #c0b0ff !important;
+                padding-bottom: 10px !important; margin-bottom: 8px !important;
+                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+            }
+            #sc-subtitles-picker-close {
+                background: rgba(255,255,255,0.08) !important; color: rgba(255,255,255,0.7) !important;
+                border: none !important; border-radius: 50% !important;
+                width: 26px !important; height: 26px !important; font-size: 12px !important;
+                cursor: pointer !important; line-height: 1 !important;
+            }
+            #sc-subtitles-picker-close:hover { background: rgba(255,255,255,0.2) !important; }
+            #sc-subtitles-picker-body {
+                display: flex !important; flex-direction: column !important; gap: 6px !important;
+                max-height: 60vh !important; overflow-y: auto !important;
+            }
+            .sc-subtitles-result {
+                display: flex !important; flex-direction: column !important; gap: 2px !important;
+                align-items: flex-start !important; text-align: left !important;
+                background: rgba(255,255,255,0.06) !important; border: 1px solid rgba(255,255,255,0.12) !important;
+                border-radius: 6px !important; padding: 8px 12px !important; cursor: pointer !important;
+                color: white !important; font-family: inherit !important;
+            }
+            .sc-subtitles-result:hover { background: rgba(255,255,255,0.12) !important; }
+            .sc-subtitles-result-release { font-size: 13px !important; font-weight: 600 !important; word-break: break-word !important; }
+            .sc-subtitles-result-meta { font-size: 11px !important; color: rgba(255,255,255,0.5) !important; }
+            .sc-subtitles-result-badges { display: flex !important; flex-wrap: wrap !important; gap: 5px !important; margin-top: 2px !important; }
+            .sc-subtitles-badge {
+                font-size: 10px !important; font-weight: 600 !important; letter-spacing: 0.02em !important;
+                padding: 2px 7px !important; border-radius: 999px !important;
+                background: rgba(255,255,255,0.1) !important; color: rgba(255,255,255,0.7) !important;
+            }
+            .sc-subtitles-badge-trusted { background: rgba(125,255,160,0.16) !important; color: #7dffa0 !important; }
+            .sc-subtitles-badge-warn { background: rgba(255,200,80,0.16) !important; color: #ffd080 !important; }
+            .sc-subtitles-empty {
+                color: rgba(255,255,255,0.5) !important; font-size: 13px !important;
+                text-align: center !important; padding: 16px 4px !important;
+            }
+            #sc-subtitles-picker-status {
+                font-size: 12px !important; color: #ffd080 !important;
+                text-align: center !important; min-height: 14px !important; margin-top: 8px !important;
+            }
+            body.sc-tv .sc-subtitles-result { padding: 12px 16px !important; }
+            body.sc-tv .sc-subtitles-result-release { font-size: 16px !important; }
+            body.sc-tv .sc-subtitles-result-meta { font-size: 13px !important; }
+            body.sc-tv .sc-subtitles-badge { font-size: 12px !important; padding: 3px 9px !important; }
+
+            /* ===== SUBTITLES MANAGE MODAL — shown instead of the picker once a file is
+               already downloaded (subtitles/ui.js's openManageModal): hide/show, sync
+               offset, or hop back to the picker to try a different release without
+               burning another search. Same centered-dialog language as the picker. */
+            #sc-subtitles-manage {
+                position: fixed !important; inset: 0 !important;
+                background: rgba(0,0,0,0.8) !important; z-index: 99997 !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                font-family: system-ui, sans-serif !important;
+            }
+            #sc-subtitles-manage-box {
+                background: #13131f !important; border: 1px solid rgba(255,255,255,0.15) !important;
+                border-radius: 12px !important; padding: 20px !important;
+                max-width: 380px !important; width: 90vw !important; color: white !important;
+                box-shadow: 0 12px 40px rgba(0,0,0,0.7) !important;
+                display: flex !important; flex-direction: column !important; gap: 12px !important;
+            }
+            #sc-subtitles-manage-head {
+                display: flex !important; align-items: center !important; justify-content: space-between !important;
+                font-size: 16px !important; font-weight: 700 !important; color: #c0b0ff !important;
+                padding-bottom: 10px !important; margin-bottom: 2px !important;
+                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+            }
+            #sc-subtitles-manage-close {
+                background: rgba(255,255,255,0.08) !important; color: rgba(255,255,255,0.7) !important;
+                border: none !important; border-radius: 50% !important;
+                width: 26px !important; height: 26px !important; font-size: 12px !important;
+                cursor: pointer !important; line-height: 1 !important;
+            }
+            #sc-subtitles-manage-close:hover { background: rgba(255,255,255,0.2) !important; }
+            .sc-subtitles-offset-row {
+                display: flex !important; align-items: center !important; justify-content: space-between !important;
+                background: rgba(255,255,255,0.05) !important; border: 1px solid rgba(255,255,255,0.1) !important;
+                border-radius: 8px !important; padding: 10px 14px !important;
+            }
+            .sc-subtitles-offset-label { font-size: 13px !important; color: rgba(255,255,255,0.75) !important; }
+            .sc-subtitles-offset-controls { display: flex !important; align-items: center !important; gap: 10px !important; }
+            #sc-subtitles-offset-val {
+                font-size: 13px !important; font-variant-numeric: tabular-nums !important;
+                color: #c0b0ff !important; min-width: 42px !important; text-align: center !important;
+            }
+
+            /* ===== MOVIE SUBTITLES OVERLAY — real downloaded-SRT cues, the classic
+               bottom-center look (distinct from cards/subtitles.js's chat-as-subtitles
+               pills, which live in tv.css) ===== */
+            #sc-movie-subtitles-overlay {
+                position: fixed !important;
+                left: 50% !important; bottom: 10vh !important;
+                transform: translateX(-50%) !important;
+                z-index: 15000 !important;
+                max-width: 82vw !important;
+                display: none !important;
+                text-align: center !important;
+                color: #fff !important;
+                font-family: system-ui, sans-serif !important;
+                font-size: 20px !important; font-weight: 600 !important;
+                line-height: 1.35 !important;
+                text-shadow: 0 0 4px #000, 0 0 8px #000, 1px 1px 2px #000 !important;
+                pointer-events: none !important;
+                white-space: pre-line !important;
+            }
+            #sc-movie-subtitles-overlay.sc-movie-subtitles-visible { display: block !important; }
+            body.sc-tv #sc-movie-subtitles-overlay { font-size: 30px !important; bottom: 12vh !important; }
 `;
 
   // src/styles/tv.css
@@ -9050,17 +9582,17 @@
             /* App is always fullscreen — the toggle is redundant */
             #fs-toggle-btn { display: none !important; }
 
-            /* Compact control icons on phones (TV scales these up to 52px below) */
-            #sc-desync-btn, #sc-settings-btn, #sc-cast-btn {
+            /* Compact control icons on phones */
+            .sc-dock-btn {
                 width: 36px !important; height: 36px !important; font-size: 15px !important;
                 -webkit-tap-highlight-color: transparent !important;
             }
             /* #sc-cast-btn already carries its own opacity transition (overlays.css, loaded
-               before this file so it wins there); desync/settings had none anywhere, so they
-               popped instantly on every chrome-hidden toggle while the scrubber and
+               before this file so it wins there); desync/settings/subtitles had none anywhere,
+               so they popped instantly on every chrome-hidden toggle while the scrubber and
                #sc-chatmode-btn (both 0.6s ease) faded smoothly next to them in the same row --
                same trigger, visibly out of sync. */
-            #sc-desync-btn, #sc-settings-btn {
+            #sc-desync-btn, #sc-settings-btn, #sc-subtitles-btn {
                 transition: opacity 0.6s ease !important;
             }
             /* Prevent input zoom on mobile */
@@ -9077,37 +9609,34 @@
             body.sc-vertical #chatwrap       { height: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important; }
             body.sc-vertical #sc-users-panel { bottom: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important; }
             body.sc-vertical #sc-poll-panel  { bottom: calc((100 - var(--sc-split, 50)) * 1vh - 44px) !important; }
-            /* Three buttons sit in the video's own scrubber row (its bottom edge, just above
-               the seam) — same anchor as .vjs-control-bar/#sc-yt-scrubber right below, so they
-               read as an extension of the video's own controls, not the chat header underneath
-               (which lives in the seam band, #sc-vert-ctrl-band, one row down). */
-            /* 32px to match the control bar's own fixed height (base.css), same "extension of
-               the bar" sizing as the horizontal docked row below. */
-            body.sc-vertical #sc-chatmode-btn,
-            body.sc-vertical #sc-desync-btn,
-            body.sc-vertical #sc-settings-btn {
+            /* The dock row sits in the video's own scrubber row (its bottom edge, just above
+               the seam) — same anchor as .vjs-control-bar right below, so it reads as an
+               extension of the video's own controls, not the chat header underneath (which
+               lives in the seam band, #sc-vert-ctrl-band, one row down). Members flow right-
+               to-left with no gap for a hidden one -- each reads its slot index from
+               --sc-dock-slot (chrome/dock.js layoutDock(), 0 = innermost/closest to the seam),
+               8px pitch margin + 38px per slot (32px button + 6px gap). 32px height matches
+               the control bar's own fixed height (base.css), same "extension of the bar"
+               sizing as the horizontal docked row below. */
+            body.sc-vertical .sc-dock-btn {
                 width: 32px !important; height: 32px !important; font-size: 13px !important;
                 top: auto !important; bottom: calc((100 - var(--sc-split, 50)) * 1vh + 4px) !important;
                 left: auto !important; transform: none !important;
                 opacity: 1 !important; pointer-events: auto !important;
+                right: calc(8px + var(--sc-dock-slot, 0) * 38px) !important;
             }
-            body.sc-vertical #sc-chatmode-btn { right: 8px !important; }
-            body.sc-vertical #sc-desync-btn   { right: 46px !important; }
-            body.sc-vertical #sc-settings-btn { right: 84px !important; }
-            /* Scrubber stops well short of the docked row -- video.js renders its own PiP/cast/
-               quality-menu icons flush against the bar's own right edge (no reservation of
-               their own), so the gap has to clear THOSE, not just the bar's flex-filled
-               progress track. 200px (bare minimum for our 4 buttons -- cast joined the row
-               below, matching the horizontal layout further down) put them close enough to
-               visually read as overlapping. */
-            body.sc-vertical .video-js .vjs-control-bar, body.sc-vertical #sc-yt-scrubber { bottom: calc((100 - var(--sc-split, 50)) * 1vh + 4px) !important; left: 4px !important; right: 200px !important; }
+            /* Scrubber grows into whatever the dock row ISN'T using -- --sc-dock-count
+               (layoutDock()) is the number of currently-visible dock buttons, so this closes
+               up automatically when one's hidden (no TV cast, no OpenSubtitles key) instead of
+               leaving a dead gap. video.js renders its own PiP/cast/quality-menu icons flush
+               against the bar's own right edge (no reservation of their own), so the gap has
+               to clear THOSE too, not just the bar's flex-filled progress track -- hence the
+               extra 8px margin on top of the dock row's own width. */
+            body.sc-vertical .video-js .vjs-control-bar { bottom: calc((100 - var(--sc-split, 50)) * 1vh + 4px) !important; left: 4px !important; right: calc(8px + var(--sc-dock-count, 0) * 38px) !important; }
             /* Fade together with the scrubber on idle (see initChromeAutohide/
                neutralizeVjsInactivityTimer, chat/modes.js + player/scrubber.js) instead of
                staying permanently visible while the scrubber fades on its own timer. */
-            body.sc-vertical.sc-chrome-hidden #sc-chatmode-btn,
-            body.sc-vertical.sc-chrome-hidden #sc-desync-btn,
-            body.sc-vertical.sc-chrome-hidden #sc-settings-btn,
-            body.sc-vertical.sc-chrome-hidden #sc-cast-btn {
+            body.sc-vertical.sc-chrome-hidden .sc-dock-btn {
                 opacity: 0 !important; pointer-events: none !important;
             }
 
@@ -9166,10 +9695,7 @@
             }
             /* ── VERTICAL keyboard open ─────────────────────── */
             /* Hide floating buttons while typing */
-            body.sc-kb-open.sc-vertical #sc-chatmode-btn,
-            body.sc-kb-open.sc-vertical #sc-desync-btn,
-            body.sc-kb-open.sc-vertical #sc-settings-btn,
-            body.sc-kb-open.sc-vertical #sc-cast-btn,
+            body.sc-kb-open.sc-vertical .sc-dock-btn,
             body.sc-kb-open #sc-top-bar,
             body.sc-kb-open #sc-chat-header {
                 opacity: 0 !important;
@@ -9195,7 +9721,8 @@
             body.sc-kb-open.sc-horizontal #sc-chatmode-btn,
             body.sc-kb-open.sc-horizontal #sc-desync-btn,
             body.sc-kb-open.sc-horizontal #fs-toggle-btn,
-            body.sc-kb-open.sc-horizontal #sc-settings-btn {
+            body.sc-kb-open.sc-horizontal #sc-settings-btn,
+            body.sc-kb-open.sc-horizontal #sc-subtitles-btn {
                 bottom: calc(var(--sc-kb-h) + 6px) !important;
             }
 
@@ -9203,25 +9730,21 @@
             /* Control row — docked immediately left of the chat sidebar, in a gap reserved by
                narrowing the seek bar's own right edge, so the row reads as a genuine extension
                of it: same 32px height as .vjs-control-bar (base.css), same 4px bottom offset,
-               identical on TV as everywhere else (the bar itself never scales for TV). Always
-               visible -- #sc-cast-btn (mobile-only) joins this row too, see overlays.css. */
-            body.sc-horizontal #sc-chatmode-btn,
-            body.sc-horizontal #sc-desync-btn,
-            body.sc-horizontal #sc-settings-btn {
+               identical on TV as everywhere else (the bar itself never scales for TV). Members
+               flow right-to-left with no gap for a hidden one (no TV cast, no OpenSubtitles
+               key) -- see the .sc-dock-btn comment in the vertical block above for the slot/
+               count mechanism (chrome/dock.js). */
+            body.sc-horizontal .sc-dock-btn {
                 left: auto !important; bottom: 4px !important; top: auto !important;
                 width: 32px !important; height: 32px !important; font-size: 13px !important;
                 opacity: 1 !important; pointer-events: auto !important; transform: none !important;
                 transition: opacity 0.3s ease, transform 0.3s ease !important;
+                right: calc(19vw + 8px + var(--sc-dock-slot, 0) * 38px) !important;
             }
-            body.sc-horizontal #sc-chatmode-btn { right: calc(19vw + 8px)  !important; }
-            body.sc-horizontal #sc-desync-btn   { right: calc(19vw + 46px) !important; }
-            body.sc-horizontal #sc-settings-btn { right: calc(19vw + 84px) !important; }
             /* Slide out to the right in sync with the scrubber's own idle fade (same
                body.sc-chrome-hidden trigger that fades .vjs-control-bar itself, below) --
                mirrors the desktop userscript's "gap buttons slide out to the right on idle". */
-            body.sc-tv.sc-chrome-hidden #sc-chatmode-btn,
-            body.sc-tv.sc-chrome-hidden #sc-desync-btn,
-            body.sc-tv.sc-chrome-hidden #sc-settings-btn {
+            body.sc-tv.sc-chrome-hidden .sc-dock-btn {
                 transform: translateX(60px) !important; opacity: 0 !important; pointer-events: none !important;
             }
 
@@ -9229,9 +9752,9 @@
                ever lived there was #sc-cast-btn, now docked permanently in the row above
                (overlays.css) instead of hidden behind this. Nothing left to hint at. */
             #sc-cluster-grip { display: none !important; }
-            /* Seek bar stops short of the docked row (matching bottom so the row reads as one
-               continuous control strip). Reservation sized for the 32px buttons above. */
-            body.sc-horizontal .video-js .vjs-control-bar, body.sc-horizontal #sc-yt-scrubber { left: 4px !important; right: calc(19vw + 162px) !important; }
+            /* Seek bar grows into whatever the dock row ISN'T using -- see the .sc-dock-btn
+               comment in the vertical block above for --sc-dock-count (chrome/dock.js). */
+            body.sc-horizontal .video-js .vjs-control-bar { left: 4px !important; right: calc(19vw + 8px + var(--sc-dock-count, 0) * 38px) !important; }
 
             /* ── TV: larger text, focus ring on interactive items ─ */
             body.sc-tv #messagebuffer { font-size: 18px !important; }
@@ -10011,10 +10534,11 @@
             html body.sc-pip #sc-desync-btn, html body.sc-pip #sc-settings-btn,
             html body.sc-pip #sc-users-panel, html body.sc-pip #sc-poll-panel,
             html body.sc-pip #sc-np-card, html body.sc-pip #sc-trivia-card, html body.sc-pip #sc-subtitles-overlay,
+            html body.sc-pip #sc-subtitles-btn, html body.sc-pip #sc-subtitles-picker, html body.sc-pip #sc-movie-subtitles-overlay,
             html body.sc-pip #sc-upnext-card, html body.sc-pip #sc-link-pip-panel, html body.sc-pip #sc-link-pip-prompt,
             html body.sc-pip #sc-lineup-screen,
             html body.sc-pip #sc-mobile-input-row, html body.sc-pip .video-js .vjs-control-bar,
-            html body.sc-pip #sc-yt-scrubber, html body.sc-pip #sc-seek-hud {
+            html body.sc-pip #sc-seek-hud {
                 display: none !important;
             }
             /* Chat-Only + PiP: the video is deliberately paused/muted/hidden in this mode
@@ -10138,6 +10662,8 @@
             html body.sc-cast #sc-desync-btn,
             html body.sc-cast #fs-toggle-btn,
             html body.sc-cast #sc-cast-btn,
+            html body.sc-cast #sc-subtitles-btn,
+            html body.sc-cast #sc-movie-subtitles-overlay,
             html body.sc-cast #sc-top-bar,
             html body.sc-cast #sc-movie-stats,
             html body.sc-cast #sc-vert-ctrl-band,
@@ -10146,11 +10672,10 @@
             }
 
             /* ── AUTO-HIDING CHROME (TV) ─────────────────────── */
-            body.sc-tv .video-js .vjs-control-bar, body.sc-tv #sc-yt-scrubber, body.sc-tv #sc-seek-hud { transition: opacity 0.6s ease !important; }
+            body.sc-tv .video-js .vjs-control-bar, body.sc-tv #sc-seek-hud { transition: opacity 0.6s ease !important; }
             /* The control cluster is governed by the left-edge reveal, not this.
                Here we just fade the seek bar + hide the cursor when idle. */
             body.sc-tv.sc-chrome-hidden .video-js .vjs-control-bar,
-            body.sc-tv.sc-chrome-hidden #sc-yt-scrubber,
             body.sc-tv.sc-chrome-hidden #sc-seek-hud {
                 opacity: 0 !important; pointer-events: none !important;
             }
@@ -10158,12 +10683,11 @@
             body.sc-tv.sc-chrome-hidden { cursor: none !important; }
 
             /* ── AUTO-HIDING CHROME (vertical phone) ───────────── */
-            /* Same idea as TV above, but here the docked cluster (#sc-chatmode-btn etc.,
-               earlier in this file) shares the row and must fade with it -- see
-               initChromeAutohide's vertical-mode branch (chat/modes.js). */
-            body.sc-vertical .video-js .vjs-control-bar, body.sc-vertical #sc-yt-scrubber, body.sc-vertical #sc-seek-hud { transition: opacity 0.6s ease !important; }
+            /* Same idea as TV above, but here the docked cluster (.sc-dock-btn, earlier in
+               this file) shares the row and must fade with it -- see initChromeAutohide's
+               vertical-mode branch (chat/modes.js). */
+            body.sc-vertical .video-js .vjs-control-bar, body.sc-vertical #sc-seek-hud { transition: opacity 0.6s ease !important; }
             body.sc-vertical.sc-chrome-hidden .video-js .vjs-control-bar,
-            body.sc-vertical.sc-chrome-hidden #sc-yt-scrubber,
             body.sc-vertical.sc-chrome-hidden #sc-seek-hud {
                 opacity: 0 !important; pointer-events: none !important;
             }
@@ -10184,17 +10708,16 @@
             body.sc-chat-hidden.sc-horizontal #videowrap, body.sc-chat-subtitles.sc-horizontal #videowrap,
             body.sc-chat-hidden.sc-horizontal #videowrap .embed-responsive, body.sc-chat-subtitles.sc-horizontal #videowrap .embed-responsive,
             body.sc-chat-hidden.sc-horizontal #ytapiplayer, body.sc-chat-subtitles.sc-horizontal #ytapiplayer { width: 100vw !important; }
-            /* Widened from a bare 16px to match the docked button row's own reservation
-               math (base horizontal rule, "19vw + 124px") minus the now-absent chat
-               sidebar's 19vw -- without this the buttons stayed anchored to where the
-               sidebar edge WOULD be and sat directly on top of the (now much wider,
-               chat-less) scrubber instead of docking beside it. */
-            body.sc-chat-hidden.sc-horizontal .video-js .vjs-control-bar, body.sc-chat-subtitles.sc-horizontal .video-js .vjs-control-bar,
-            body.sc-chat-hidden.sc-horizontal #sc-yt-scrubber, body.sc-chat-subtitles.sc-horizontal #sc-yt-scrubber { right: 162px !important; }
-            body.sc-chat-hidden.sc-horizontal #sc-chatmode-btn, body.sc-chat-subtitles.sc-horizontal #sc-chatmode-btn { right: 8px   !important; }
-            body.sc-chat-hidden.sc-horizontal #sc-desync-btn,   body.sc-chat-subtitles.sc-horizontal #sc-desync-btn   { right: 46px  !important; }
-            body.sc-chat-hidden.sc-horizontal #sc-settings-btn, body.sc-chat-subtitles.sc-horizontal #sc-settings-btn { right: 84px  !important; }
-            body.sc-chat-hidden.sc-horizontal #sc-cast-btn,     body.sc-chat-subtitles.sc-horizontal #sc-cast-btn     { right: 122px !important; }
+            /* No chat sidebar here, so the dock row/scrubber use a plain-pixel seam (0)
+               instead of the default horizontal rule's 19vw reservation -- otherwise they'd
+               stay anchored to where the sidebar edge WOULD be and sit on top of the (now
+               much wider, chat-less) scrubber instead of docking beside it. */
+            body.sc-chat-hidden.sc-horizontal .video-js .vjs-control-bar, body.sc-chat-subtitles.sc-horizontal .video-js .vjs-control-bar {
+                right: calc(8px + var(--sc-dock-count, 0) * 38px) !important;
+            }
+            body.sc-chat-hidden.sc-horizontal .sc-dock-btn, body.sc-chat-subtitles.sc-horizontal .sc-dock-btn {
+                right: calc(8px + var(--sc-dock-slot, 0) * 38px) !important;
+            }
             body.sc-chat-hidden.sc-vertical #videowrap, body.sc-chat-subtitles.sc-vertical #videowrap,
             body.sc-chat-hidden.sc-vertical #videowrap .embed-responsive, body.sc-chat-subtitles.sc-vertical #videowrap .embed-responsive,
             body.sc-chat-hidden.sc-vertical #ytapiplayer, body.sc-chat-subtitles.sc-vertical #ytapiplayer { height: 100vh !important; }
@@ -10204,29 +10727,18 @@
             body.sc-chat-subtitles.sc-vertical #sc-vert-ctrl-grip {
                 top: auto !important; bottom: 0 !important;
             }
-            /* Same row as the scrubber (bottom:4px below), not stacked above it -- the
-               scrubber's own base rule already reserves right:160px for this cluster, so
-               there's no horizontal overlap to dodge by floating the buttons higher. Read as
-               one control strip, and (via #sc-desync-btn/#sc-settings-btn's shared transition
-               above, plus #sc-chatmode-btn's and the scrubber's own) fades with it as one.
-               The cast button joins the row (it otherwise floats mid-screen at the
-               --sc-split control-band position). */
-            body.sc-chat-hidden.sc-vertical #sc-chatmode-btn,
-            body.sc-chat-subtitles.sc-vertical #sc-chatmode-btn,
-            body.sc-chat-hidden.sc-vertical #sc-desync-btn,
-            body.sc-chat-subtitles.sc-vertical #sc-desync-btn,
-            body.sc-chat-hidden.sc-vertical #sc-settings-btn,
-            body.sc-chat-subtitles.sc-vertical #sc-settings-btn,
-            body.sc-chat-hidden.sc-vertical #sc-cast-btn,
-            body.sc-chat-subtitles.sc-vertical #sc-cast-btn {
+            /* Same row as the scrubber (bottom:4px below), not stacked above it -- horizontal
+               offset (right:) is untouched here, inherited from the default vertical
+               .sc-dock-btn rule above (same seam, just a different vertical anchor). Read as
+               one control strip and fades with it as one. */
+            body.sc-chat-hidden.sc-vertical .sc-dock-btn,
+            body.sc-chat-subtitles.sc-vertical .sc-dock-btn {
                 top: auto !important; bottom: 4px !important;
             }
             /* Video-only fills the screen, so the scrubber belongs at the screen bottom —
                not at the --sc-split "above the chat header" spot used when chat is present. */
             body.sc-chat-hidden.sc-vertical .video-js .vjs-control-bar,
-            body.sc-chat-subtitles.sc-vertical .video-js .vjs-control-bar,
-            body.sc-chat-hidden.sc-vertical #sc-yt-scrubber,
-            body.sc-chat-subtitles.sc-vertical #sc-yt-scrubber {
+            body.sc-chat-subtitles.sc-vertical .video-js .vjs-control-bar {
                 bottom: 4px !important;
             }
 
@@ -10240,12 +10752,13 @@
             body.sc-chat-chatonly .video-js,
             body.sc-chat-chatonly .vjs-tech,
             body.sc-chat-chatonly .video-js .vjs-control-bar,
-            body.sc-chat-chatonly #sc-yt-scrubber,
             body.sc-chat-chatonly #sc-top-bar,
             body.sc-chat-chatonly #videowrap-header,
             body.sc-chat-chatonly #sc-movie-stats,
             body.sc-chat-chatonly #sc-poster-toggle,
             body.sc-chat-chatonly #sc-up-next-btn,
+            body.sc-chat-chatonly #sc-subtitles-btn,
+            body.sc-chat-chatonly #sc-movie-subtitles-overlay,
             body.sc-chat-chatonly #sc-desync-btn,
             body.sc-chat-chatonly #fs-toggle-btn,
             body.sc-chat-chatonly #sc-cast-btn,
@@ -10326,12 +10839,12 @@
                Widened from a bare 16px, and the docked buttons get the matching
                zero-sidebar offsets, for the same reason as chat-hidden mode above --
                otherwise they sit on top of the now-wider scrubber instead of beside it. */
-            body.sc-chat-overlay.sc-horizontal .video-js .vjs-control-bar,
-            body.sc-chat-overlay.sc-horizontal #sc-yt-scrubber { right: 162px !important; }
-            body.sc-chat-overlay.sc-horizontal #sc-chatmode-btn { right: 8px   !important; }
-            body.sc-chat-overlay.sc-horizontal #sc-desync-btn   { right: 46px  !important; }
-            body.sc-chat-overlay.sc-horizontal #sc-settings-btn { right: 84px  !important; }
-            body.sc-chat-overlay.sc-horizontal #sc-cast-btn     { right: 122px !important; }
+            body.sc-chat-overlay.sc-horizontal .video-js .vjs-control-bar {
+                right: calc(8px + var(--sc-dock-count, 0) * 38px) !important;
+            }
+            body.sc-chat-overlay.sc-horizontal .sc-dock-btn {
+                right: calc(8px + var(--sc-dock-slot, 0) * 38px) !important;
+            }
 
             /* Hide every bit of chrome — title bar, coming attractions, user/poll header */
             body.sc-chat-overlay.sc-horizontal #sc-top-bar,
@@ -10406,14 +10919,10 @@
                just repositioned to match. */
             body.sc-chat-overlay.sc-vertical #sc-vert-ctrl-band { display: none !important; }
             body.sc-chat-overlay.sc-vertical #sc-vert-ctrl-grip { display: none !important; }
-            body.sc-chat-overlay.sc-vertical #sc-chatmode-btn,
-            body.sc-chat-overlay.sc-vertical #sc-desync-btn,
-            body.sc-chat-overlay.sc-vertical #sc-settings-btn,
-            body.sc-chat-overlay.sc-vertical #sc-cast-btn {
+            body.sc-chat-overlay.sc-vertical .sc-dock-btn {
                 top: auto !important; bottom: 4px !important;
             }
-            body.sc-chat-overlay.sc-vertical .video-js .vjs-control-bar,
-            body.sc-chat-overlay.sc-vertical #sc-yt-scrubber {
+            body.sc-chat-overlay.sc-vertical .video-js .vjs-control-bar {
                 bottom: 4px !important;
             }
             /* Hide every bit of chrome — title bar, coming attractions, chat header —
@@ -10511,17 +11020,21 @@
                 box-sizing: border-box !important; padding: 0 8px !important;
             }
 
-            /* Shape/color only -- position (left/right/top/bottom) is owned entirely by the
-               docked-row rules (horizontal) and the control-band rules (vertical) earlier in
-               this file, so none of that is set here. */
+            /* Shape/color only -- position (left/right/top/bottom) AND size (width/height/
+               font-size) are owned entirely by the .sc-dock-btn rules (docked-row rules
+               horizontal, control-band rules vertical, both earlier in this file) and the
+               compact-phone default up top -- a bare #id size here would win the specificity
+               fight against those (2 classes beats 0) and silently override them, which used
+               to leave this button always 36px regardless of mode while its dock row-mates
+               scaled to 32px. */
             #sc-chatmode-btn {
                 position: fixed !important;
                 z-index: 20050 !important;
-                width: 36px !important; height: 36px !important; border-radius: 50% !important;
+                border-radius: 50% !important;
                 background: rgba(0,0,0,0.6) !important;
                 border: 1px solid rgba(255,255,255,0.25) !important;
                 color: rgba(255,255,255,0.9) !important; cursor: pointer !important;
-                font-size: 15px !important; line-height: 1 !important;
+                line-height: 1 !important;
                 display: flex !important; align-items: center !important; justify-content: center !important;
                 transition: opacity 0.6s ease, background 0.2s ease !important;
                 -webkit-tap-highlight-color: transparent !important;
@@ -11077,6 +11590,7 @@
       const old = document.getElementById("sc-settings-overlay");
       if (old) old.remove();
       const tmdbVal = getKey(LS_TMDB);
+      const opensubtitlesVal = getKey(LS_OPENSUBTITLES);
       const firstRun = !localStorage.getItem(LS_ONBOARDED);
       try {
         localStorage.setItem(LS_ONBOARDED, "1");
@@ -11126,6 +11640,27 @@
                                 </span>
                                 <span class="sc-settings-note">Shows NOW PLAYING and estimated start times in Tonight's Lineup. Needs TMDB above for movie runtimes — without it, estimates can't guess well. Off by default, still being tuned.</span>
                             </label>
+                        </div>
+                    </div>
+
+                    <div class="sc-settings-group sc-settings-divider">
+                        <label class="sc-settings-toggle-label">
+                            <span class="sc-toggle-row">
+                                <input type="checkbox" id="sc-input-opensubtitles-enable" ${opensubtitlesVal ? "checked" : ""} />
+                                <span class="sc-toggle-text">Enable OpenSubtitles</span>
+                            </span>
+                            <span class="sc-settings-note">Adds a Subtitles button for movies this app identifies, to download and show real subtitle files</span>
+                        </label>
+                        <div id="sc-opensubtitles-fields" class="${opensubtitlesVal ? "" : "sc-hidden"}">
+                            <div class="sc-settings-input-row">
+                                <input id="sc-input-opensubtitles" class="sc-settings-input" type="text"
+                                    placeholder="Paste OpenSubtitles API key…" value="${opensubtitlesVal}" spellcheck="false" />
+                                <button id="sc-test-opensubtitles" class="sc-settings-test" type="button">Test</button>
+                            </div>
+                            <span id="sc-test-opensubtitles-status" class="sc-settings-test-status"></span>
+                            <a class="sc-settings-link" href="https://www.opensubtitles.com/en/consumers" target="_blank" rel="noopener">
+                                Get a free OpenSubtitles API key ↗
+                            </a>
                         </div>
                     </div>
 
@@ -11336,10 +11871,27 @@
           }
         });
       }
+      const osEnable = document.getElementById("sc-input-opensubtitles-enable");
+      const osFields = document.getElementById("sc-opensubtitles-fields");
+      if (osEnable && osFields) {
+        osEnable.addEventListener("change", () => {
+          osFields.classList.toggle("sc-hidden", !osEnable.checked);
+          if (osEnable.checked) {
+            const i = document.getElementById("sc-input-opensubtitles");
+            if (i) {
+              if (tvNavState.setFocus) tvNavState.setFocus(i);
+              else i.focus();
+            }
+          }
+        });
+      }
       const persistSettings = () => {
         const enabled = tmdbEnable && tmdbEnable.checked;
         const input = document.getElementById("sc-input-tmdb");
         setKey(LS_TMDB, enabled && input ? input.value.trim() : "");
+        const osEnabled = osEnable && osEnable.checked;
+        const osInput = document.getElementById("sc-input-opensubtitles");
+        setKey(LS_OPENSUBTITLES, osEnabled && osInput ? osInput.value.trim() : "");
         const sc = document.getElementById("sc-input-spellcheck");
         if (sc) setKey(LS_SPELLCHECK, sc.checked ? "on" : "off");
         movieState.movieLinkCache = {};
@@ -11388,6 +11940,7 @@
         });
       };
       wireTest("sc-test-tmdb", "sc-input-tmdb", "sc-test-tmdb-status", validateTmdbKey);
+      wireTest("sc-test-opensubtitles", "sc-input-opensubtitles", "sc-test-opensubtitles-status", validateOpensubtitlesKey);
       const fontInput = document.getElementById("sc-input-fontsize");
       const fontVal = document.getElementById("sc-font-val");
       const fontSample = document.getElementById("sc-font-sample");
@@ -11501,7 +12054,7 @@
         const checkBtn = document.getElementById("sc-update-check");
         const ghLink = document.getElementById("sc-update-github-link");
         if (!statusEl || !checkBtn || !ghLink) return;
-        const render3 = (info) => {
+        const render2 = (info) => {
           statusEl.className = "sc-settings-note";
           notesEl.classList.add("sc-hidden");
           ghLink.classList.add("sc-hidden");
@@ -11522,8 +12075,8 @@
             statusEl.textContent = info.latest ? "✓ You’re on the latest version (" + info.latest + ")" : "✓ You’re on the latest version";
           }
         };
-        if (_updateInfo) render3(_updateInfo);
-        checkForUpdate(false).then(render3).catch(() => {
+        if (_updateInfo) render2(_updateInfo);
+        checkForUpdate(false).then(render2).catch(() => {
           if (!_updateInfo) statusEl.textContent = "Couldn’t reach GitHub to check.";
         });
         ghLink.addEventListener("click", () => {
@@ -11539,7 +12092,7 @@
           statusEl.textContent = "Checking…";
           checkBtn.disabled = true;
           try {
-            render3(await checkForUpdate(true));
+            render2(await checkForUpdate(true));
           } catch (e) {
             statusEl.textContent = "Couldn’t reach GitHub to check.";
           }
@@ -11551,6 +12104,7 @@
       if (document.getElementById("sc-settings-btn")) return;
       const btn = document.createElement("button");
       btn.id = "sc-settings-btn";
+      btn.className = "sc-dock-btn";
       btn.textContent = "⚙";
       btn.title = "Script Settings (API keys)";
       btn.dataset.tvLabel = "Settings";
@@ -11667,14 +12221,14 @@
       addFloatingButtons();
       addSettingsButton();
       addCastButton();
+      initDesyncButton();
+      layoutDock();
       watchMovieTitle();
       initMediaWatcher();
-      initYtScrubber();
       initSeekHud();
       initChatTimestamps();
       initNowPlayingWatcher();
       initTopBar();
-      initDesyncButton();
       initMovieLeadOffset();
       initChatHeader();
       initUserCount();
@@ -11829,6 +12383,7 @@
           console.warn("[Grindhouse] init failed:", fn.name, e);
         }
       });
+      layoutDock();
     }
     if (document.readyState === "complete") initCinematicChat();
     else window.addEventListener("load", initCinematicChat);

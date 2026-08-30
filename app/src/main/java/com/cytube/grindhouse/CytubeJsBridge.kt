@@ -144,4 +144,49 @@ class CytubeJsBridge(
         }.start()
     }
 
+    /**
+     * Native HTTP POST — same purpose as httpGet, for APIs whose write/exchange
+     * endpoints require a POST body (e.g. OpenSubtitles' /download, which exchanges
+     * a file_id for a temporary signed link). Same result-delivery contract as httpGet.
+     */
+    @JavascriptInterface
+    fun httpPost(reqId: String, url: String, headersJson: String, body: String) {
+        Thread {
+            var status = 0
+            var respBody = ""
+            var error: String? = null
+            try {
+                val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 8000
+                    readTimeout = 8000
+                    doOutput = true
+                    setRequestProperty("Accept", "application/json")
+                    setRequestProperty("Content-Type", "application/json")
+                }
+                try {
+                    val headers = JSONObject(headersJson)
+                    headers.keys().forEach { k -> conn.setRequestProperty(k, headers.getString(k)) }
+                } catch (_: Exception) { /* no/invalid headers — ignore */ }
+
+                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+
+                status = conn.responseCode
+                val stream = if (status in 200..299) conn.inputStream else conn.errorStream
+                respBody = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                conn.disconnect()
+            } catch (e: Exception) {
+                error = e.message ?: "request failed"
+            }
+
+            val payload = JSONObject()
+                .put("status", status)
+                .put("body", respBody)
+                .put("error", error ?: JSONObject.NULL)
+            val js = "window.__scHttpResolve && window.__scHttpResolve(" +
+                "${JSONObject.quote(reqId)}, $payload)"
+            activity.runOnUiThread { activity.evalJs(js) }
+        }.start()
+    }
+
 }

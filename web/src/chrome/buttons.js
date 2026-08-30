@@ -24,6 +24,7 @@ export function getMediaUpdateListeners() {
 export function initDesyncButton() {
     const btn = document.createElement('button');
     btn.id = 'sc-desync-btn';
+    btn.className = 'sc-dock-btn';
     btn.textContent = '⟳';
     btn.title = 'Free watch — click to watch freely, click again to re-sync';
     btn.dataset.tvLabel = 'Free Watch';
@@ -152,6 +153,7 @@ export function addCastButton() {
     if (document.getElementById('sc-cast-btn')) return;
     const btn = document.createElement('button');
     btn.id = 'sc-cast-btn';
+    btn.className = 'sc-dock-btn';
     btn.type = 'button';
     btn.title = 'Cast to TV';
     btn.dataset.tvLabel = 'Cast';

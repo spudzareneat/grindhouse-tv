@@ -6,6 +6,7 @@ import { nativeHttpGet } from './native.js';
 import { getLastAired } from './metadata/lastaired.js';
 import { isTv } from './tvdetect.js';
 import { chromeState } from './chrome/state.js';
+import { updateSubtitleButton } from './subtitles/ui.js';
 
 // Auto-announce hold time for the Now-Playing card (see showNowPlayingCard's opts.autoHideMs).
 const NP_AUTO_HIDE_MS = isTv ? 10000 : 8000;
@@ -119,6 +120,7 @@ function injectMovieLinks(titleEl) {
     // otherwise the title observer rebuilds a Trivia button for the old film. The
     // lookup repopulates it below when (and only when) this resolves to a real movie.
     npState.data = null;
+    updateSubtitleButton(null); // reset until the lookup below (re-)resolves an imdbId
 
     // YouTube: usually bumpers/intros, but occasionally a full movie.
     // Only attempt a lookup when the video runs an hour+ (likely a real film),
@@ -179,6 +181,7 @@ function injectMovieLinks(titleEl) {
         // nowplaying.js's #sc-np-links -- and not at all on TV (see that file's #sc-np-links
         // gating and the comment on _npCardEnabled).
         npState.data = movieData;
+        updateSubtitleButton(movieData.imdbId);
         if (_npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt)) showNowPlayingCard(movieData, { autoHide: true, autoHideMs: NP_AUTO_HIDE_MS });
         // Update the title element with the clean TMDB title, wrapped in a
         // dedicated clickable span so ONLY the title (not the rest of the

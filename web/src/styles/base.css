@@ -273,15 +273,10 @@
                and pin it as a fixed element flush to the bottom of the screen.
                Right edge stops just before the settings button. */
             /* ===== VIDEO.JS CONTROL BAR — pill style matching our UI buttons =====
-               #sc-yt-scrubber (player/ytscrubber.js) shares every one of this bar's
-               positioning rules throughout this file and tv.css -- added directly to
-               each selector list rather than duplicated as parallel rules, so the two
-               can never drift out of sync. It's YouTube's own equivalent: video.js
-               never runs for YouTube media (a raw iframe, no .vjs-control-bar at all),
-               so without this a YouTube-playing room showed no scrubber whatsoever
-               while every other media type did. Read-only (no seek) -- see that file's
-               own header comment for why. */
-            .video-js .vjs-control-bar, #sc-yt-scrubber {
+               YouTube media never runs video.js at all (a raw iframe, no .vjs-control-bar) --
+               there's no custom scrubber for it here; YouTube's own native iframe controls
+               are relied on instead, so only the docked buttons (chrome/dock.js) show. */
+            .video-js .vjs-control-bar {
                 position: fixed !important;
                 bottom: 4px !important;
                 left: 4px !important;
@@ -364,24 +359,6 @@
                 background: rgba(255,255,255,0.1) !important;
                 border-radius: 999px !important;
             }
-
-            /* #sc-yt-scrubber's own internals -- styled to match .vjs-progress-holder/
-               .vjs-play-progress exactly (see player/ytscrubber.js). */
-            #sc-yt-scrubber-elapsed, #sc-yt-scrubber-remain {
-                font-size: 12px !important; color: rgba(255,255,255,0.75) !important;
-                font-variant-numeric: tabular-nums !important; flex-shrink: 0 !important;
-                line-height: 1 !important;
-            }
-            #sc-yt-scrubber-track {
-                flex: 1 1 auto !important; height: 4px !important; margin: 0 8px !important;
-                background: rgba(255,255,255,0.15) !important; border-radius: 999px !important;
-                overflow: hidden !important;
-            }
-            #sc-yt-scrubber-fill {
-                height: 100% !important; width: 0% !important;
-                background: rgba(255,255,255,0.75) !important; border-radius: 999px !important;
-            }
-            body.sc-tv #sc-yt-scrubber-elapsed, body.sc-tv #sc-yt-scrubber-remain { font-size: 15px !important; }
 
             /* Volume slider */
             .video-js .vjs-volume-bar {
@@ -536,6 +513,11 @@
 
 
             /* ===== FLOATING BUTTONS (body-level, always visible) ===== */
+            /* Shape/color only -- size (width/height/font-size) is owned entirely by the
+               .sc-dock-btn rules (tv.css, chrome/dock.js): a bare #id selector here would
+               win the specificity fight against `body.sc-horizontal .sc-dock-btn` (2 classes
+               beats 0) and silently override it, which is exactly the bug that made this
+               button render smaller than its dock row-mates. */
             #sc-desync-btn {
                 position: fixed !important;
                 z-index: 20002 !important;
@@ -543,9 +525,7 @@
                 color: rgba(255,255,255,0.55) !important;
                 border: none !important;
                 border-radius: 50% !important;
-                width: 28px !important; height: 28px !important;
                 padding: 0 !important;
-                font-size: 15px !important;
                 cursor: pointer !important;
                 display: flex !important;
                 align-items: center !important;
@@ -560,6 +540,38 @@
                 color: #ffcc44 !important;
                 background: rgba(255,200,50,0.18) !important;
             }
+            /* Same circular-icon look as #sc-desync-btn; size comes from .sc-dock-btn
+               (chrome/dock.js, tv.css). The glyph itself is video.js's own captions icon
+               (::before below) -- the exact one the real player control bar uses for its
+               own Captions button (".vjs-subs-caps-button .vjs-icon-placeholder"), so this
+               reads as the same captions icon everywhere in the app rather than a plain "CC"
+               text label. VideoJS's icon font is already loaded globally by the player
+               itself, so no extra asset is needed here. */
+            #sc-subtitles-btn {
+                position: fixed !important;
+                z-index: 20002 !important;
+                background: rgba(255,255,255,0.08) !important;
+                color: rgba(255,255,255,0.55) !important;
+                border: none !important;
+                border-radius: 50% !important;
+                padding: 0 !important;
+                cursor: pointer !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                transition: color 0.3s ease, background 0.3s ease !important;
+            }
+            #sc-subtitles-btn::before {
+                font-family: VideoJS !important;
+                content: "\f10c" !important;
+                line-height: 1 !important;
+            }
+            #sc-subtitles-btn:hover {
+                color: white !important;
+                background: rgba(255,255,255,0.22) !important;
+            }
+            #sc-subtitles-btn.sc-hidden { display: none !important; }
+            #sc-subtitles-btn:disabled { opacity: 0.5 !important; cursor: default !important; }
             #fs-toggle-btn {
                 position: fixed !important;
                 z-index: 20002 !important;

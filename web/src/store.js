@@ -5,6 +5,8 @@
 import { getSetting } from './settings/schema.js';
 
 export const LS_TMDB       = 'sc_tmdb_key';
+export const LS_OPENSUBTITLES = 'sc_opensubtitles_key';
+export const LS_SUBTITLE_CACHE = 'sc_subtitle_cache_v1'; // downloaded SRT cues by imdbId, so a restart doesn't re-spend a download
 export const LS_ONBOARDED  = 'sc_onboarded';  // set once the settings have been shown on first launch
 export const LS_SPELLCHECK = 'sc_spellcheck'; // 'off' to disable, anything else = enabled
 export const LS_CHAT_FONT  = 'sc_chat_fontsize';

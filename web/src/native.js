@@ -29,3 +29,24 @@ export function nativeHttpGet(url, headers = {}) {
         }, 10000);
     });
 }
+
+// POST variant — for APIs whose write/exchange endpoints require a body (e.g.
+// OpenSubtitles' /download, which exchanges a file_id for a signed link).
+export function nativeHttpPost(url, headers = {}, body = '') {
+    return new Promise((resolve, reject) => {
+        if (!(window.CytubeNative && typeof CytubeNative.httpPost === 'function')) {
+            reject(new Error('native http unavailable'));
+            return;
+        }
+        const id = 'h' + Math.random().toString(36).slice(2);
+        _scHttpCbs[id] = (res) => {
+            if (res && res.error) reject(new Error(res.error));
+            else resolve(res);
+        };
+        try { CytubeNative.httpPost(id, url, JSON.stringify(headers), body); }
+        catch (e) { delete _scHttpCbs[id]; reject(e); }
+        setTimeout(() => {
+            if (_scHttpCbs[id]) { delete _scHttpCbs[id]; reject(new Error('timeout')); }
+        }, 10000);
+    });
+}
