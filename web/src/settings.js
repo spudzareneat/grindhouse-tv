@@ -49,6 +49,18 @@ import baseCss from './styles/base.css';
 import overlaysCss from './styles/overlays.css';
 import tvCss from './styles/tv.css';
 
+// Trivia pop-up frequency, as a slider (0-2) instead of a <select> -- a native <select>'s
+// OS-level dropdown popup is unreachable by a TV remote (see tvnav.js's move()/activate() D-pad
+// history for the same problem, since fixed there for the general case; this and the subtitle
+// line-count control below are the two concrete instances, converted instead of relying on that
+// fix so the UI itself doesn't still look/feel like a dropdown you're expected to open).
+const TRIVIA_FREQ_STEPS = [
+    { value: 'frequent',   label: 'Frequent — about once a minute' },
+    { value: 'occasional', label: 'Occasional — every few minutes' },
+    { value: 'rare',       label: 'Rare — every 8–15 minutes' },
+];
+const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => s.value === value));
+
 (function () {
     'use strict';
 
@@ -595,12 +607,10 @@ import tvCss from './styles/tv.css';
                         </label>
                         <label class="sc-settings-label" style="margin-top:8px">
                             Pop-up frequency
-                            <select id="sc-input-triviapopup-freq" class="sc-settings-input">
-                                <option value="frequent"   ${triviaPopupFrequency() === 'frequent'   ? 'selected' : ''}>Frequent — about once a minute</option>
-                                <option value="occasional" ${triviaPopupFrequency() === 'occasional' ? 'selected' : ''}>Occasional — every few minutes</option>
-                                <option value="rare"       ${triviaPopupFrequency() === 'rare'       ? 'selected' : ''}>Rare — every 8–15 minutes</option>
-                            </select>
+                            <span class="sc-settings-note" id="sc-triviafreq-val">${TRIVIA_FREQ_STEPS[triviaFreqIndex(triviaPopupFrequency())].label}</span>
                         </label>
+                        <input type="range" id="sc-input-triviapopup-freq" class="sc-settings-range"
+                            min="0" max="${TRIVIA_FREQ_STEPS.length - 1}" step="1" value="${triviaFreqIndex(triviaPopupFrequency())}" />
                     </div>
                 </div>
 
@@ -678,12 +688,10 @@ import tvCss from './styles/tv.css';
                             min="12" max="24" step="1" value="${getSubtitleFontSize()}" />
                         <label class="sc-settings-label" style="margin-top:8px">
                             Lines on screen
-                            <select id="sc-input-subtitle-lines" class="sc-settings-input">
-                                <option value="1" ${getSubtitleLines() === 1 ? 'selected' : ''}>1</option>
-                                <option value="2" ${getSubtitleLines() === 2 ? 'selected' : ''}>2</option>
-                                <option value="3" ${getSubtitleLines() === 3 ? 'selected' : ''}>3</option>
-                            </select>
+                            <span class="sc-settings-note" id="sc-subtitle-lines-val">${getSubtitleLines()}</span>
                         </label>
+                        <input type="range" id="sc-input-subtitle-lines" class="sc-settings-range"
+                            min="1" max="3" step="1" value="${getSubtitleLines()}" />
                     </div>
                 </div>
 
@@ -891,7 +899,9 @@ import tvCss from './styles/tv.css';
             applySubtitleFontSize(px);
         });
         const subLines = document.getElementById('sc-input-subtitle-lines');
-        if (subLines) subLines.addEventListener('change', () => {
+        const subLinesVal = document.getElementById('sc-subtitle-lines-val');
+        if (subLines) subLines.addEventListener('input', () => {
+            if (subLinesVal) subLinesVal.textContent = subLines.value;
             setKey(LS_SUBTITLE_LINES, subLines.value);
             refreshSubtitles();
         });
@@ -908,8 +918,11 @@ import tvCss from './styles/tv.css';
             setKey(LS_TRIVIA_POPUP, triviapopup.checked ? 'on' : 'off');
         });
         const triviapopupFreq = document.getElementById('sc-input-triviapopup-freq');
-        if (triviapopupFreq) triviapopupFreq.addEventListener('change', () => {
-            setKey(LS_TRIVIA_POPUP_FREQ, triviapopupFreq.value);
+        const triviapopupFreqVal = document.getElementById('sc-triviafreq-val');
+        if (triviapopupFreq) triviapopupFreq.addEventListener('input', () => {
+            const step = TRIVIA_FREQ_STEPS[parseInt(triviapopupFreq.value, 10)];
+            if (triviapopupFreqVal) triviapopupFreqVal.textContent = step.label;
+            setKey(LS_TRIVIA_POPUP_FREQ, step.value);
         });
 
         // ── App update check / release notes / external-browser link ──────────

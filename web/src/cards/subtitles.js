@@ -97,7 +97,7 @@ function ensureContainer() {
     return el;
 }
 
-function inSubtitlesMode() {
+export function inSubtitlesMode() {
     try { return localStorage.getItem('sc_chat_mode') === 'subtitles'; } catch (e) { return false; }
 }
 

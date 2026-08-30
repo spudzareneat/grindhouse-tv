@@ -506,6 +506,51 @@ export function initTvNav() {
         if (!list.length) return;
         if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) { setFocus(list[0]); return; }
 
+        // Settings modal: Up/Down step through the ACTIVE PANE's own candidates in DOM order
+        // (querySelectorAll's natural order, already how `list` is built) instead of 2D spatial
+        // scoring. Panes mix full-width rows (range sliders, selects, number inputs) with small
+        // left-aligned checkboxes -- pickDirectional scores by rect CENTER, so a checkbox's
+        // narrow, left-hugging rect sits far to the side of its wide siblings' centers. That
+        // large perpendicular offset can knock it out of the cone tier entirely, so a vertical
+        // press lands on a wide row two steps away instead of the checkbox directly above/below
+        // it (reported: the "Pop-up trivia bubbles" checkbox got skipped going down from the tab
+        // row, AND Up from Cancel landed on the Updates tab instead of the pane's last control --
+        // same mismatch, both directions, both pane boundaries). DOM order sidesteps the
+        // geometry mismatch entirely and is the more correct model for a linear form besides.
+        //
+        // `list` is already DOM order: tabs, then the active pane's own controls (hidden panes'
+        // children are filtered out by isVisible in candidates()), then the Cancel/Save row.
+        // Splitting it into "pane controls" vs. everything else turns every transition into a
+        // plain array-index step, with explicit boundary targets instead of trusting geometry:
+        // tab -> pane's first control, pane's last control -> Cancel, first control -> the
+        // active tab, Cancel/Save -> pane's last control.
+        if (scope && scope.id === 'sc-settings-overlay') {
+            const isTabEl = (el) => !!(el.classList && el.classList.contains('sc-settings-tab'));
+            const isActionsEl = (el) => !!(el.closest && el.closest('#sc-settings-actions'));
+            const isPaneEl = (el) => !isTabEl(el) && !isActionsEl(el);
+
+            if (isTabEl(focusEl) && dir === 'down') {
+                const target = list.find(isPaneEl);
+                if (target) { setFocus(target); return; }
+            } else if (isActionsEl(focusEl) && dir === 'up') {
+                const paneEls = list.filter(isPaneEl);
+                const target = paneEls[paneEls.length - 1];
+                if (target) { setFocus(target); return; }
+            } else if (isPaneEl(focusEl) && (dir === 'up' || dir === 'down')) {
+                const paneEls = list.filter(isPaneEl);
+                const i = paneEls.indexOf(focusEl);
+                const ni = dir === 'down' ? i + 1 : i - 1;
+                if (ni >= 0 && ni < paneEls.length) { setFocus(paneEls[ni]); return; }
+                if (dir === 'up') {
+                    const activeTab = list.find(el => isTabEl(el) && el.classList.contains('sc-settings-tab-active'));
+                    if (activeTab) { setFocus(activeTab); return; }
+                } else {
+                    const firstAction = list.find(isActionsEl);
+                    if (firstAction) { setFocus(firstAction); return; }
+                }
+            }
+        }
+
         const cur = focusEl.getBoundingClientRect();
         const idx = pickDirectional(dir, cur, list.map(el => el === focusEl ? null : el.getBoundingClientRect()));
         if (idx !== -1) { setFocus(list[idx]); return; }

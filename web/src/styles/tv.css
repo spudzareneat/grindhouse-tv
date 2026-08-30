@@ -1459,7 +1459,12 @@
                 text-shadow: 0 1px 4px rgba(0,0,0,0.9) !important;
                 overflow-wrap: anywhere !important; word-break: break-word !important;
             }
-            .sc-subtitle-pill img { max-height: 1.4em !important; vertical-align: middle !important; }
+            /* Channel emotes/GIFs inline in the message text -- sized independent of the pill's
+               own font-size (clamped, not a flat multiple of it), same idea as the reference
+               app's EmoteText.kt, which draws each emote as a fixed 28dp image regardless of
+               its surrounding text size rather than shrinking it down to text-height. A plain
+               "* 1.4em" here read as tiny at the smaller subtitle font sizes. */
+            .sc-subtitle-pill img { height: clamp(24px, 1.8em, 40px) !important; width: auto !important; vertical-align: middle !important; }
             .sc-subtitle-emoji { display: inline-block !important; width: 1.3em !important; text-align: center !important; margin-right: 2px !important; }
             .sc-subtitle-name { font-weight: 700 !important; }
 

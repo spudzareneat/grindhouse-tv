@@ -3418,6 +3418,46 @@
         setFocus(list[0]);
         return;
       }
+      if (scope && scope.id === "sc-settings-overlay") {
+        const isTabEl = (el) => !!(el.classList && el.classList.contains("sc-settings-tab"));
+        const isActionsEl = (el) => !!(el.closest && el.closest("#sc-settings-actions"));
+        const isPaneEl = (el) => !isTabEl(el) && !isActionsEl(el);
+        if (isTabEl(focusEl) && dir === "down") {
+          const target = list.find(isPaneEl);
+          if (target) {
+            setFocus(target);
+            return;
+          }
+        } else if (isActionsEl(focusEl) && dir === "up") {
+          const paneEls = list.filter(isPaneEl);
+          const target = paneEls[paneEls.length - 1];
+          if (target) {
+            setFocus(target);
+            return;
+          }
+        } else if (isPaneEl(focusEl) && (dir === "up" || dir === "down")) {
+          const paneEls = list.filter(isPaneEl);
+          const i = paneEls.indexOf(focusEl);
+          const ni = dir === "down" ? i + 1 : i - 1;
+          if (ni >= 0 && ni < paneEls.length) {
+            setFocus(paneEls[ni]);
+            return;
+          }
+          if (dir === "up") {
+            const activeTab = list.find((el) => isTabEl(el) && el.classList.contains("sc-settings-tab-active"));
+            if (activeTab) {
+              setFocus(activeTab);
+              return;
+            }
+          } else {
+            const firstAction = list.find(isActionsEl);
+            if (firstAction) {
+              setFocus(firstAction);
+              return;
+            }
+          }
+        }
+      }
       const cur = focusEl.getBoundingClientRect();
       const idx = pickDirectional(dir, cur, list.map((el) => el === focusEl ? null : el.getBoundingClientRect()));
       if (idx !== -1) {
@@ -6844,9 +6884,15 @@
       const mid = rect.left + rect.width / 2;
       leftMinPx = leftMaxPx = mid;
     }
-    const bottomThirdTopPx = rect.top + rect.height * (2 / 3);
-    let topMinPx = Math.max(rect.top + marginPx, bottomThirdTopPx);
-    let topMaxPx = rect.bottom - marginPx - boxHeightPx;
+    let topMinPx, topMaxPx;
+    if (inSubtitlesMode()) {
+      topMinPx = rect.top + marginPx;
+      topMaxPx = Math.min(rect.bottom - marginPx - boxHeightPx, rect.top + rect.height / 2);
+    } else {
+      const bottomThirdTopPx = rect.top + rect.height * (2 / 3);
+      topMinPx = Math.max(rect.top + marginPx, bottomThirdTopPx);
+      topMaxPx = rect.bottom - marginPx - boxHeightPx;
+    }
     if (topMaxPx < topMinPx) topMinPx = topMaxPx = Math.max(rect.top + marginPx, rect.bottom - marginPx - boxHeightPx);
     return {
       leftPx: leftMinPx + Math.random() * (leftMaxPx - leftMinPx),
@@ -10450,7 +10496,12 @@
                 text-shadow: 0 1px 4px rgba(0,0,0,0.9) !important;
                 overflow-wrap: anywhere !important; word-break: break-word !important;
             }
-            .sc-subtitle-pill img { max-height: 1.4em !important; vertical-align: middle !important; }
+            /* Channel emotes/GIFs inline in the message text -- sized independent of the pill's
+               own font-size (clamped, not a flat multiple of it), same idea as the reference
+               app's EmoteText.kt, which draws each emote as a fixed 28dp image regardless of
+               its surrounding text size rather than shrinking it down to text-height. A plain
+               "* 1.4em" here read as tiny at the smaller subtitle font sizes. */
+            .sc-subtitle-pill img { height: clamp(24px, 1.8em, 40px) !important; width: auto !important; vertical-align: middle !important; }
             .sc-subtitle-emoji { display: inline-block !important; width: 1.3em !important; text-align: center !important; margin-right: 2px !important; }
             .sc-subtitle-name { font-weight: 700 !important; }
 
@@ -10748,6 +10799,12 @@
 `;
 
   // src/settings.js
+  var TRIVIA_FREQ_STEPS = [
+    { value: "frequent", label: "Frequent — about once a minute" },
+    { value: "occasional", label: "Occasional — every few minutes" },
+    { value: "rare", label: "Rare — every 8–15 minutes" }
+  ];
+  var triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex((s) => s.value === value));
   (function() {
     "use strict";
     function applyWatchAlong() {
@@ -11140,12 +11197,10 @@
                         </label>
                         <label class="sc-settings-label" style="margin-top:8px">
                             Pop-up frequency
-                            <select id="sc-input-triviapopup-freq" class="sc-settings-input">
-                                <option value="frequent"   ${triviaPopupFrequency() === "frequent" ? "selected" : ""}>Frequent — about once a minute</option>
-                                <option value="occasional" ${triviaPopupFrequency() === "occasional" ? "selected" : ""}>Occasional — every few minutes</option>
-                                <option value="rare"       ${triviaPopupFrequency() === "rare" ? "selected" : ""}>Rare — every 8–15 minutes</option>
-                            </select>
+                            <span class="sc-settings-note" id="sc-triviafreq-val">${TRIVIA_FREQ_STEPS[triviaFreqIndex(triviaPopupFrequency())].label}</span>
                         </label>
+                        <input type="range" id="sc-input-triviapopup-freq" class="sc-settings-range"
+                            min="0" max="${TRIVIA_FREQ_STEPS.length - 1}" step="1" value="${triviaFreqIndex(triviaPopupFrequency())}" />
                     </div>
                 </div>
 
@@ -11223,12 +11278,10 @@
                             min="12" max="24" step="1" value="${getSubtitleFontSize()}" />
                         <label class="sc-settings-label" style="margin-top:8px">
                             Lines on screen
-                            <select id="sc-input-subtitle-lines" class="sc-settings-input">
-                                <option value="1" ${getSubtitleLines() === 1 ? "selected" : ""}>1</option>
-                                <option value="2" ${getSubtitleLines() === 2 ? "selected" : ""}>2</option>
-                                <option value="3" ${getSubtitleLines() === 3 ? "selected" : ""}>3</option>
-                            </select>
+                            <span class="sc-settings-note" id="sc-subtitle-lines-val">${getSubtitleLines()}</span>
                         </label>
+                        <input type="range" id="sc-input-subtitle-lines" class="sc-settings-range"
+                            min="1" max="3" step="1" value="${getSubtitleLines()}" />
                     </div>
                 </div>
 
@@ -11421,7 +11474,9 @@
         applySubtitleFontSize(px);
       });
       const subLines = document.getElementById("sc-input-subtitle-lines");
-      if (subLines) subLines.addEventListener("change", () => {
+      const subLinesVal = document.getElementById("sc-subtitle-lines-val");
+      if (subLines) subLines.addEventListener("input", () => {
+        if (subLinesVal) subLinesVal.textContent = subLines.value;
         setKey(LS_SUBTITLE_LINES, subLines.value);
         refreshSubtitles();
       });
@@ -11434,8 +11489,11 @@
         setKey(LS_TRIVIA_POPUP, triviapopup.checked ? "on" : "off");
       });
       const triviapopupFreq = document.getElementById("sc-input-triviapopup-freq");
-      if (triviapopupFreq) triviapopupFreq.addEventListener("change", () => {
-        setKey(LS_TRIVIA_POPUP_FREQ, triviapopupFreq.value);
+      const triviapopupFreqVal = document.getElementById("sc-triviafreq-val");
+      if (triviapopupFreq) triviapopupFreq.addEventListener("input", () => {
+        const step = TRIVIA_FREQ_STEPS[parseInt(triviapopupFreq.value, 10)];
+        if (triviapopupFreqVal) triviapopupFreqVal.textContent = step.label;
+        setKey(LS_TRIVIA_POPUP_FREQ, step.value);
       });
       (function wireUpdateSection() {
         const statusEl = document.getElementById("sc-update-status");

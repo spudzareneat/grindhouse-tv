@@ -2,6 +2,7 @@ import { fetchImdbTrivia, fetchCastAndDirector, fetchPersonTrivia, fetchPersonKn
 import { npState } from './nowplaying.js';
 import { isYouTubeMedia } from '../titleinject.js';
 import { triviaPopupEnabled, triviaPopupFrequency } from '../store.js';
+import { inSubtitlesMode } from './subtitles.js';
 
 /* ==========================================================
    POP-UP TRIVIA BUBBLES — "VH1 Pop-up Video" style ambient trivia.
@@ -346,11 +347,20 @@ function _tpRandomPosition(boxWidthPx, boxHeightPx) {
         leftMinPx = leftMaxPx = mid;
     }
 
-    // Prefer the bottom third of the video area; fall back to whatever
-    // vertical room actually fits if the video area is too short for that.
-    const bottomThirdTopPx = rect.top + rect.height * (2 / 3);
-    let topMinPx = Math.max(rect.top + marginPx, bottomThirdTopPx);
-    let topMaxPx = rect.bottom - marginPx - boxHeightPx;
+    // Prefer the bottom third of the video area; fall back to whatever vertical room
+    // actually fits if the video area is too short for that. In the Subtitles chat mode,
+    // the bottom of the screen is already spoken for by the subtitle pills (cards/
+    // subtitles.js) -- landing a bubble there would overlap them, so prefer the top half
+    // instead there, same fallback-if-too-tall idea.
+    let topMinPx, topMaxPx;
+    if (inSubtitlesMode()) {
+        topMinPx = rect.top + marginPx;
+        topMaxPx = Math.min(rect.bottom - marginPx - boxHeightPx, rect.top + rect.height / 2);
+    } else {
+        const bottomThirdTopPx = rect.top + rect.height * (2 / 3);
+        topMinPx = Math.max(rect.top + marginPx, bottomThirdTopPx);
+        topMaxPx = rect.bottom - marginPx - boxHeightPx;
+    }
     if (topMaxPx < topMinPx) topMinPx = topMaxPx = Math.max(rect.top + marginPx, rect.bottom - marginPx - boxHeightPx);
 
     return {
