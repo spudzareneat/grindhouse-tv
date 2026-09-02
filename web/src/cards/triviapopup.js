@@ -64,6 +64,14 @@ let _tpPopTimer = null;
 let _tpBubbleEl = null;
 let _tpDismissTimer = null;
 
+// Session-only mute for the bubbles, toggled from the top-bar "Pop-ups" button
+// (renderTriviaPopupButton, bottom of file). NOT persisted -- a page reload with
+// the setting still on brings the bubbles back. Muting pulls any on-screen bubble
+// and cancels the pending pop; unmuting resumes after a short delay rather than
+// waiting out a full frequency gap.
+let _tpMuted = false;
+const TP_RESUME_MS = 1500;
+
 function _tpKnownForFact(person, knownFor) {
     if (!knownFor) return null;
     const titleYear = knownFor.year ? `${knownFor.title} (${knownFor.year})` : knownFor.title;
@@ -155,6 +163,7 @@ function _tpResetForNewMovie(id) {
 function _tpScheduleNextPop() {
     clearTimeout(_tpPopTimer);
     if (_tpExhausted || !_tpQueue.length) { _tpExhausted = true; return; }
+    if (_tpMuted) return; // unmuting reschedules -- see _tpApplyMute
     const [minGap, maxGap] = _tpGapRange();
     const gap = minGap + Math.random() * (maxGap - minGap);
     _tpPopTimer = setTimeout(_tpAttemptPop, gap);
@@ -169,6 +178,7 @@ function _tpMoviePlaying() {
 function _tpAttemptPop() {
     const curId = npState.data && npState.data.imdbId;
     if (curId !== _tpLastImdbId) return; // stale timer from a since-reset movie
+    if (_tpMuted) return; // muted mid-flight; _tpApplyMute reschedules on unmute
 
     // Real downloaded movie subtitles (subtitles/ui.js) already occupy the bottom
     // of the screen -- a pop-up bubble competing for the same real estate (or
@@ -495,4 +505,61 @@ function _tpDismissBubble(instant) {
     if (instant) { el.remove(); return; }
     el.classList.add('sc-tp-out');
     setTimeout(() => el.remove(), TP_EXIT_ANIM_MS);
+}
+
+/* ==========================================================
+   TOP-BAR "POP-UPS" BUTTON — session mute/resume toggle. All the DOM + state
+   lives here; titleinject.js just calls renderTriviaPopupButton() when the
+   now-playing movie changes (the same spot the retired #sc-trivia-btn was
+   managed from). Session-only: not persisted, a reload brings the bubbles back.
+========================================================== */
+
+const TP_BTN_ID = 'sc-trivia-popup-btn';
+
+function _tpApplyMute() {
+    if (_tpMuted) {
+        clearTimeout(_tpPopTimer); _tpPopTimer = null;
+        _tpDismissBubble(true); // pull whatever's on screen right now
+    } else if (!_tpExhausted && _tpQueue.length) {
+        // Resume promptly -- don't make the user wait out a fresh frequency gap.
+        clearTimeout(_tpPopTimer);
+        _tpPopTimer = setTimeout(_tpAttemptPop, TP_RESUME_MS);
+    }
+    _tpSyncButton();
+}
+
+function _tpToggleMute() { _tpMuted = !_tpMuted; _tpApplyMute(); }
+
+function _tpSyncButton() {
+    const btn = document.getElementById(TP_BTN_ID);
+    if (!btn) return;
+    // Fixed-width dot so the label doesn't shift between states: ● active, ○ muted.
+    btn.innerHTML = `<span class="sc-tp-dot">${_tpMuted ? '○' : '●'}</span>Pop-ups`;
+    btn.title = _tpMuted
+        ? 'Pop-up trivia muted for this session — tap to resume'
+        : 'Mute pop-up trivia bubbles for this session';
+    btn.setAttribute('aria-pressed', _tpMuted ? 'true' : 'false');
+}
+
+// Called by titleinject.js on every now-playing change. Shows the button only
+// when the feature is enabled AND a real movie with a matched IMDb id is playing
+// (the old #sc-trivia-btn's visibility rule); removes it otherwise. Inserted left
+// of Up Next / Coming Attractions so the header row reads
+// Pop-ups │ Up Next │ Coming Attractions.
+export function renderTriviaPopupButton() {
+    const shouldShow = triviaPopupEnabled() && !!(npState.data && npState.data.imdbId);
+    let btn = document.getElementById(TP_BTN_ID);
+    if (!shouldShow) { if (btn) btn.remove(); return; }
+    if (!btn) {
+        btn = document.createElement('button');
+        btn.id = TP_BTN_ID;
+        btn.type = 'button';
+        btn.dataset.noTvCaption = '1'; // ●/○ + label is self-explanatory; no remote caption
+        btn.addEventListener('click', (e) => { e.stopPropagation(); _tpToggleMute(); });
+        const header = document.getElementById('videowrap-header');
+        const anchor = document.getElementById('sc-up-next-btn') || document.getElementById('sc-poster-toggle');
+        if (header && anchor && anchor.parentNode === header) header.insertBefore(btn, anchor);
+        else (header || document.body).appendChild(btn);
+    }
+    _tpSyncButton();
 }

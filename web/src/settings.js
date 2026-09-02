@@ -30,7 +30,7 @@ import { isTv } from './tvdetect.js';
 import { movieState, getKillCountDb, validateTmdbKey } from './metadata/tmdb.js';
 import { validateOpensubtitlesKey } from './subtitles/opensubtitles.js';
 import { npState, showNowPlayingCard, hideNowPlayingCard, initNowPlayingWatcher } from './cards/nowplaying.js';
-import { triviaPopupBoot } from './cards/triviapopup.js';
+import { triviaPopupBoot, renderTriviaPopupButton } from './cards/triviapopup.js';
 import {
     initSubtitles, startSubtitlesObserver, refreshSubtitles,
     getSubtitleOpacity, getSubtitleFontSize, getSubtitleLines,
@@ -959,6 +959,9 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
         const triviapopup = document.getElementById('sc-input-triviapopup');
         if (triviapopup) triviapopup.addEventListener('change', () => {
             setKey(LS_TRIVIA_POPUP, triviapopup.checked ? 'on' : 'off');
+            // Reflect the toggle on the top-bar Pop-ups button right away rather than
+            // waiting for the next movie change to re-render it.
+            renderTriviaPopupButton();
         });
         const triviapopupFreq = document.getElementById('sc-input-triviapopup-freq');
         const triviapopupFreqVal = document.getElementById('sc-triviafreq-val');
@@ -1046,6 +1049,7 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
             document.getElementById('videowrap-header'),
             document.getElementById('sc-poster-toggle'),
             document.getElementById('sc-up-next-btn'),
+            document.getElementById('sc-trivia-popup-btn'),
         ].filter(Boolean);
 
         const dim = () => {
@@ -1103,7 +1107,7 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
 
         // When the bar is faded, the first tap/click on it only wakes it — it does
         // NOT trigger the title/trivia/links/coming-attractions. A second tap acts.
-        const HEADER_SEL = '#videowrap-header, #sc-top-bar, #sc-title-text, #sc-up-next-btn, #sc-poster-toggle';
+        const HEADER_SEL = '#videowrap-header, #sc-top-bar, #sc-title-text, #sc-up-next-btn, #sc-poster-toggle, #sc-trivia-popup-btn';
         document.addEventListener('click', (e) => {
             if (!bar.classList.contains('sc-bar-dim')) return;   // not faded → normal behaviour
             if (!e.target.closest(HEADER_SEL)) return;           // tap wasn't on the header
@@ -1477,7 +1481,7 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
     (function () {
         // Only controls that currently exist get moved (trivia needs IMDb data, poll
         // needs a live poll, poster toggle needs a Coming-Attractions reel, etc.).
-        const CAST_CONTROL_IDS = ['sc-poster-toggle', 'sc-up-next-btn', 'sc-usercount-btn', 'sc-poll-btn', 'sc-settings-btn'];
+        const CAST_CONTROL_IDS = ['sc-trivia-popup-btn', 'sc-poster-toggle', 'sc-up-next-btn', 'sc-usercount-btn', 'sc-poll-btn', 'sc-settings-btn'];
         let savedSlots = null;   // each relocated element's original DOM position, for restore
 
         function buildBar() {

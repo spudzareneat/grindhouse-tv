@@ -41,7 +41,17 @@ export function initUpNextButton() {
     btn.dataset.noTvCaption = '1';
     btn.addEventListener('click', () => showUpNextCard());
     const header = document.getElementById('videowrap-header');
-    (header || document.body).appendChild(btn);
+    // Sit just left of Coming Attractions: header row reads Up Next │ Coming
+    // Attractions (landscape/TV already order this via fixed offsets; this fixes
+    // the DOM/flex order for vertical, where both flow in the header). The
+    // Pop-ups button, when present, is inserted left of this one — see
+    // renderTriviaPopupButton in cards/triviapopup.js.
+    const posterToggle = document.getElementById('sc-poster-toggle');
+    if (header && posterToggle && posterToggle.parentNode === header) {
+        header.insertBefore(btn, posterToggle);
+    } else {
+        (header || document.body).appendChild(btn);
+    }
 }
 
 /* ==========================================================

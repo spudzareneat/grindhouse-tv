@@ -3187,6 +3187,7 @@
       "sc-usercount-connected",
       "sc-usercount-online",
       "sc-poll-btn",
+      "sc-trivia-popup-btn",
       "sc-poster-toggle",
       "sc-up-next-btn",
       "sc-subtitles-btn",
@@ -3853,7 +3854,12 @@
     btn.dataset.noTvCaption = "1";
     btn.addEventListener("click", () => showUpNextCard());
     const header = document.getElementById("videowrap-header");
-    (header || document.body).appendChild(btn);
+    const posterToggle = document.getElementById("sc-poster-toggle");
+    if (header && posterToggle && posterToggle.parentNode === header) {
+      header.insertBefore(btn, posterToggle);
+    } else {
+      (header || document.body).appendChild(btn);
+    }
   }
   function initPollWatcher() {
     const tryInit = () => {
@@ -6960,15 +6966,17 @@
       if (npState.data && !titleEl.querySelector("#sc-title-text")) {
         applyCleanTitleDom(titleEl, npState.data);
       }
+      renderTriviaPopupButton();
       return;
     }
     movieState.lastMovieTitle = rawTitle;
-    ["sc-movie-stats", "sc-trivia-btn"].forEach((id) => {
+    ["sc-movie-stats"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.remove();
     });
     npState.data = null;
     updateSubtitleButton(null);
+    renderTriviaPopupButton();
     const isYt = isYouTubeMedia();
     let ytSeconds = 0;
     if (isYt) {
@@ -6995,6 +7003,7 @@
             };
             npState.data = movieData;
             applyCleanTitleDom(titleEl, movieData);
+            renderTriviaPopupButton();
           });
         }
         return;
@@ -7013,6 +7022,7 @@
       }
       npState.data = movieData;
       updateSubtitleButton(movieData.imdbId);
+      renderTriviaPopupButton();
       if (_npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt)) showNowPlayingCard(movieData, { autoHide: true, autoHideMs: NP_AUTO_HIDE_MS });
       applyCleanTitleDom(titleEl, movieData);
       const statParts = [];
@@ -7106,6 +7116,8 @@
   var _tpPopTimer = null;
   var _tpBubbleEl = null;
   var _tpDismissTimer = null;
+  var _tpMuted = false;
+  var TP_RESUME_MS = 1500;
   function _tpKnownForFact(person, knownFor) {
     if (!knownFor) return null;
     const titleYear = knownFor.year ? `${knownFor.title} (${knownFor.year})` : knownFor.title;
@@ -7167,6 +7179,7 @@
       _tpExhausted = true;
       return;
     }
+    if (_tpMuted) return;
     const [minGap, maxGap] = _tpGapRange();
     const gap = minGap + Math.random() * (maxGap - minGap);
     _tpPopTimer = setTimeout(_tpAttemptPop, gap);
@@ -7179,6 +7192,7 @@
   function _tpAttemptPop() {
     const curId = npState.data && npState.data.imdbId;
     if (curId !== _tpLastImdbId) return;
+    if (_tpMuted) return;
     if (!triviaPopupEnabled() || !_tpMoviePlaying() || isMovieSubtitlesVisible()) {
       _tpPopTimer = setTimeout(_tpAttemptPop, TP_RETRY_MS);
       return;
@@ -7434,6 +7448,52 @@
     }
     el.classList.add("sc-tp-out");
     setTimeout(() => el.remove(), TP_EXIT_ANIM_MS);
+  }
+  var TP_BTN_ID = "sc-trivia-popup-btn";
+  function _tpApplyMute() {
+    if (_tpMuted) {
+      clearTimeout(_tpPopTimer);
+      _tpPopTimer = null;
+      _tpDismissBubble(true);
+    } else if (!_tpExhausted && _tpQueue.length) {
+      clearTimeout(_tpPopTimer);
+      _tpPopTimer = setTimeout(_tpAttemptPop, TP_RESUME_MS);
+    }
+    _tpSyncButton();
+  }
+  function _tpToggleMute() {
+    _tpMuted = !_tpMuted;
+    _tpApplyMute();
+  }
+  function _tpSyncButton() {
+    const btn = document.getElementById(TP_BTN_ID);
+    if (!btn) return;
+    btn.innerHTML = `<span class="sc-tp-dot">${_tpMuted ? "○" : "●"}</span>Pop-ups`;
+    btn.title = _tpMuted ? "Pop-up trivia muted for this session — tap to resume" : "Mute pop-up trivia bubbles for this session";
+    btn.setAttribute("aria-pressed", _tpMuted ? "true" : "false");
+  }
+  function renderTriviaPopupButton() {
+    const shouldShow = triviaPopupEnabled() && !!(npState.data && npState.data.imdbId);
+    let btn = document.getElementById(TP_BTN_ID);
+    if (!shouldShow) {
+      if (btn) btn.remove();
+      return;
+    }
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.id = TP_BTN_ID;
+      btn.type = "button";
+      btn.dataset.noTvCaption = "1";
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        _tpToggleMute();
+      });
+      const header = document.getElementById("videowrap-header");
+      const anchor = document.getElementById("sc-up-next-btn") || document.getElementById("sc-poster-toggle");
+      if (header && anchor && anchor.parentNode === header) header.insertBefore(btn, anchor);
+      else (header || document.body).appendChild(btn);
+    }
+    _tpSyncButton();
   }
 
   // src/player/drive.js
@@ -8634,7 +8694,7 @@
                     padding-left: max(18px, env(safe-area-inset-left, 0px)) !important;
                 }
                 /* Right-edge cutout/corner protection for the header's trailing flex
-                   items (Trivia, Coming Attractions) — mirrors padding-left above.
+                   items (Pop-ups, Up Next, Coming Attractions) — mirrors padding-left above.
                    This replaced per-button \`right\`/\`top\` positioning: now that both
                    buttons flow in the header (Task 2), a header-level padding-right
                    does the same job without either button needing to know its own
@@ -8663,6 +8723,17 @@
                    the only way to make them match the header's muted gray chrome. */
                 body.sc-vertical #sc-poster-toggle::before { content: "🍿" !important; font-size: 18px !important; filter: grayscale(1) !important; }
                 body.sc-vertical #sc-up-next-btn::before { content: "⏭" !important; font-size: 18px !important; filter: grayscale(1) !important; }
+                /* Pop-ups collapses to just its ●/○ dot on narrow phones — the dot IS
+                   the state, so no separate icon is needed; the "Pop-ups" text node
+                   drops out via font-size:0 on the button (the dot stays sized). */
+                body.sc-vertical #sc-trivia-popup-btn {
+                    width: 32px !important; height: 32px !important;
+                    padding: 0 !important; font-size: 0 !important;
+                    justify-content: center !important;
+                }
+                body.sc-vertical #sc-trivia-popup-btn .sc-tp-dot {
+                    margin: 0 !important; font-size: 17px !important;
+                }
             }
 
             /* Stats bar — floats over bottom-left of video, auto-hides after 12s */
@@ -10113,6 +10184,38 @@
             }
             body.sc-tv #sc-up-next-btn { font-size: 12px !important; }
 
+            /* ── POP-UPS (session mute/resume for pop-up trivia bubbles) ──
+               Sits left of Up Next in the header row: Pop-ups │ Up Next │ Coming
+               Attractions. Same subtle top-right-link treatment as #sc-up-next-btn;
+               fixed offset (landscape/TV) picked wide enough to clear "Up Next".
+               In vertical it flows in the header's flex row instead (DOM order is
+               set by renderTriviaPopupButton inserting it before Up Next). */
+            #sc-trivia-popup-btn {
+                position: fixed !important; top: 0 !important;
+                right: calc(20vw + 232px) !important; left: auto !important;
+                z-index: 10003 !important;
+                background: transparent !important; border: none !important;
+                color: rgba(255,255,255,0.55) !important;
+                font-size: 10px !important; letter-spacing: 0.06em !important;
+                text-transform: uppercase !important; white-space: nowrap !important;
+                line-height: 1 !important; height: 20px !important; padding: 2px 8px !important;
+                display: flex !important; align-items: center !important; cursor: pointer !important;
+                opacity: 1 !important; transition: opacity 1.5s ease, color 0.2s ease !important;
+                -webkit-tap-highlight-color: transparent !important;
+            }
+            #sc-trivia-popup-btn:hover { color: rgba(255,255,255,0.9) !important; }
+            #sc-trivia-popup-btn.sc-bar-dim { opacity: 0 !important; }
+            /* Fixed-width dot keeps the label from shifting between ● (active) and ○ (muted). */
+            #sc-trivia-popup-btn .sc-tp-dot {
+                display: inline-block !important; width: 1em !important;
+                text-align: center !important; margin-right: 0.4em !important;
+                font-size: 1.15em !important; line-height: 1 !important;
+            }
+            body.sc-vertical #sc-trivia-popup-btn {
+                position: static !important; flex-shrink: 0 !important;
+            }
+            body.sc-tv #sc-trivia-popup-btn { font-size: 12px !important; right: calc(20vw + 270px) !important; }
+
             /* ── UP NEXT CARD — embeds the channel's schedule/queue bot dashboard,
                matching the desktop userscript's own panel exactly (iframe, not a
                native reimplementation -- see cards/upnext.js). ─────────────────── */
@@ -10619,6 +10722,7 @@
                they simply flow inside the bar. */
             html body.sc-cast #sc-cast-bar #sc-poster-toggle,
             html body.sc-cast #sc-cast-bar #sc-up-next-btn,
+            html body.sc-cast #sc-cast-bar #sc-trivia-popup-btn,
             html body.sc-cast #sc-cast-bar #sc-usercount-btn,
             html body.sc-cast #sc-cast-bar #sc-poll-btn,
             html body.sc-cast #sc-cast-bar #sc-settings-btn,
@@ -12040,6 +12144,7 @@
       const triviapopup = document.getElementById("sc-input-triviapopup");
       if (triviapopup) triviapopup.addEventListener("change", () => {
         setKey(LS_TRIVIA_POPUP, triviapopup.checked ? "on" : "off");
+        renderTriviaPopupButton();
       });
       const triviapopupFreq = document.getElementById("sc-input-triviapopup-freq");
       const triviapopupFreqVal = document.getElementById("sc-triviafreq-val");
@@ -12121,7 +12226,8 @@
         bar,
         document.getElementById("videowrap-header"),
         document.getElementById("sc-poster-toggle"),
-        document.getElementById("sc-up-next-btn")
+        document.getElementById("sc-up-next-btn"),
+        document.getElementById("sc-trivia-popup-btn")
       ].filter(Boolean);
       const dim = () => {
         if (!playing) return;
@@ -12162,7 +12268,7 @@
           wake();
         }
       });
-      const HEADER_SEL = "#videowrap-header, #sc-top-bar, #sc-title-text, #sc-up-next-btn, #sc-poster-toggle";
+      const HEADER_SEL = "#videowrap-header, #sc-top-bar, #sc-title-text, #sc-up-next-btn, #sc-poster-toggle, #sc-trivia-popup-btn";
       document.addEventListener("click", (e) => {
         if (!bar.classList.contains("sc-bar-dim")) return;
         if (!e.target.closest(HEADER_SEL)) return;
@@ -12458,7 +12564,7 @@
     if (document.readyState === "complete") initIntroSequence();
     else window.addEventListener("load", initIntroSequence);
     (function() {
-      const CAST_CONTROL_IDS = ["sc-poster-toggle", "sc-up-next-btn", "sc-usercount-btn", "sc-poll-btn", "sc-settings-btn"];
+      const CAST_CONTROL_IDS = ["sc-trivia-popup-btn", "sc-poster-toggle", "sc-up-next-btn", "sc-usercount-btn", "sc-poll-btn", "sc-settings-btn"];
       let savedSlots = null;
       function buildBar() {
         let bar = document.getElementById("sc-cast-bar");

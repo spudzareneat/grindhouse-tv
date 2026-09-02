@@ -208,7 +208,7 @@ export function initTvNav() {
     // scrolled while some other element holds focus — see the "Chat cluster" block in
     // move() below for its Up/Down/boundary behavior.
     const MAIN_IDS = ['sc-drm-open', 'sc-title-text', 'sc-chatmode-btn', 'sc-emote-proxy', 'sc-desync-btn', 'sc-settings-btn',
-        'sc-usercount-connected', 'sc-usercount-online', 'sc-poll-btn', 'sc-poster-toggle', 'sc-up-next-btn', 'sc-subtitles-btn', 'sc-newmsg-pill',
+        'sc-usercount-connected', 'sc-usercount-online', 'sc-poll-btn', 'sc-trivia-popup-btn', 'sc-poster-toggle', 'sc-up-next-btn', 'sc-subtitles-btn', 'sc-newmsg-pill',
         'messagebuffer', 'sc-chat-textarea'];
     // Header-row buttons that Left/Right steps between deterministically in x-order
     // while the ring is on one of them — mirrors the control bar's own x-order

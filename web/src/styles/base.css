@@ -449,7 +449,7 @@
                     padding-left: max(18px, env(safe-area-inset-left, 0px)) !important;
                 }
                 /* Right-edge cutout/corner protection for the header's trailing flex
-                   items (Trivia, Coming Attractions) — mirrors padding-left above.
+                   items (Pop-ups, Up Next, Coming Attractions) — mirrors padding-left above.
                    This replaced per-button `right`/`top` positioning: now that both
                    buttons flow in the header (Task 2), a header-level padding-right
                    does the same job without either button needing to know its own
@@ -478,6 +478,17 @@
                    the only way to make them match the header's muted gray chrome. */
                 body.sc-vertical #sc-poster-toggle::before { content: "🍿" !important; font-size: 18px !important; filter: grayscale(1) !important; }
                 body.sc-vertical #sc-up-next-btn::before { content: "⏭" !important; font-size: 18px !important; filter: grayscale(1) !important; }
+                /* Pop-ups collapses to just its ●/○ dot on narrow phones — the dot IS
+                   the state, so no separate icon is needed; the "Pop-ups" text node
+                   drops out via font-size:0 on the button (the dot stays sized). */
+                body.sc-vertical #sc-trivia-popup-btn {
+                    width: 32px !important; height: 32px !important;
+                    padding: 0 !important; font-size: 0 !important;
+                    justify-content: center !important;
+                }
+                body.sc-vertical #sc-trivia-popup-btn .sc-tp-dot {
+                    margin: 0 !important; font-size: 17px !important;
+                }
             }
 
             /* Stats bar — floats over bottom-left of video, auto-hides after 12s */

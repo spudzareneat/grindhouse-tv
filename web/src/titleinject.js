@@ -7,6 +7,7 @@ import { getLastAired } from './metadata/lastaired.js';
 import { isTv } from './tvdetect.js';
 import { chromeState } from './chrome/state.js';
 import { updateSubtitleButton } from './subtitles/ui.js';
+import { renderTriviaPopupButton } from './cards/triviapopup.js';
 
 // Auto-announce hold time for the Now-Playing card (see showNowPlayingCard's opts.autoHideMs).
 const NP_AUTO_HIDE_MS = isTv ? 10000 : 8000;
@@ -106,12 +107,15 @@ function injectMovieLinks(titleEl) {
         if (npState.data && !titleEl.querySelector('#sc-title-text')) {
             applyCleanTitleDom(titleEl, npState.data);
         }
+        // CyTube's header re-render (see above) also wipes the Pop-ups button, which
+        // lives in that header — re-add it from the still-current npState.data.
+        renderTriviaPopupButton();
         return;
     }
     movieState.lastMovieTitle = rawTitle;
 
-    // Clean up any previous stats bar/trivia button
-    ['sc-movie-stats', 'sc-trivia-btn'].forEach(id => {
+    // Clean up any previous stats bar
+    ['sc-movie-stats'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.remove();
     });
@@ -121,6 +125,7 @@ function injectMovieLinks(titleEl) {
     // lookup repopulates it below when (and only when) this resolves to a real movie.
     npState.data = null;
     updateSubtitleButton(null); // reset until the lookup below (re-)resolves an imdbId
+    renderTriviaPopupButton();  // no movie/imdbId yet -> removes the Pop-ups button
 
     // YouTube: usually bumpers/intros, but occasionally a full movie.
     // Only attempt a lookup when the video runs an hour+ (likely a real film),
@@ -153,6 +158,7 @@ function injectMovieLinks(titleEl) {
                     // No auto-card for YouTube (see _npShouldAutoAnnounce) -- this path is
                     // YT-only. The title stays clickable / summonable via applyCleanTitleDom.
                     applyCleanTitleDom(titleEl, movieData);
+                    renderTriviaPopupButton(); // imdbId is null on this path -> stays hidden
                 });
             }
             return;
@@ -182,6 +188,7 @@ function injectMovieLinks(titleEl) {
         // gating and the comment on _npCardEnabled).
         npState.data = movieData;
         updateSubtitleButton(movieData.imdbId);
+        renderTriviaPopupButton(); // (re-)show the Pop-ups button iff feature on + imdbId matched
         if (_npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt)) showNowPlayingCard(movieData, { autoHide: true, autoHideMs: NP_AUTO_HIDE_MS });
         // Update the title element with the clean TMDB title, wrapped in a
         // dedicated clickable span so ONLY the title (not the rest of the
