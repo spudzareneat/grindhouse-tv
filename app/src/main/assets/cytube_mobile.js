@@ -1339,6 +1339,32 @@
       ...fields || {}
     };
   }
+  async function fetchImdbEpisodeInfo(seriesTconst, season, episode) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
+    if (!seriesTconst || season == null || episode == null) return null;
+    const q = "query GHEpisodesBySeason($id: ID!, $season: [String!]!){ title(id:$id){ episodes{ episodes(first: 100, filter: { includeSeasons: $season }){ edges{ node{ id titleText{ text } plot{ plotText{ plainText } } ratingsSummary{ aggregateRating voteCount } runtime{ seconds } primaryImage{ url } series{ displayableEpisodeNumber{ episodeNumber{ episodeNumber } } } } } } } } }";
+    try {
+      const data = await imdbQuery("GHEpisodesBySeason", q, { id: seriesTconst, season: [String(season)] });
+      const edges = ((_d = (_c = (_b = (_a = data == null ? void 0 : data.data) == null ? void 0 : _a.title) == null ? void 0 : _b.episodes) == null ? void 0 : _c.episodes) == null ? void 0 : _d.edges) || [];
+      const node = (_e = edges.find(
+        (e) => {
+          var _a2, _b2, _c2, _d2;
+          return Number((_d2 = (_c2 = (_b2 = (_a2 = e == null ? void 0 : e.node) == null ? void 0 : _a2.series) == null ? void 0 : _b2.displayableEpisodeNumber) == null ? void 0 : _c2.episodeNumber) == null ? void 0 : _d2.episodeNumber) === Number(episode);
+        }
+      )) == null ? void 0 : _e.node;
+      if (!node) return null;
+      return {
+        tconst: node.id,
+        title: (_g = (_f = node.titleText) == null ? void 0 : _f.text) != null ? _g : null,
+        overview: (_j = (_i = (_h = node.plot) == null ? void 0 : _h.plotText) == null ? void 0 : _i.plainText) != null ? _j : null,
+        rating: (_l = (_k = node.ratingsSummary) == null ? void 0 : _k.aggregateRating) != null ? _l : null,
+        runtime: ((_m = node.runtime) == null ? void 0 : _m.seconds) != null ? Math.round(node.runtime.seconds / 60) : null,
+        image: (_o = (_n = node.primaryImage) == null ? void 0 : _n.url) != null ? _o : null
+      };
+    } catch (e) {
+      return null;
+    }
+  }
   async function fetchImdbParentalGuide(tconst) {
     if (!tconst) return null;
     const q = "query GHGuide($id: ID!){ title(id:$id){ parentsGuide{ categories{ category{ text } severity{ text } } } } }";
@@ -1646,9 +1672,9 @@
       return null;
     }
   }
-  async function lookupMovie(title, year) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t;
-    const cacheKey = title + (year || "");
+  async function lookupMovie(title, year, season, episode) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
+    const cacheKey = title + (year || "") + (episode != null ? `S${season != null ? season : ""}E${episode}` : "");
     if (movieState.movieLinkCache[cacheKey] !== void 0) return movieState.movieLinkCache[cacheKey];
     let wikiUrl = null;
     const tmdbPrimaryPromise = fetchTmdbPrimary(title, year);
@@ -1678,9 +1704,13 @@
       imdbId = (imdbResult == null ? void 0 : imdbResult.tconst) || null;
       tmdbSupplemental = await fetchTmdbSupplemental(imdbId);
     }
+    const episodeInfo = season != null && episode != null ? await fetchImdbEpisodeInfo(imdbId, season, episode) : null;
+    if (episodeInfo) imdbId = episodeInfo.tconst;
     const parentalGuide = await fetchImdbParentalGuide(imdbId);
     await wikiPromise;
     const result = {
+      season: season != null ? season : null,
+      episode: episode != null ? episode : null,
       links: {
         imdb: imdbId ? `https://www.imdb.com/title/${imdbId}/` : null,
         letterboxd: imdbId ? `https://letterboxd.com/imdb/${imdbId}` : null,
@@ -1690,18 +1720,25 @@
       killCount: (_b = (_a = tmdbPrimary == null ? void 0 : tmdbPrimary.killCount) != null ? _a : tmdbSupplemental == null ? void 0 : tmdbSupplemental.killCount) != null ? _b : null,
       parentalGuide,
       imdbId: imdbId || null,
-      cleanTitle: (_d = (_c = tmdbPrimary == null ? void 0 : tmdbPrimary.title) != null ? _c : imdbResult == null ? void 0 : imdbResult.title) != null ? _d : null,
-      cleanYear: (_f = (_e = tmdbPrimary == null ? void 0 : tmdbPrimary.year) != null ? _e : imdbResult == null ? void 0 : imdbResult.year) != null ? _f : null,
-      rating: (_h = (_g = tmdbPrimary == null ? void 0 : tmdbPrimary.rating) != null ? _g : imdbResult == null ? void 0 : imdbResult.rating) != null ? _h : null,
-      runtime: (_j = (_i = tmdbPrimary == null ? void 0 : tmdbPrimary.runtime) != null ? _i : imdbResult == null ? void 0 : imdbResult.runtime) != null ? _j : null,
-      genres: (_l = (_k = tmdbPrimary == null ? void 0 : tmdbPrimary.genres) != null ? _k : imdbResult == null ? void 0 : imdbResult.genres) != null ? _l : [],
+      // episodeName has no series-level equivalent to fall back to -- null for
+      // movies and for episodes fetchImdbEpisodeInfo couldn't match.
+      episodeName: (_c = episodeInfo == null ? void 0 : episodeInfo.title) != null ? _c : null,
+      cleanTitle: (_e = (_d = tmdbPrimary == null ? void 0 : tmdbPrimary.title) != null ? _d : imdbResult == null ? void 0 : imdbResult.title) != null ? _e : null,
+      cleanYear: (_g = (_f = tmdbPrimary == null ? void 0 : tmdbPrimary.year) != null ? _f : imdbResult == null ? void 0 : imdbResult.year) != null ? _g : null,
+      // Episode-specific rating/runtime/overview take priority over the
+      // show-level values -- an episode's own rating routinely differs a lot
+      // from the show's aggregate, and its plot is the actual episode synopsis.
+      rating: (_j = (_i = (_h = episodeInfo == null ? void 0 : episodeInfo.rating) != null ? _h : tmdbPrimary == null ? void 0 : tmdbPrimary.rating) != null ? _i : imdbResult == null ? void 0 : imdbResult.rating) != null ? _j : null,
+      runtime: (_m = (_l = (_k = episodeInfo == null ? void 0 : episodeInfo.runtime) != null ? _k : tmdbPrimary == null ? void 0 : tmdbPrimary.runtime) != null ? _l : imdbResult == null ? void 0 : imdbResult.runtime) != null ? _m : null,
+      genres: (_o = (_n = tmdbPrimary == null ? void 0 : tmdbPrimary.genres) != null ? _n : imdbResult == null ? void 0 : imdbResult.genres) != null ? _o : [],
       // TMDB's poster/backdrop take priority over IMDb's; IMDb has no dedicated
       // wide "backdrop" field, so its (usually portrait) poster is reused for
       // both -- the card's CSS crops it to fill, same pattern used when no
-      // dedicated backdrop exists.
-      poster: (_o = (_n = (_m = tmdbPrimary == null ? void 0 : tmdbPrimary.poster) != null ? _m : tmdbSupplemental == null ? void 0 : tmdbSupplemental.poster) != null ? _n : imdbResult == null ? void 0 : imdbResult.poster) != null ? _o : null,
-      backdrop: (_r = (_q = (_p = tmdbPrimary == null ? void 0 : tmdbPrimary.backdrop) != null ? _p : tmdbSupplemental == null ? void 0 : tmdbSupplemental.backdrop) != null ? _q : imdbResult == null ? void 0 : imdbResult.poster) != null ? _r : null,
-      overview: (_t = (_s = tmdbPrimary == null ? void 0 : tmdbPrimary.overview) != null ? _s : imdbResult == null ? void 0 : imdbResult.overview) != null ? _t : ""
+      // dedicated backdrop exists. The episode's own still image (when found)
+      // beats all of that -- it's the one image specific to what's playing now.
+      poster: (_r = (_q = (_p = tmdbPrimary == null ? void 0 : tmdbPrimary.poster) != null ? _p : tmdbSupplemental == null ? void 0 : tmdbSupplemental.poster) != null ? _q : imdbResult == null ? void 0 : imdbResult.poster) != null ? _r : null,
+      backdrop: (_v = (_u = (_t = (_s = episodeInfo == null ? void 0 : episodeInfo.image) != null ? _s : tmdbPrimary == null ? void 0 : tmdbPrimary.backdrop) != null ? _t : tmdbSupplemental == null ? void 0 : tmdbSupplemental.backdrop) != null ? _u : imdbResult == null ? void 0 : imdbResult.poster) != null ? _v : null,
+      overview: (_y = (_x = (_w = episodeInfo == null ? void 0 : episodeInfo.overview) != null ? _w : tmdbPrimary == null ? void 0 : tmdbPrimary.overview) != null ? _x : imdbResult == null ? void 0 : imdbResult.overview) != null ? _y : ""
     };
     if (result.resolved) {
       movieState.movieLinkCache[cacheKey] = result;
@@ -1906,18 +1943,62 @@
   }
 
   // src/parse.js
+  var EPISODE_PATTERNS = [
+    { re: /\bS(\d{1,2})[\s._-]?E(\d{1,3})\b/i, season: 1, episode: 2 },
+    // S01E10
+    { re: /\bSeason[\s._-]?(\d{1,2})[\s._-]+Episode[\s._-]?(\d{1,3})\b/i, season: 1, episode: 2 },
+    // Season 1 Episode 20
+    { re: /\bEpisode[\s._-]?(\d{1,3})[\s._-]+Season[\s._-]?(\d{1,2})\b/i, season: 2, episode: 1 },
+    // Episode 20 Season 1
+    { re: /\b(\d{1,2})x(\d{1,3})\b/i, season: 1, episode: 2 },
+    // 1x22
+    { re: /\bEp(?:isode)?\.?[\s._-]?(\d{1,3})\b/i, season: null, episode: 1 }
+    // Ep. 5 / Episode 5 (no season)
+  ];
+  function _matchEpisode(s) {
+    for (const p of EPISODE_PATTERNS) {
+      const m = s.match(p.re);
+      if (m) {
+        return {
+          match: m,
+          season: p.season !== null ? parseInt(m[p.season], 10) : null,
+          episode: parseInt(m[p.episode], 10)
+        };
+      }
+    }
+    return null;
+  }
+  function episodeTag(season, episode) {
+    if (episode == null) return "";
+    const ep = String(episode).padStart(2, "0");
+    return season != null ? `S${String(season).padStart(2, "0")}E${ep}` : `E${ep}`;
+  }
   function parseMovieFilename(raw) {
     let s = raw.replace(/\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|divx|xvid|ogv)$/i, "");
     let year = null;
     const yearMatch = s.match(/[\[(](\d{4})[\])]/);
-    if (yearMatch) {
-      year = yearMatch[1];
-      s = s.slice(0, yearMatch.index);
+    if (yearMatch) year = yearMatch[1];
+    let season = null, episode = null;
+    const epMatch = _matchEpisode(s);
+    if (epMatch) {
+      season = epMatch.season;
+      episode = epMatch.episode;
     }
+    const cutIndex = Math.min(
+      yearMatch ? yearMatch.index : Infinity,
+      epMatch ? epMatch.match.index : Infinity
+    );
+    if (cutIndex !== Infinity) s = s.slice(0, cutIndex);
+    const acronyms = [];
+    s = s.replace(/\b(?:[A-Za-z]\.){2,}/g, (m) => {
+      acronyms.push(m);
+      return ` @@${acronyms.length - 1}@@ `;
+    });
     s = s.replace(/[._]+/g, " ");
     s = s.replace(/[\[(][^\])]*/g, "").replace(/[\])]/, "");
+    s = s.replace(/@@(\d+)@@/g, (_, i) => acronyms[i]);
     s = s.replace(/\s+/g, " ").trim();
-    return { title: s, year };
+    return { title: s, year, season, episode, isEpisode: episode !== null };
   }
   var YT_NOISE = [
     "full movie",
@@ -2013,16 +2094,24 @@
     if (ym) year = ym[1];
     s = s.replace(/[\[({][^\])}]*[\])}]/g, " ");
     if (year) s = s.replace(new RegExp("\\b" + year + "\\b", "g"), " ");
+    let season = null, episode = null;
+    const epMatch = _matchEpisode(s);
+    if (epMatch) {
+      season = epMatch.season;
+      episode = epMatch.episode;
+      s = s.slice(0, epMatch.match.index);
+    }
+    const isEpisode = episode !== null;
     [...YT_NOISE, ...YT_GENRES].forEach((n) => {
       s = s.replace(new RegExp("\\b" + n + "\\b", "gi"), " ");
     });
-    s = s.replace(/[^\w\s&':!.,-]/g, " ");
+    s = s.replace(/[^\w\s&':!.,|–—•-]/g, " ");
     const segs = s.split(/\s[|–—•:_-]+\s/).map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length >= 2);
-    let title = segs.sort(
+    let title = isEpisode ? segs[0] || s : segs.sort(
       (a, b) => (b.match(/[a-z]/gi) || []).length - (a.match(/[a-z]/gi) || []).length
     )[0] || s;
     title = title.replace(/\s+/g, " ").replace(/^[\s'":.,-]+|[\s'":.,-]+$/g, "").trim();
-    return { title, year };
+    return { title, year, season, episode, isEpisode };
   }
 
   // src/lineup/data.js
@@ -2365,7 +2454,9 @@
       });
       card.querySelector("#sc-trivia-close").addEventListener("click", hideTriviaCard);
     }
-    card.querySelector("#sc-trivia-title").textContent = "Trivia" + (npState.data.cleanTitle ? " — " + npState.data.cleanTitle : "");
+    const d = npState.data;
+    const epTag = episodeTag(d.season, d.episode);
+    card.querySelector("#sc-trivia-title").textContent = "Trivia" + (d.cleanTitle ? " — " + d.cleanTitle + (epTag ? ` · ${epTag}` : "") + (d.episodeName ? ` — ${d.episodeName}` : "") : "");
     const list = card.querySelector("#sc-trivia-list");
     list.innerHTML = '<div class="sc-trivia-item">Loading…</div>';
     card.classList.add("sc-show");
@@ -2683,7 +2774,8 @@
       });
     }
     const titleEl = card.querySelector("#sc-np-title");
-    const titleText = title + year;
+    const epTag = episodeTag(data.season, data.episode);
+    const titleText = title + year + (epTag ? ` · ${epTag}` : "") + (data.episodeName ? ` — ${data.episodeName}` : "");
     titleEl.textContent = titleText;
     titleEl.style.setProperty("font-size", _npTitleFontSize(titleText) + "px", "important");
     card.querySelector("#sc-np-overview").textContent = data.overview || "";
@@ -6939,9 +7031,10 @@
     }).catch(() => null);
   }
   function applyCleanTitleDom(titleEl, movieData) {
-    const { cleanTitle, cleanYear } = movieData;
+    const { cleanTitle, cleanYear, season, episode, episodeName } = movieData;
     if (!cleanTitle || !titleEl) return;
-    const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : "");
+    const epTag = episodeTag(season, episode);
+    const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : "") + (epTag ? ` · ${epTag}` : "") + (episodeName ? ` — ${episodeName}` : "");
     let span = titleEl.querySelector(":scope > #sc-title-text") || document.getElementById("sc-title-text");
     if (!span) {
       span = document.createElement("span");
@@ -6999,7 +7092,10 @@
               parentalGuide: null,
               killCount: null,
               imdbId: null,
-              links: {}
+              links: {},
+              season: null,
+              episode: null,
+              episodeName: null
             };
             npState.data = movieData;
             applyCleanTitleDom(titleEl, movieData);
@@ -7009,9 +7105,9 @@
         return;
       }
     }
-    const { title, year } = isYt ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
+    const { title, year, season, episode } = isYt ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
     if (!title || title.length < 2) return;
-    lookupMovie(title, year).then((movieData) => {
+    lookupMovie(title, year, season, episode).then((movieData) => {
       const { killCount, parentalGuide, cleanTitle, cleanYear } = movieData;
       if (isYt) {
         if (!cleanTitle) return;

@@ -1,4 +1,5 @@
 import { fetchImdbTrivia } from '../metadata/imdb.js';
+import { episodeTag } from '../parse.js';
 import { npState } from './nowplaying.js';
 
 /* ==========================================================
@@ -25,8 +26,14 @@ export function showTriviaCard() {
         card.addEventListener('click', e => { if (e.target === card) hideTriviaCard(); });
         card.querySelector('#sc-trivia-close').addEventListener('click', hideTriviaCard);
     }
+    // Episode-specific trivia (imdbId is switched to the episode's own tconst in
+    // lookupMovie) — the header names the episode so it's clear which the facts
+    // below belong to.
+    const d = npState.data;
+    const epTag = episodeTag(d.season, d.episode);
     card.querySelector('#sc-trivia-title').textContent =
-        'Trivia' + (npState.data.cleanTitle ? ' — ' + npState.data.cleanTitle : '');
+        'Trivia' + (d.cleanTitle ? ' — ' + d.cleanTitle
+            + (epTag ? ` · ${epTag}` : '') + (d.episodeName ? ` — ${d.episodeName}` : '') : '');
     const list = card.querySelector('#sc-trivia-list');
     list.innerHTML = '<div class="sc-trivia-item">Loading…</div>';
     card.classList.add('sc-show');

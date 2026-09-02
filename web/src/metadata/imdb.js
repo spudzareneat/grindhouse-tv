@@ -166,6 +166,37 @@ export async function fetchImdbMovieByTitle(title, year) {
     };
 }
 
+// Given a TV series' own tconst plus a season/episode number, resolves that
+// specific episode's tconst/title/plot/rating/runtime/still image via IMDb's
+// episodes-by-season connection. EpisodesFilter.includeSeasons takes [String],
+// and each edge's node is a plain Title (same shape IMDB_TITLE_FIELDS_QUERY
+// reads) plus `series.displayableEpisodeNumber` for matching the episode
+// number. first:100 covers even long anime seasons in one page. Returns null on
+// no match (unaired episode, absolute-numbering mismatch, or any request
+// failure) so callers keep whatever series-level data they already have -- this
+// only ever supplements, never overrides nor throws. Ported verbatim from the
+// sibling PC userscript's movie-title-links module.
+export async function fetchImdbEpisodeInfo(seriesTconst, season, episode) {
+    if (!seriesTconst || season == null || episode == null) return null;
+    const q = 'query GHEpisodesBySeason($id: ID!, $season: [String!]!){ title(id:$id){ episodes{ episodes(first: 100, filter: { includeSeasons: $season }){ edges{ node{ id titleText{ text } plot{ plotText{ plainText } } ratingsSummary{ aggregateRating voteCount } runtime{ seconds } primaryImage{ url } series{ displayableEpisodeNumber{ episodeNumber{ episodeNumber } } } } } } } } }';
+    try {
+        const data = await imdbQuery('GHEpisodesBySeason', q, { id: seriesTconst, season: [String(season)] });
+        const edges = data?.data?.title?.episodes?.episodes?.edges || [];
+        const node = edges.find(e =>
+            Number(e?.node?.series?.displayableEpisodeNumber?.episodeNumber?.episodeNumber) === Number(episode)
+        )?.node;
+        if (!node) return null;
+        return {
+            tconst:   node.id,
+            title:    node.titleText?.text ?? null,
+            overview: node.plot?.plotText?.plainText ?? null,
+            rating:   node.ratingsSummary?.aggregateRating ?? null,
+            runtime:  node.runtime?.seconds != null ? Math.round(node.runtime.seconds / 60) : null,
+            image:    node.primaryImage?.url ?? null,
+        };
+    } catch (e) { return null; }
+}
+
 // Returns [{category, severity}] (severity: None/Mild/Moderate/Severe) or null.
 export async function fetchImdbParentalGuide(tconst) {
     if (!tconst) return null;

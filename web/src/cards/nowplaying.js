@@ -1,4 +1,5 @@
 import { getCurrentMediaSeconds, getCurrentPlaybackSeconds, formatHMS } from '../mediatime.js';
+import { episodeTag } from '../parse.js';
 import { movieState, LINK_DEFS } from '../metadata/tmdb.js';
 import { isTv } from '../tvdetect.js';
 import { showTriviaCard, toggleTriviaCard } from './trivia.js';
@@ -208,7 +209,9 @@ export function showNowPlayingCard(data, opts = {}) {
     }
 
     const titleEl = card.querySelector('#sc-np-title');
-    const titleText = title + year;
+    const epTag = episodeTag(data.season, data.episode);
+    const titleText = title + year + (epTag ? ` · ${epTag}` : '')
+        + (data.episodeName ? ` — ${data.episodeName}` : '');
     titleEl.textContent = titleText;
     titleEl.style.setProperty('font-size', _npTitleFontSize(titleText) + 'px', 'important');
     card.querySelector('#sc-np-overview').textContent = data.overview || '';

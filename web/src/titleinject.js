@@ -1,4 +1,4 @@
-import { parseMovieFilename, parseYouTubeTitle } from './parse.js';
+import { parseMovieFilename, parseYouTubeTitle, episodeTag } from './parse.js';
 import { movieState, lookupMovie } from './metadata/tmdb.js';
 import { npState, showNowPlayingCard, _npCardEnabled } from './cards/nowplaying.js';
 import { getCurrentMediaSeconds, mediaState } from './mediatime.js';
@@ -70,9 +70,11 @@ function fetchYtOembed(videoId) {
 // reset the title header's DOM out from under us -- see the reapply branch in
 // injectMovieLinks for why that happens).
 function applyCleanTitleDom(titleEl, movieData) {
-    const { cleanTitle, cleanYear } = movieData;
+    const { cleanTitle, cleanYear, season, episode, episodeName } = movieData;
     if (!cleanTitle || !titleEl) return;
-    const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : '');
+    const epTag = episodeTag(season, episode);
+    const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : '')
+        + (epTag ? ` · ${epTag}` : '') + (episodeName ? ` — ${episodeName}` : '');
     let span = titleEl.querySelector(':scope > #sc-title-text') || document.getElementById('sc-title-text');
     if (!span) {
         span = document.createElement('span');
@@ -153,6 +155,7 @@ function injectMovieLinks(titleEl) {
                         overview: info.author_name ? `Uploaded by ${info.author_name}` : null,
                         rating: null, runtime: null, genres: [], parentalGuide: null,
                         killCount: null, imdbId: null, links: {},
+                        season: null, episode: null, episodeName: null,
                     };
                     npState.data = movieData;
                     // No auto-card for YouTube (see _npShouldAutoAnnounce) -- this path is
@@ -165,10 +168,10 @@ function injectMovieLinks(titleEl) {
         }
     }
 
-    const { title, year } = isYt ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
+    const { title, year, season, episode } = isYt ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
     if (!title || title.length < 2) return;
 
-    lookupMovie(title, year).then((movieData) => {
+    lookupMovie(title, year, season, episode).then((movieData) => {
         const { killCount, parentalGuide, cleanTitle, cleanYear } = movieData;
 
         // For YouTube guesses, sanity-check the match against the real runtime.

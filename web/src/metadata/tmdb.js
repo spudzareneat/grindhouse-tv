@@ -1,6 +1,6 @@
 import { nativeHttpGet } from '../native.js';
 import { hasKey, getKey, LS_TMDB } from '../store.js';
-import { fetchImdbParentalGuide, fetchImdbMovieByTitle, titlesMatch } from './imdb.js';
+import { fetchImdbParentalGuide, fetchImdbMovieByTitle, fetchImdbEpisodeInfo, titlesMatch } from './imdb.js';
 
 /* ==========================================================
    MOVIE LINKS — TMDB-primary when a key is configured, else IMDb-
@@ -252,8 +252,12 @@ async function fetchTmdbPrimary(title, year) {
     } catch (e) { return null; }
 }
 
-export async function lookupMovie(title, year) {
-    const cacheKey = title + (year || '');
+export async function lookupMovie(title, year, season, episode) {
+    // Extend the key with season/episode so two episodes sharing an identical
+    // cleaned title don't collide in the cache. Additive-only: when episode is
+    // null (the movie case) the key is byte-identical to before, so existing
+    // cached movie entries stay valid with no migration.
+    const cacheKey = title + (year || '') + (episode != null ? `S${season ?? ''}E${episode}` : '');
     if (movieState.movieLinkCache[cacheKey] !== undefined) return movieState.movieLinkCache[cacheKey];
 
     // TMDB-primary and Wikipedia start together (independent of each other).
@@ -299,6 +303,19 @@ export async function lookupMovie(title, year) {
         tmdbSupplemental = await fetchTmdbSupplemental(imdbId);
     }
 
+    // Episode-specific refinement — resolves this exact episode's own IMDb
+    // tconst/plot/rating/still via the series tconst just resolved above
+    // (whichever path found it), independent of TMDB. Only overrides fields when
+    // a match is actually found — an unaired/absolute-numbering-mismatched
+    // episode just leaves the series-level data untouched. Switching imdbId to
+    // the episode's own tconst here (before the parental-guide fetch and the
+    // `links` fields below) is what makes the parental guide, trivia panel, and
+    // .links.imdb/.links.letterboxd all become episode-specific for free.
+    const episodeInfo = (season != null && episode != null)
+        ? await fetchImdbEpisodeInfo(imdbId, season, episode)
+        : null;
+    if (episodeInfo) imdbId = episodeInfo.tconst;
+
     // IMDb Parent Guide (severity by category) — always runs off whichever
     // path resolved imdbId; no TMDB equivalent exists.
     const parentalGuide = await fetchImdbParentalGuide(imdbId);
@@ -310,6 +327,8 @@ export async function lookupMovie(title, year) {
     // `rating`, where a legitimate 0.0 must not be treated as "missing" the
     // way `||` would.
     const result = {
+        season:  season ?? null,
+        episode: episode ?? null,
         links: {
             imdb:       imdbId ? `https://www.imdb.com/title/${imdbId}/` : null,
             letterboxd: imdbId ? `https://letterboxd.com/imdb/${imdbId}` : null,
@@ -319,18 +338,25 @@ export async function lookupMovie(title, year) {
         killCount:  tmdbPrimary?.killCount ?? tmdbSupplemental?.killCount ?? null,
         parentalGuide,
         imdbId:     imdbId || null,
+        // episodeName has no series-level equivalent to fall back to -- null for
+        // movies and for episodes fetchImdbEpisodeInfo couldn't match.
+        episodeName: episodeInfo?.title ?? null,
         cleanTitle: tmdbPrimary?.title    ?? imdbResult?.title    ?? null,
         cleanYear:  tmdbPrimary?.year     ?? imdbResult?.year     ?? null,
-        rating:     tmdbPrimary?.rating   ?? imdbResult?.rating   ?? null,
-        runtime:    tmdbPrimary?.runtime  ?? imdbResult?.runtime  ?? null,
+        // Episode-specific rating/runtime/overview take priority over the
+        // show-level values -- an episode's own rating routinely differs a lot
+        // from the show's aggregate, and its plot is the actual episode synopsis.
+        rating:     episodeInfo?.rating   ?? tmdbPrimary?.rating   ?? imdbResult?.rating   ?? null,
+        runtime:    episodeInfo?.runtime  ?? tmdbPrimary?.runtime  ?? imdbResult?.runtime  ?? null,
         genres:     tmdbPrimary?.genres   ?? imdbResult?.genres   ?? [],
         // TMDB's poster/backdrop take priority over IMDb's; IMDb has no dedicated
         // wide "backdrop" field, so its (usually portrait) poster is reused for
         // both -- the card's CSS crops it to fill, same pattern used when no
-        // dedicated backdrop exists.
+        // dedicated backdrop exists. The episode's own still image (when found)
+        // beats all of that -- it's the one image specific to what's playing now.
         poster:     tmdbPrimary?.poster   ?? tmdbSupplemental?.poster   ?? imdbResult?.poster ?? null,
-        backdrop:   tmdbPrimary?.backdrop ?? tmdbSupplemental?.backdrop ?? imdbResult?.poster ?? null,
-        overview:   tmdbPrimary?.overview ?? imdbResult?.overview ?? '',
+        backdrop:   episodeInfo?.image    ?? tmdbPrimary?.backdrop ?? tmdbSupplemental?.backdrop ?? imdbResult?.poster ?? null,
+        overview:   episodeInfo?.overview ?? tmdbPrimary?.overview ?? imdbResult?.overview ?? '',
     };
 
     // Only persist a resolved result -- caching an unresolved one (e.g. a
