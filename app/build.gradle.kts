@@ -19,7 +19,7 @@ android {
         applicationId = "com.grindhouse.cytube"
         minSdk = 28
         targetSdk = 35
-        versionCode = 42
+        versionCode = 43
         versionName = "4.0-beta4"
     }
 
