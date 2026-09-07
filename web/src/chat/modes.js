@@ -5,6 +5,7 @@ import { holdScrubber, neutralizeVjsInactivityTimer } from '../player/scrubber.j
 import { onSocket } from '../socket.js';
 import { getSetting } from '../settings/schema.js';
 import { refreshSubtitles } from '../cards/subtitles.js';
+import { initStickBottom, pinChatToBottom } from './stickbottom.js';
 
 /* ==========================================================
    CINEMATIC + CHAT ENHANCEMENTS
@@ -170,12 +171,7 @@ function applyChatMode(mode) {
     applyChatFontSize(getChatFontSize()); // input size depends on the mode (overlay = compact)
     // The layout reflows on a mode change, which loses the scroll position —
     // snap the chat back to the latest message once it settles.
-    const buf = document.getElementById('messagebuffer');
-    if (buf) {
-        const toBottom = () => { buf.scrollTop = buf.scrollHeight; };
-        requestAnimationFrame(() => requestAnimationFrame(toBottom));
-        [120, 320, 600].forEach(ms => setTimeout(toBottom, ms));
-    }
+    pinChatToBottom({ force: true });
 }
 export function cycleChatMode() {
     let cur = 'sidebar';
@@ -214,25 +210,11 @@ export function initChatModes() {
     });
 }
 
-// ── Smart auto-scroll + "new messages" pill
+// ── Smart auto-scroll + "return to bottom" pill
+// The mechanism lives in ./stickbottom.js now; this stays as the init entry
+// point wired into initCinematicChat().
 export function initNewMessagePill() {
-    const buf = document.getElementById('messagebuffer');
-    if (!buf) return;
-
-    const pill = document.createElement('div');
-    pill.id = 'sc-newmsg-pill';
-    pill.textContent = '↓ New messages';
-    document.body.appendChild(pill);
-
-    const nearBottom = () => buf.scrollHeight - buf.scrollTop - buf.clientHeight < 80;
-    const toBottom = () => { buf.scrollTop = buf.scrollHeight; pill.classList.remove('sc-show'); };
-    pill.addEventListener('click', toBottom);
-    buf.addEventListener('scroll', () => { if (nearBottom()) pill.classList.remove('sc-show'); }, { passive: true });
-
-    new MutationObserver(() => {
-        if (nearBottom()) buf.scrollTop = buf.scrollHeight;
-        else pill.classList.add('sc-show');
-    }).observe(buf, { childList: true });
+    initStickBottom();
 }
 
 // ── @mention toast

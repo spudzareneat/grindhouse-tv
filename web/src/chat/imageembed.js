@@ -15,6 +15,7 @@
 ========================================================== */
 import { autoEmbedEnabled } from '../store.js';
 import { nativeHttpGet } from '../native.js';
+import { isStuck, pinChatToBottom } from './stickbottom.js';
 
 export const IMAGE_LINK_RE = /\.(jpe?g|png|gif|webp|bmp)(\?[^\s"']*)?$/i;
 const IMAGE_HOST_ALLOWLIST = ['postimg.cc', 'ibb.co', 'prnt.sc'];
@@ -104,8 +105,7 @@ function findImageHostPageLinks(msgEl) {
 // appended asynchronously (via MutationObserver), so it misses both mechanisms --
 // rescroll manually, but only if the user hadn't scrolled up to read backlog.
 function rescrollChatIfNearBottom() {
-    const b = document.getElementById('messagebuffer');
-    if (b && b.scrollHeight - b.scrollTop - b.clientHeight < 60) b.scrollTop = b.scrollHeight;
+    if (isStuck()) pinChatToBottom();
 }
 
 // Shared badge/DOM builder for both the direct-image (src known immediately) and

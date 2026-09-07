@@ -219,6 +219,96 @@
     return issues;
   }
 
+  // src/chat/stickbottom.js
+  var NEAR_BOTTOM_PX = 80;
+  var SETTLE_MS = 260;
+  var buf = null;
+  var pill = null;
+  var stuck = true;
+  var pinGen = 0;
+  var settleTimer = null;
+  var selfScrollUntil = 0;
+  function distanceFromBottom() {
+    return buf.scrollHeight - buf.scrollTop - buf.clientHeight;
+  }
+  function atBottom() {
+    return distanceFromBottom() <= NEAR_BOTTOM_PX;
+  }
+  function showPill(show) {
+    if (pill) pill.classList.toggle("sc-show", !!show);
+  }
+  function applyScroll() {
+    if (!buf) return;
+    buf.scrollTop = buf.scrollHeight;
+    selfScrollUntil = performance.now() + 100;
+  }
+  function cancelPendingPins() {
+    pinGen++;
+    clearTimeout(settleTimer);
+  }
+  function pinChatToBottom(opts) {
+    if (!buf) buf = document.getElementById("messagebuffer");
+    if (!buf) return;
+    if (opts && opts.force) stuck = true;
+    if (!stuck) return;
+    const gen = ++pinGen;
+    const tick2 = () => {
+      if (gen === pinGen && stuck) applyScroll();
+    };
+    applyScroll();
+    showPill(false);
+    requestAnimationFrame(tick2);
+    requestAnimationFrame(() => requestAnimationFrame(tick2));
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      if (gen === pinGen && stuck) {
+        applyScroll();
+        showPill(false);
+      }
+    }, SETTLE_MS);
+  }
+  function isStuck() {
+    return stuck;
+  }
+  function markStuck() {
+    stuck = true;
+    showPill(false);
+  }
+  function initStickBottom() {
+    buf = document.getElementById("messagebuffer");
+    if (!buf) return;
+    pill = document.getElementById("sc-newmsg-pill");
+    if (!pill) {
+      pill = document.createElement("div");
+      pill.id = "sc-newmsg-pill";
+      document.body.appendChild(pill);
+    }
+    pill.textContent = "↓ Latest";
+    pill.addEventListener("click", () => {
+      markStuck();
+      pinChatToBottom({ force: true });
+    });
+    buf.addEventListener("scroll", () => {
+      if (performance.now() < selfScrollUntil) return;
+      stuck = atBottom();
+      showPill(!stuck);
+    }, { passive: true });
+    ["wheel", "touchstart", "pointerdown"].forEach((ev) => buf.addEventListener(ev, cancelPendingPins, { passive: true }));
+    new MutationObserver(() => {
+      if (stuck) pinChatToBottom();
+      else showPill(!atBottom());
+    }).observe(buf, { childList: true });
+    if (window.ResizeObserver) {
+      new ResizeObserver(() => {
+        if (stuck) pinChatToBottom();
+      }).observe(buf);
+    }
+    buf.addEventListener("load", () => {
+      if (stuck) pinChatToBottom();
+    }, true);
+    pinChatToBottom({ force: true });
+  }
+
   // src/chat/grammar.js
   var LT_API = "https://api.languagetool.org/v2/check";
   var LT_DISABLED_RULES = [
@@ -471,485 +561,9 @@
     textarea.style.height = "";
     emoteState.lastChatlineValue = "";
     originalInput.value = "";
+    markStuck();
+    pinChatToBottom({ force: true });
     textarea.focus();
-  }
-
-  // src/socket.js
-  function whenSocket(cb, tries = 120) {
-    const s = typeof window !== "undefined" && window.socket;
-    if (s && typeof s.on === "function") {
-      cb(s);
-      return;
-    }
-    if (tries <= 0) return;
-    setTimeout(() => whenSocket(cb, tries - 1), 500);
-  }
-  function onSocket(event, handler) {
-    whenSocket((s) => s.on(event, handler));
-  }
-
-  // src/cards/emotepicker.js
-  var LS_EMOTE_FAVORITES = "sc_emote_favorites";
-  var LS_EMOTE_ACTIVE_TAB = "sc_emote_active_tab";
-  var LS_EMOTE_PANEL_POS = "sc_emote_panel_pos";
-  function readChannelEmotes() {
-    try {
-      const arr = window.CHANNEL && window.CHANNEL.emotes;
-      if (!Array.isArray(arr)) return null;
-      const out = [];
-      for (const e of arr) {
-        if (e && typeof e.name === "string" && e.name && typeof e.image === "string" && e.image) {
-          out.push({ name: e.name, image: e.image });
-        }
-      }
-      return out;
-    } catch (e) {
-      return null;
-    }
-  }
-  function readEmotesFromDom() {
-    const out = [];
-    document.querySelectorAll("#emotelist img.channel-emote").forEach((img) => {
-      const name = img.title;
-      const image = img.src;
-      if (name && image) out.push({ name, image });
-    });
-    return out;
-  }
-  var _forceRenderAttempted = false;
-  function scrapeEmotesFallback(allowForceRender) {
-    let out = readEmotesFromDom();
-    if (out.length || !allowForceRender || _forceRenderAttempted) return out;
-    _forceRenderAttempted = true;
-    const btn = document.getElementById("emotelistbtn");
-    if (btn) {
-      try {
-        btn.click();
-        out = readEmotesFromDom();
-      } finally {
-        btn.click();
-      }
-    }
-    return out;
-  }
-  function computeEmoteList(allowForceRender) {
-    const fromChannel = readChannelEmotes();
-    if (fromChannel !== null) return fromChannel;
-    return scrapeEmotesFallback(!!allowForceRender);
-  }
-  var _emoteData = [];
-  function refreshEmoteData(allowForceRender) {
-    try {
-      _emoteData = computeEmoteList(allowForceRender);
-    } catch (e) {
-      return;
-    }
-    warmFavoriteBlobUrls();
-    const grid = document.getElementById("sc-emotes-grid");
-    if (!grid) return;
-    const search = document.getElementById("sc-emotes-search");
-    renderActiveTabGrid(grid, search ? search.value : "");
-  }
-  onSocket("emoteList", () => refreshEmoteData(false));
-  onSocket("updateEmote", () => refreshEmoteData(false));
-  onSocket("removeEmote", () => refreshEmoteData(false));
-  function clampPanelPos(left, top, width, height) {
-    return {
-      x: Math.min(Math.max(left, -(width - 40)), window.innerWidth - 40),
-      y: Math.min(Math.max(top, 0), window.innerHeight - 32)
-    };
-  }
-  function makePanelDraggable(panel, head, draggingClass, onDragEnd) {
-    let dragging = false, dragDX = 0, dragDY = 0;
-    const setPos = (prop, val) => panel.style.setProperty(prop, val, "important");
-    head.addEventListener("pointerdown", (e) => {
-      if (e.target.closest("button")) return;
-      const rect = panel.getBoundingClientRect();
-      setPos("left", rect.left + "px");
-      setPos("top", rect.top + "px");
-      setPos("right", "auto");
-      setPos("bottom", "auto");
-      dragDX = e.clientX - rect.left;
-      dragDY = e.clientY - rect.top;
-      dragging = true;
-      head.classList.add(draggingClass);
-      head.setPointerCapture(e.pointerId);
-    });
-    head.addEventListener("pointermove", (e) => {
-      if (!dragging) return;
-      const rect = panel.getBoundingClientRect();
-      const { x, y } = clampPanelPos(e.clientX - dragDX, e.clientY - dragDY, rect.width, rect.height);
-      setPos("left", x + "px");
-      setPos("top", y + "px");
-    });
-    const endDrag = (e) => {
-      if (!dragging) return;
-      dragging = false;
-      head.classList.remove(draggingClass);
-      try {
-        head.releasePointerCapture(e.pointerId);
-      } catch (err) {
-      }
-      if (onDragEnd) {
-        const rect = panel.getBoundingClientRect();
-        onDragEnd(rect.left, rect.top);
-      }
-    };
-    head.addEventListener("pointerup", endDrag);
-    head.addEventListener("pointercancel", endDrag);
-  }
-  function getSavedEmotePanelPos() {
-    try {
-      const raw = getKey(LS_EMOTE_PANEL_POS);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed.left === "number" && typeof parsed.top === "number") return parsed;
-    } catch (e) {
-    }
-    return null;
-  }
-  function saveEmotePanelPos(left, top) {
-    try {
-      setKey(LS_EMOTE_PANEL_POS, JSON.stringify({ left, top }));
-    } catch (e) {
-    }
-  }
-  var _emoteFavorites = /* @__PURE__ */ new Set();
-  function loadFavorites() {
-    try {
-      const arr = JSON.parse(getKey(LS_EMOTE_FAVORITES) || "[]");
-      if (Array.isArray(arr)) return new Set(arr.filter((n) => typeof n === "string" && n));
-    } catch (e) {
-    }
-    return /* @__PURE__ */ new Set();
-  }
-  function saveFavorites() {
-    try {
-      setKey(LS_EMOTE_FAVORITES, JSON.stringify([..._emoteFavorites]));
-    } catch (e) {
-    }
-  }
-  var EMOTE_FAVORITES_CACHE = "sc-emote-favorites-v1";
-  function openFavoritesCache() {
-    if (!("caches" in window)) return Promise.resolve(null);
-    return caches.open(EMOTE_FAVORITES_CACHE).catch(() => null);
-  }
-  var _favoriteBlobUrls = /* @__PURE__ */ new Map();
-  function patchFavoriteTileImage(name, src) {
-    document.querySelectorAll("#sc-emotes-panel .sc-emotes-tile").forEach((tile) => {
-      if (tile.dataset.emoteName !== name) return;
-      const img = tile.querySelector("img");
-      if (img && img.src !== src) img.src = src;
-    });
-  }
-  function setFavoriteBlobUrl(name, blob) {
-    const objUrl = URL.createObjectURL(blob);
-    const prev = _favoriteBlobUrls.get(name);
-    _favoriteBlobUrls.set(name, objUrl);
-    if (prev) URL.revokeObjectURL(prev);
-    patchFavoriteTileImage(name, objUrl);
-  }
-  async function cacheFavoriteImage(name, url) {
-    if (!url) return;
-    try {
-      const cache = await openFavoritesCache();
-      if (!cache) return;
-      const res = await fetch(url);
-      if (!res.ok) return;
-      await cache.put(url, res.clone());
-      setFavoriteBlobUrl(name, await res.blob());
-    } catch (e) {
-    }
-  }
-  async function evictFavoriteImage(name, url) {
-    const blobUrl = _favoriteBlobUrls.get(name);
-    if (blobUrl) {
-      URL.revokeObjectURL(blobUrl);
-      _favoriteBlobUrls.delete(name);
-    }
-    try {
-      const cache = await openFavoritesCache();
-      if (cache && url) await cache.delete(url);
-    } catch (e) {
-    }
-  }
-  async function warmFavoriteBlobUrls() {
-    if (!_emoteFavorites.size || !_emoteData.length) return;
-    const cache = await openFavoritesCache();
-    if (!cache) return;
-    for (const e of _emoteData) {
-      if (!_emoteFavorites.has(e.name) || _favoriteBlobUrls.has(e.name)) continue;
-      try {
-        const res = await cache.match(e.image);
-        if (res) setFavoriteBlobUrl(e.name, await res.blob());
-        else await cacheFavoriteImage(e.name, e.image);
-      } catch (err) {
-      }
-    }
-  }
-  function toggleFavorite(name) {
-    if (!name) return;
-    const isFav = !_emoteFavorites.has(name);
-    if (isFav) _emoteFavorites.add(name);
-    else _emoteFavorites.delete(name);
-    saveFavorites();
-    refreshAfterFavoriteToggle(name, isFav);
-    const emote = _emoteData.find((em) => em.name === name);
-    const image = emote && emote.image;
-    if (isFav) cacheFavoriteImage(name, image);
-    else evictFavoriteImage(name, image);
-  }
-  function refreshAfterFavoriteToggle(name, isFav) {
-    if (_activeTab === "favorites") {
-      const grid = document.getElementById("sc-emotes-grid");
-      const search = document.getElementById("sc-emotes-search");
-      if (grid) renderActiveTabGrid(grid, search ? search.value : "");
-      return;
-    }
-    document.querySelectorAll("#sc-emotes-panel .sc-emotes-star").forEach((star) => {
-      if (star.dataset.emoteName === name) setEmoteStarState(star, isFav);
-    });
-  }
-  var _activeTab = "all";
-  function getSavedActiveTab() {
-    try {
-      const raw = getKey(LS_EMOTE_ACTIVE_TAB);
-      if (raw === "all" || raw === "favorites") return raw;
-    } catch (e) {
-    }
-    return "all";
-  }
-  function saveActiveTab(tab) {
-    try {
-      setKey(LS_EMOTE_ACTIVE_TAB, tab);
-    } catch (e) {
-    }
-  }
-  function insertEmoteIntoChat(name) {
-    const textarea = document.getElementById("sc-chat-textarea");
-    if (!textarea || !name) return;
-    const start = typeof textarea.selectionStart === "number" ? textarea.selectionStart : textarea.value.length;
-    const end = typeof textarea.selectionEnd === "number" ? textarea.selectionEnd : textarea.value.length;
-    textarea.value = textarea.value.slice(0, start) + name + textarea.value.slice(end);
-    const newPos = start + name.length;
-    textarea.selectionStart = textarea.selectionEnd = newPos;
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    textarea.focus();
-  }
-  function _escHtml(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  }
-  function _starLabel(isFav) {
-    return isFav ? "Remove from favorites" : "Add to favorites";
-  }
-  function setEmoteStarState(star, isFav) {
-    star.classList.toggle("sc-emotes-star-active", isFav);
-    star.setAttribute("aria-pressed", isFav ? "true" : "false");
-    const label = _starLabel(isFav);
-    star.setAttribute("aria-label", label);
-    star.title = label;
-    star.textContent = isFav ? "★" : "☆";
-  }
-  function renderEmoteTile(e, isFav) {
-    const name = _escHtml(e.name);
-    const starLabel = _starLabel(isFav);
-    const src = isFav && _favoriteBlobUrls.has(e.name) ? _favoriteBlobUrls.get(e.name) : e.image;
-    return `<button type="button" class="sc-emotes-tile" data-emote-name="${name}"><span class="sc-emotes-spinner" aria-hidden="true"></span><img src="${_escHtml(src)}" alt="${name}" title="${name}" loading="lazy"><span class="sc-emotes-tile-actions"><span class="sc-emotes-star${isFav ? " sc-emotes-star-active" : ""}" role="button" tabindex="0" data-emote-name="${name}" aria-pressed="${isFav ? "true" : "false"}" aria-label="${starLabel}" title="${starLabel}">${isFav ? "★" : "☆"}</span></span></button>`;
-  }
-  function wireImageLoadSpinners(container) {
-    container.querySelectorAll("img").forEach((img) => {
-      const tile = img.closest(".sc-emotes-tile");
-      if (!tile) return;
-      if (img.complete) {
-        tile.classList.add("sc-emotes-img-loaded");
-        return;
-      }
-      const onDone = () => tile.classList.add("sc-emotes-img-loaded");
-      img.addEventListener("load", onDone, { once: true });
-      img.addEventListener("error", onDone, { once: true });
-    });
-  }
-  function currentTabSourceList() {
-    if (_activeTab === "favorites") return _emoteData.filter((e) => _emoteFavorites.has(e.name));
-    return _emoteData;
-  }
-  function renderActiveTabGrid(grid, searchTerm) {
-    const source = currentTabSourceList();
-    const term = (searchTerm || "").trim().toLowerCase();
-    const filtered = term ? source.filter((e) => e.name.toLowerCase().includes(term)) : source;
-    if (!filtered.length) {
-      const onFavorites = _activeTab === "favorites";
-      const msg = onFavorites ? source.length ? "No matching favorites" : "No favorites yet" : source.length ? "No matching emotes" : "No emotes available";
-      grid.innerHTML = `<div class="sc-emotes-empty">${msg}</div>`;
-      return;
-    }
-    grid.innerHTML = filtered.map((e) => renderEmoteTile(e, _activeTab === "favorites" || _emoteFavorites.has(e.name))).join("");
-    wireImageLoadSpinners(grid);
-  }
-  function isGifImageUrl(url) {
-    if (!url) return false;
-    try {
-      return /\.gif$/i.test(new URL(url, location.href).pathname);
-    } catch (e) {
-      return /\.gif(?:[?#]|$)/i.test(url);
-    }
-  }
-  function ensureEmotePreviewEl() {
-    let preview = document.getElementById("sc-emotes-preview");
-    if (preview) return preview;
-    preview = document.createElement("div");
-    preview.id = "sc-emotes-preview";
-    preview.innerHTML = '<span class="sc-emotes-spinner" aria-hidden="true"></span><img alt="" aria-hidden="true"><span id="sc-emotes-preview-name"></span>';
-    const img = preview.querySelector("img");
-    const onDone = () => preview.classList.add("sc-emotes-preview-loaded");
-    img.addEventListener("load", onDone);
-    img.addEventListener("error", onDone);
-    document.body.appendChild(preview);
-    return preview;
-  }
-  function positionEmotePreview(preview, tile) {
-    const panel = document.getElementById("sc-emotes-panel");
-    if (!panel) return;
-    const panelRect = panel.getBoundingClientRect();
-    const tileRect = tile.getBoundingClientRect();
-    const pw = preview.offsetWidth, ph = preview.offsetHeight;
-    const gap = 8;
-    let left = panelRect.right + gap;
-    if (left + pw > window.innerWidth) left = panelRect.left - gap - pw;
-    left = Math.max(4, Math.min(left, window.innerWidth - pw - 4));
-    let top = tileRect.top + tileRect.height / 2 - ph / 2;
-    top = Math.max(4, Math.min(top, window.innerHeight - ph - 4));
-    preview.style.setProperty("left", left + "px", "important");
-    preview.style.setProperty("top", top + "px", "important");
-  }
-  function showEmotePreview(tile) {
-    const img = tile.querySelector("img");
-    if (!img || !isGifImageUrl(img.src)) return;
-    const preview = ensureEmotePreviewEl();
-    const previewImg = preview.querySelector("img");
-    if (previewImg.src !== img.src) {
-      preview.classList.remove("sc-emotes-preview-loaded");
-      previewImg.src = img.src;
-    }
-    const nameEl = preview.querySelector("#sc-emotes-preview-name");
-    if (nameEl) nameEl.textContent = tile.dataset.emoteName || "";
-    preview.style.setProperty("display", "block", "important");
-    positionEmotePreview(preview, tile);
-  }
-  function hideEmotePreview() {
-    const preview = document.getElementById("sc-emotes-preview");
-    if (preview) preview.style.setProperty("display", "none", "important");
-  }
-  function teardownEmotePreview() {
-    _previewTile = null;
-    const preview = document.getElementById("sc-emotes-preview");
-    if (preview) preview.remove();
-  }
-  var _previewTile = null;
-  function wireEmotePreviewDelegation(body) {
-    const enter = (tile) => {
-      if (!tile || tile === _previewTile) return;
-      _previewTile = tile;
-      showEmotePreview(tile);
-    };
-    const leave = (tile, related) => {
-      if (!tile || tile !== _previewTile) return;
-      if (related && tile.contains(related)) return;
-      _previewTile = null;
-      hideEmotePreview();
-    };
-    body.addEventListener("mouseover", (e) => enter(e.target.closest(".sc-emotes-tile")));
-    body.addEventListener("mouseout", (e) => leave(e.target.closest(".sc-emotes-tile"), e.relatedTarget));
-    body.addEventListener("focusin", (e) => enter(e.target.closest(".sc-emotes-tile")));
-    body.addEventListener("focusout", (e) => leave(e.target.closest(".sc-emotes-tile"), e.relatedTarget));
-  }
-  function openEmotesPanel() {
-    if (document.getElementById("sc-emotes-panel")) return;
-    _emoteFavorites = loadFavorites();
-    _activeTab = getSavedActiveTab();
-    if (!_emoteData.length) refreshEmoteData(true);
-    else warmFavoriteBlobUrls();
-    const panel = document.createElement("div");
-    panel.id = "sc-emotes-panel";
-    panel.innerHTML = `
-        <div id="sc-emotes-head">
-            <span>Emotes</span>
-            <button id="sc-emotes-close" type="button">✕</button>
-        </div>
-        <div id="sc-emotes-body">
-            <div id="sc-emotes-tabs" role="tablist">
-                <button type="button" class="sc-emotes-tab" data-tab="all" role="tab">All</button>
-                <button type="button" class="sc-emotes-tab" data-tab="favorites" role="tab">Favorites</button>
-            </div>
-            <input type="text" id="sc-emotes-search" class="sc-emotes-search" placeholder="Search emotes…" autocomplete="off">
-            <div id="sc-emotes-grid" class="sc-emotes-grid"></div>
-        </div>`;
-    document.body.appendChild(panel);
-    const body = panel.querySelector("#sc-emotes-body");
-    const search = panel.querySelector("#sc-emotes-search");
-    const tabs = panel.querySelector("#sc-emotes-tabs");
-    const grid = panel.querySelector("#sc-emotes-grid");
-    const updateTabButtonStates = () => {
-      tabs.querySelectorAll(".sc-emotes-tab").forEach((btn) => {
-        const active = btn.dataset.tab === _activeTab;
-        btn.classList.toggle("sc-emotes-tab-active", active);
-        btn.setAttribute("aria-selected", active ? "true" : "false");
-      });
-    };
-    updateTabButtonStates();
-    renderActiveTabGrid(grid, "");
-    tabs.addEventListener("click", (e) => {
-      const btn = e.target.closest(".sc-emotes-tab");
-      if (!btn || btn.dataset.tab === _activeTab) return;
-      _activeTab = btn.dataset.tab;
-      saveActiveTab(_activeTab);
-      updateTabButtonStates();
-      renderActiveTabGrid(grid, search.value);
-    });
-    search.addEventListener("input", () => renderActiveTabGrid(grid, search.value));
-    body.addEventListener("click", (e) => {
-      const star = e.target.closest(".sc-emotes-star");
-      if (star) {
-        e.stopPropagation();
-        toggleFavorite(star.dataset.emoteName);
-        return;
-      }
-      const tile = e.target.closest(".sc-emotes-tile");
-      if (!tile) return;
-      insertEmoteIntoChat(tile.dataset.emoteName);
-      closeEmotesPanel();
-    });
-    body.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" && e.key !== " ") return;
-      const star = e.target.closest(".sc-emotes-star");
-      if (!star) return;
-      e.preventDefault();
-      e.stopPropagation();
-      toggleFavorite(star.dataset.emoteName);
-    });
-    wireEmotePreviewDelegation(body);
-    panel.querySelector("#sc-emotes-close").addEventListener("click", closeEmotesPanel);
-    const saved = getSavedEmotePanelPos();
-    if (saved) {
-      const rect = panel.getBoundingClientRect();
-      const { x, y } = clampPanelPos(saved.left, saved.top, rect.width, rect.height);
-      panel.style.setProperty("left", x + "px", "important");
-      panel.style.setProperty("top", y + "px", "important");
-      panel.style.setProperty("right", "auto", "important");
-      panel.style.setProperty("bottom", "auto", "important");
-    }
-    makePanelDraggable(panel, panel.querySelector("#sc-emotes-head"), "sc-emotes-dragging", (left, top) => {
-      saveEmotePanelPos(left, top);
-    });
-  }
-  function closeEmotesPanel() {
-    teardownEmotePreview();
-    const panel = document.getElementById("sc-emotes-panel");
-    if (panel) panel.remove();
-  }
-  function toggleEmotesPanel() {
-    if (document.getElementById("sc-emotes-panel")) closeEmotesPanel();
-    else openEmotesPanel();
   }
 
   // src/chat/input.js
@@ -1001,7 +615,7 @@
     proxy.setAttribute("aria-label", "Emote Picker");
     proxy.addEventListener("click", (e) => {
       e.stopPropagation();
-      toggleEmotesPanel();
+      original.click();
     });
     const inputRow = document.getElementById("sc-mobile-input-row");
     if (!inputRow) return;
@@ -1070,6 +684,32 @@
     if (Array.isArray(entry)) return entry[0] || null;
     if (typeof entry === "string") return entry;
     return null;
+  }
+  function getExternalUserColor(username) {
+    const jsText = window.CHANNEL && CHANNEL.js;
+    if (!jsText) return null;
+    if (jsText !== _cachedSourceText) {
+      _cachedSourceText = jsText;
+      _cachedStyles = parseUserStyles(jsText);
+    }
+    if (!_cachedStyles) return null;
+    const entry = _cachedStyles[username];
+    if (Array.isArray(entry)) return entry[1] || null;
+    return null;
+  }
+
+  // src/socket.js
+  function whenSocket(cb, tries = 120) {
+    const s = typeof window !== "undefined" && window.socket;
+    if (s && typeof s.on === "function") {
+      cb(s);
+      return;
+    }
+    if (tries <= 0) return;
+    setTimeout(() => whenSocket(cb, tries - 1), 500);
+  }
+  function onSocket(event, handler) {
+    whenSocket((s) => s.on(event, handler));
   }
 
   // src/lineup/reddit.js
@@ -2430,7 +2070,7 @@
   }();
 
   // src/cards/trivia.js
-  function _escHtml2(s) {
+  function _escHtml(s) {
     return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
   function showTriviaCard() {
@@ -2466,7 +2106,7 @@
         list.innerHTML = '<div class="sc-trivia-item">No trivia found.</div>';
         return;
       }
-      list.innerHTML = items.map((t) => `<div class="sc-trivia-item">${_escHtml2(t)}</div>`).join("");
+      list.innerHTML = items.map((t) => `<div class="sc-trivia-item">${_escHtml(t)}</div>`).join("");
       list.scrollTop = 0;
     });
   }
@@ -2952,117 +2592,6 @@
     (_a = document.getElementById("sc-upnext-card")) == null ? void 0 : _a.classList.remove("sc-upnext-visible");
   }
 
-  // src/cards/linkpip.js
-  function extractYouTubeId(url) {
-    try {
-      const u = new URL(url);
-      const host = u.hostname.replace(/^www\./, "");
-      if (host === "youtu.be") return u.pathname.slice(1).split("/")[0] || null;
-      if (host === "youtube.com" || host === "m.youtube.com") {
-        if (u.pathname.startsWith("/shorts/")) return u.pathname.split("/")[2] || null;
-        if (u.pathname.startsWith("/embed/")) return u.pathname.split("/")[2] || null;
-        if (u.pathname === "/watch" && u.searchParams.has("v")) return u.searchParams.get("v");
-      }
-      return null;
-    } catch (e) {
-      return null;
-    }
-  }
-  function isPipLink(url) {
-    return !!extractYouTubeId(url);
-  }
-  function mutePlayer() {
-    try {
-      const vid = document.querySelector("#videowrap video");
-      if (vid) {
-        const state = { kind: "video", muted: vid.muted };
-        vid.muted = true;
-        return state;
-      }
-    } catch (e) {
-    }
-    try {
-      const p = window.PLAYER && window.PLAYER.player;
-      if (p) {
-        const wasMuted = typeof p.isMuted === "function" ? !!p.isMuted() : typeof p.muted === "function" ? !!p.muted() : false;
-        if (typeof p.mute === "function") p.mute();
-        else if (typeof p.muted === "function") p.muted(true);
-        return { kind: "wrapper", muted: wasMuted };
-      }
-    } catch (e) {
-    }
-    return null;
-  }
-  function restorePlayer(state) {
-    if (!state || state.muted) return;
-    if (state.kind === "video") {
-      try {
-        const vid = document.querySelector("#videowrap video");
-        if (vid) vid.muted = false;
-      } catch (e) {
-      }
-      return;
-    }
-    try {
-      const p = window.PLAYER && window.PLAYER.player;
-      if (p) {
-        if (typeof p.unMute === "function") p.unMute();
-        else if (typeof p.muted === "function") p.muted(false);
-      }
-    } catch (e) {
-    }
-  }
-  var _pipMuteState = null;
-  var _outsideClickHandler = null;
-  function openLinkPip(url) {
-    const id = extractYouTubeId(url);
-    if (!id) return;
-    closeLinkPip();
-    let panel = document.getElementById("sc-link-pip-panel");
-    if (!panel) {
-      panel = document.createElement("div");
-      panel.id = "sc-link-pip-panel";
-      panel.innerHTML = `
-            <div id="sc-link-pip-head">
-                <span>Preview</span>
-                <button id="sc-link-pip-close" type="button">✕</button>
-            </div>
-            <div id="sc-link-pip-body"></div>`;
-      document.body.appendChild(panel);
-      panel.querySelector("#sc-link-pip-close").addEventListener("click", closeLinkPip);
-    }
-    const iframe = document.createElement("iframe");
-    iframe.src = `https://www.youtube.com/embed/${encodeURIComponent(id)}?autoplay=1`;
-    iframe.allow = "autoplay; encrypted-media";
-    iframe.className = "sc-link-pip-frame";
-    iframe.setAttribute("frameborder", "0");
-    const body = panel.querySelector("#sc-link-pip-body");
-    body.innerHTML = "";
-    body.appendChild(iframe);
-    panel.classList.add("sc-link-pip-visible");
-    _outsideClickHandler = (e) => {
-      if (!panel.contains(e.target)) closeLinkPip();
-    };
-    setTimeout(() => document.addEventListener("click", _outsideClickHandler, true), 0);
-    _pipMuteState = mutePlayer();
-  }
-  function closeLinkPip() {
-    const panel = document.getElementById("sc-link-pip-panel");
-    if (panel) {
-      panel.classList.remove("sc-link-pip-visible");
-      const body = panel.querySelector("#sc-link-pip-body");
-      if (body) body.innerHTML = "";
-    }
-    if (_outsideClickHandler) {
-      document.removeEventListener("click", _outsideClickHandler, true);
-      _outsideClickHandler = null;
-    }
-    if (_pipMuteState) {
-      restorePlayer(_pipMuteState);
-      _pipMuteState = null;
-    }
-  }
-
   // src/tvnav/geometry.js
   function pickDirectional(dir, curRect, rects) {
     const cx = curRect.left + curRect.width / 2, cy = curRect.top + curRect.height / 2;
@@ -3103,7 +2632,7 @@
   }
 
   // src/tvnav.js
-  var tvNavState = { setFocus: null, preBackHooks: [] };
+  var tvNavState = { setFocus: null };
   function initLoginTvNav() {
     let isTv2 = false;
     try {
@@ -3222,6 +2751,17 @@
     if (!isTv) return;
     let focusEl = null;
     let overlayFocusStack = [];
+    let ringIdleTimer = null;
+    let ringHidden = false;
+    const RING_IDLE_MS = 1e4;
+    function hideRingIdle() {
+      document.querySelectorAll(".sc-tv-focus").forEach((e) => e.classList.remove("sc-tv-focus"));
+      ringHidden = true;
+    }
+    function armRingIdle() {
+      clearTimeout(ringIdleTimer);
+      ringIdleTimer = setTimeout(hideRingIdle, RING_IDLE_MS);
+    }
     const isVisible = (el) => {
       if (!el || !el.getBoundingClientRect) return false;
       const r = el.getBoundingClientRect();
@@ -3230,8 +2770,8 @@
       const cs = getComputedStyle(el);
       return cs.visibility !== "hidden" && cs.display !== "none";
     };
-    const OVERLAY_IDS = ["sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card", "sc-upnext-card", "sc-link-pip-panel", "sc-emotes-panel", "sc-lineup-screen", "sc-subtitles-picker", "sc-subtitles-manage"];
-    const isOverlayOpen = (id, o) => !!(o && isVisible(o) && (id !== "sc-np-card" || o.classList.contains("sc-np-visible")) && (id !== "sc-upnext-card" || o.classList.contains("sc-upnext-visible")) && (id !== "sc-trivia-card" || o.classList.contains("sc-show")) && (id !== "sc-link-pip-panel" || o.classList.contains("sc-link-pip-visible")) && (id !== "sc-lineup-screen" || o.classList.contains("sc-lineup-visible")));
+    const OVERLAY_IDS = ["sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card", "sc-upnext-card", "sc-lineup-screen", "sc-subtitles-picker", "sc-subtitles-manage"];
+    const isOverlayOpen = (id, o) => !!(o && isVisible(o) && (id !== "sc-np-card" || o.classList.contains("sc-np-visible")) && (id !== "sc-upnext-card" || o.classList.contains("sc-upnext-visible")) && (id !== "sc-trivia-card" || o.classList.contains("sc-show")) && (id !== "sc-lineup-screen" || o.classList.contains("sc-lineup-visible")));
     const openOverlay = () => {
       for (const id of OVERLAY_IDS) {
         const o = document.getElementById(id);
@@ -3317,6 +2857,7 @@
       }
       holdScrubber(false);
       focusEl = null;
+      ringHidden = false;
     }
     function restoreFocusAfterOverlayClose() {
       const restore = overlayFocusStack.pop() || null;
@@ -3333,6 +2874,7 @@
         if (e !== el) e.classList.remove("sc-tv-focus");
       });
       focusEl = el;
+      ringHidden = false;
       el.classList.add("sc-tv-focus");
       try {
         el.focus({ preventScroll: true });
@@ -3484,7 +3026,7 @@
         }
       }
       {
-        const buf = document.getElementById("messagebuffer");
+        const buf2 = document.getElementById("messagebuffer");
         const onHeaderBtn = focusEl && CHAT_HEADER_IDS.includes(focusEl.id);
         const onLog = focusEl && focusEl.id === "messagebuffer";
         const onTextarea = focusEl && focusEl.id === "sc-chat-textarea";
@@ -3499,21 +3041,21 @@
             }
           }
         }
-        if (onHeaderBtn && dir === "down" && buf && isVisible(buf)) {
-          setFocus(buf);
+        if (onHeaderBtn && dir === "down" && buf2 && isVisible(buf2)) {
+          setFocus(buf2);
           return;
         }
-        if (onTextarea && dir === "up" && buf && isVisible(buf)) {
-          setFocus(buf);
+        if (onTextarea && dir === "up" && buf2 && isVisible(buf2)) {
+          setFocus(buf2);
           return;
         }
-        if (onLog && buf && (dir === "up" || dir === "down")) {
-          const scrollable = buf.scrollHeight > buf.clientHeight;
-          const atTop = buf.scrollTop <= 0;
-          const atBottom = buf.scrollTop + buf.clientHeight >= buf.scrollHeight - 1;
+        if (onLog && buf2 && (dir === "up" || dir === "down")) {
+          const scrollable = buf2.scrollHeight > buf2.clientHeight;
+          const atTop = buf2.scrollTop <= 0;
+          const atBottom2 = buf2.scrollTop + buf2.clientHeight >= buf2.scrollHeight - 1;
           if (dir === "down") {
-            if (scrollable && !atBottom) {
-              buf.scrollTop += 140;
+            if (scrollable && !atBottom2) {
+              buf2.scrollTop += 140;
               return;
             }
             const ta = document.getElementById("sc-chat-textarea");
@@ -3523,7 +3065,7 @@
             }
           } else {
             if (scrollable && !atTop) {
-              buf.scrollTop -= 140;
+              buf2.scrollTop -= 140;
               return;
             }
             const firstHeader = CHAT_HEADER_IDS.map((id) => document.getElementById(id)).find((e) => e && isVisible(e));
@@ -3628,9 +3170,6 @@
       }
     }
     function closeTop() {
-      for (const hook of tvNavState.preBackHooks) {
-        if (hook()) return true;
-      }
       const menu = openVjsMenu();
       if (menu) {
         const wrap = menu.closest(".vjs-menu-button");
@@ -3688,18 +3227,6 @@
         restoreFocusAfterOverlayClose();
         return true;
       }
-      const linkPip = document.getElementById("sc-link-pip-panel");
-      if (linkPip && linkPip.classList.contains("sc-link-pip-visible")) {
-        closeLinkPip();
-        restoreFocusAfterOverlayClose();
-        return true;
-      }
-      const emotes = document.getElementById("sc-emotes-panel");
-      if (emotes && isVisible(emotes)) {
-        closeEmotesPanel();
-        restoreFocusAfterOverlayClose();
-        return true;
-      }
       const lineup = document.getElementById("sc-lineup-screen");
       if (lineup && lineup.classList.contains("sc-lineup-visible")) {
         hideLineupScreen();
@@ -3741,7 +3268,21 @@
     }
     window.__scTvKey = function(dir, repeatCount) {
       try {
+        armRingIdle();
+        if (ringHidden && dir !== "back") {
+          ringHidden = false;
+          if (focusEl && focusEl.isConnected) {
+            focusEl.classList.add("sc-tv-focus");
+            try {
+              focusEl.focus({ preventScroll: true });
+            } catch (e) {
+            }
+          }
+          revealChrome();
+          return;
+        }
         if (dir === "back") {
+          ringHidden = false;
           if (!closeTop()) {
             try {
               if (window.CytubeNative && CytubeNative.tvBack) CytubeNative.tvBack();
@@ -3756,6 +3297,7 @@
       } catch (e) {
       }
     };
+    armRingIdle();
   }
 
   // src/lineup/screen.js
@@ -4155,8 +3697,8 @@
     return document.body && document.body.classList.contains("sc-tv") ? 18 : 14;
   }
   function applyChatFontSize(px) {
-    const buf = document.getElementById("messagebuffer");
-    if (buf) buf.style.setProperty("font-size", px + "px", "important");
+    const buf2 = document.getElementById("messagebuffer");
+    if (buf2) buf2.style.setProperty("font-size", px + "px", "important");
     const ta = document.getElementById("sc-chat-textarea");
     if (ta) {
       const overlay = document.body && document.body.classList.contains("sc-chat-overlay");
@@ -4195,7 +3737,7 @@
   function applySubtitleFontSize(px) {
     document.body.style.setProperty("--sc-subtitle-fontsize", clampFontSize(px) + "px");
   }
-  function _escHtml3(s) {
+  function _escHtml2(s) {
     return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
   function extractSubtitleLine(msgEl) {
@@ -4209,8 +3751,8 @@
     return { username, color: usernameToColor(username), emoji: getExternalUserEmoji(username), html };
   }
   function renderSubtitleLine(line) {
-    const emojiHtml = line.emoji ? `<span class="sc-subtitle-emoji">${_escHtml3(line.emoji)}</span>` : "";
-    return `<div class="sc-subtitle-pill">${emojiHtml}<span class="sc-subtitle-name" style="color:${line.color}">${_escHtml3(line.username)}:</span> <span class="sc-subtitle-text">${line.html}</span></div>`;
+    const emojiHtml = line.emoji ? `<span class="sc-subtitle-emoji">${_escHtml2(line.emoji)}</span>` : "";
+    return `<div class="sc-subtitle-pill">${emojiHtml}<span class="sc-subtitle-name" style="color:${line.color}">${_escHtml2(line.username)}:</span> <span class="sc-subtitle-text">${line.html}</span></div>`;
   }
   function ensureContainer() {
     let el = document.getElementById("sc-subtitles-overlay");
@@ -4231,10 +3773,10 @@
   function refreshSubtitles() {
     if (!inSubtitlesMode()) return;
     const container = ensureContainer();
-    const buf = document.getElementById("messagebuffer");
-    if (!buf) return;
+    const buf2 = document.getElementById("messagebuffer");
+    if (!buf2) return;
     const maxLines = getSubtitleLines();
-    const all = [...buf.querySelectorAll('[class*="chat-msg-"]')];
+    const all = [...buf2.querySelectorAll('[class*="chat-msg-"]')];
     const lines = all.slice(-maxLines).map(extractSubtitleLine).filter(Boolean);
     container.innerHTML = lines.map(renderSubtitleLine).join("");
   }
@@ -4246,14 +3788,14 @@
   }
   var _subtitlesObserverStarted = false;
   function startSubtitlesObserver() {
-    const buf = document.getElementById("messagebuffer");
-    if (!buf) return;
+    const buf2 = document.getElementById("messagebuffer");
+    if (!buf2) return;
     if (_subtitlesObserverStarted) {
       refreshSubtitles();
       return;
     }
     _subtitlesObserverStarted = true;
-    new MutationObserver(refreshSubtitles).observe(buf, { childList: true, subtree: true });
+    new MutationObserver(refreshSubtitles).observe(buf2, { childList: true, subtree: true });
     refreshSubtitles();
   }
 
@@ -4418,14 +3960,7 @@
       btn.dataset.tvLabel = "Chat: " + label;
     }
     applyChatFontSize(getChatFontSize());
-    const buf = document.getElementById("messagebuffer");
-    if (buf) {
-      const toBottom = () => {
-        buf.scrollTop = buf.scrollHeight;
-      };
-      requestAnimationFrame(() => requestAnimationFrame(toBottom));
-      [120, 320, 600].forEach((ms) => setTimeout(toBottom, ms));
-    }
+    pinChatToBottom({ force: true });
   }
   function cycleChatMode() {
     let cur = "sidebar";
@@ -4466,29 +4001,11 @@
     });
   }
   function initNewMessagePill() {
-    const buf = document.getElementById("messagebuffer");
-    if (!buf) return;
-    const pill = document.createElement("div");
-    pill.id = "sc-newmsg-pill";
-    pill.textContent = "↓ New messages";
-    document.body.appendChild(pill);
-    const nearBottom = () => buf.scrollHeight - buf.scrollTop - buf.clientHeight < 80;
-    const toBottom = () => {
-      buf.scrollTop = buf.scrollHeight;
-      pill.classList.remove("sc-show");
-    };
-    pill.addEventListener("click", toBottom);
-    buf.addEventListener("scroll", () => {
-      if (nearBottom()) pill.classList.remove("sc-show");
-    }, { passive: true });
-    new MutationObserver(() => {
-      if (nearBottom()) buf.scrollTop = buf.scrollHeight;
-      else pill.classList.add("sc-show");
-    }).observe(buf, { childList: true });
+    initStickBottom();
   }
   function initMentionToast() {
-    const buf = document.getElementById("messagebuffer");
-    if (!buf) return;
+    const buf2 = document.getElementById("messagebuffer");
+    if (!buf2) return;
     const myName = () => {
       try {
         return window.CLIENT && CLIENT.name ? String(CLIENT.name) : "";
@@ -4524,7 +4041,7 @@
         const text = clone.textContent.replace(/^[\s:]+/, "").trim().slice(0, 180);
         show(name, text);
       }));
-    }).observe(buf, { childList: true });
+    }).observe(buf2, { childList: true });
   }
   function initChatFont() {
     applyChatFontSize(getChatFontSize());
@@ -7203,7 +6720,7 @@
   var TP_EXIT_ANIM_MS = 300;
   var TP_MAX_FACT_LEN = 280;
   var TP_PERSON_TRIVIA_CAP = 3;
-  function _escHtml4(s) {
+  function _escHtml3(s) {
     return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
   var _tpLastImdbId = void 0;
@@ -7510,14 +7027,14 @@
     _tpBubbleEl = document.createElement("div");
     _tpBubbleEl.id = "sc-tp-bubble";
     const icon = TP_ICONS[Math.floor(Math.random() * TP_ICONS.length)];
-    const bylineHtml = fact.byline ? `<div id="sc-tp-byline">${_escHtml4(fact.byline)}</div>` : "";
+    const bylineHtml = fact.byline ? `<div id="sc-tp-byline">${_escHtml3(fact.byline)}</div>` : "";
     _tpBubbleEl.innerHTML = `
         <svg id="sc-tp-tail" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg">
             <circle cx="30" cy="30" r="27" fill="#000"/>
             <circle cx="30" cy="30" r="27" fill="none" stroke="#c81d25" stroke-width="3"/>
             ${icon}
         </svg>
-        <div id="sc-tp-text">${_escHtml4(fact.text)}${bylineHtml}</div>`;
+        <div id="sc-tp-text">${_escHtml3(fact.text)}${bylineHtml}</div>`;
     document.body.appendChild(_tpBubbleEl);
     const pos = _tpRandomPosition(_tpBubbleEl.offsetWidth, _tpBubbleEl.offsetHeight);
     _tpBubbleEl.style.setProperty("left", pos.leftPx + "px", "important");
@@ -8050,8 +7567,7 @@
     return [...msgEl.querySelectorAll("a[href]")].filter((a) => !a.dataset.scEmbedded && !a.closest(".sc-img-embed") && (a.protocol === "http:" || a.protocol === "https:") && isImageHostPage(a.href));
   }
   function rescrollChatIfNearBottom() {
-    const b = document.getElementById("messagebuffer");
-    if (b && b.scrollHeight - b.scrollTop - b.clientHeight < 60) b.scrollTop = b.scrollHeight;
+    if (isStuck()) pinChatToBottom();
   }
   function buildEmbed(a, initialSrc) {
     a.style.display = "none";
@@ -8154,9 +7670,9 @@
     a._scUi = badge;
   }
   function sweepUrl(url, applyFn) {
-    const buf = document.getElementById("messagebuffer");
-    if (!buf) return;
-    buf.querySelectorAll("a[data-sc-embedded]").forEach((a) => {
+    const buf2 = document.getElementById("messagebuffer");
+    if (!buf2) return;
+    buf2.querySelectorAll("a[data-sc-embedded]").forEach((a) => {
       if (a.href !== url) return;
       if (a._scUi) a._scUi.remove();
       applyFn(a);
@@ -8184,120 +7700,24 @@
     if (isBanned(a.href)) applyBannedState(a);
     else applyResolvedEmbedState(a);
   }
-  function scanImageEmbeds(buf) {
+  function scanImageEmbeds(buf2) {
     if (!autoEmbedEnabled()) return;
-    buf.querySelectorAll('[class*="chat-msg-"]').forEach((msgEl) => {
+    buf2.querySelectorAll('[class*="chat-msg-"]').forEach((msgEl) => {
       findImageLinks(msgEl).forEach(renderLink);
       findImageHostPageLinks(msgEl).forEach(renderHostPageLink);
     });
   }
   var _imageEmbedObserverStarted = false;
   function startImageEmbedObserver() {
-    const buf = document.getElementById("messagebuffer");
-    if (!buf) return;
+    const buf2 = document.getElementById("messagebuffer");
+    if (!buf2) return;
     if (_imageEmbedObserverStarted) {
-      scanImageEmbeds(buf);
+      scanImageEmbeds(buf2);
       return;
     }
     _imageEmbedObserverStarted = true;
-    new MutationObserver(() => scanImageEmbeds(buf)).observe(buf, { childList: true, subtree: true });
-    scanImageEmbeds(buf);
-  }
-
-  // src/chat/linkpip.js
-  function findQualifyingLinks(msgEl) {
-    return [...msgEl.querySelectorAll("a[href]")].filter((a) => !a.dataset.scPipChecked && (a.protocol === "http:" || a.protocol === "https:") && isPipLink(a.href));
-  }
-  function isOverlayCurrentlyOpen() {
-    const checks = [
-      ["sc-settings-overlay", null],
-      ["sc-modal-overlay", null],
-      ["sc-trivia-card", "sc-show"],
-      ["sc-users-panel", null],
-      ["sc-poll-panel", null],
-      ["sc-np-card", "sc-np-visible"],
-      ["sc-upnext-card", "sc-upnext-visible"],
-      ["sc-link-pip-panel", "sc-link-pip-visible"],
-      ["sc-lineup-screen", "sc-lineup-visible"]
-    ];
-    return checks.some(([id, cls]) => {
-      const el = document.getElementById(id);
-      if (!el || getComputedStyle(el).display === "none") return false;
-      if (cls && !el.classList.contains(cls)) return false;
-      const r = el.getBoundingClientRect();
-      return r.width > 3 && r.height > 3;
-    });
-  }
-  var promptEl = null;
-  var promptTimer = null;
-  var pendingUrl = null;
-  var _prevFocusEl = null;
-  function buildPrompt() {
-    const el = document.createElement("div");
-    el.id = "sc-link-pip-prompt";
-    el.innerHTML = `<button id="sc-link-pip-prompt-btn" type="button">
-        <span class="sc-lpp-label">New video</span>
-        <span class="sc-lpp-action">View this?</span>
-    </button>`;
-    document.body.appendChild(el);
-    el.querySelector("#sc-link-pip-prompt-btn").addEventListener("click", confirmLinkPip);
-    return el;
-  }
-  function dismissLinkPipPrompt() {
-    if (!promptEl) return;
-    clearTimeout(promptTimer);
-    const btn = promptEl.querySelector("button");
-    promptEl.classList.remove("sc-show");
-    pendingUrl = null;
-    if (_prevFocusEl && document.activeElement === btn && tvNavState.setFocus && _prevFocusEl.isConnected) {
-      tvNavState.setFocus(_prevFocusEl);
-    }
-    _prevFocusEl = null;
-  }
-  function confirmLinkPip() {
-    const url = pendingUrl;
-    clearTimeout(promptTimer);
-    if (promptEl) promptEl.classList.remove("sc-show");
-    pendingUrl = null;
-    _prevFocusEl = null;
-    if (url) openLinkPip(url);
-  }
-  function showLinkPipPrompt(url) {
-    pendingUrl = url;
-    if (!promptEl) promptEl = buildPrompt();
-    promptEl.classList.add("sc-show");
-    clearTimeout(promptTimer);
-    promptTimer = setTimeout(dismissLinkPipPrompt, 7e3);
-    if (!isOverlayCurrentlyOpen() && tvNavState.setFocus) {
-      _prevFocusEl = document.querySelector(".sc-tv-focus");
-      tvNavState.setFocus(promptEl.querySelector("button"));
-    } else {
-      _prevFocusEl = null;
-    }
-  }
-  var _linkPipObserverStarted = false;
-  function startLinkPipObserver() {
-    const buf = document.getElementById("messagebuffer");
-    if (!buf) return;
-    if (_linkPipObserverStarted) return;
-    _linkPipObserverStarted = true;
-    tvNavState.preBackHooks.push(() => {
-      if (promptEl && promptEl.classList.contains("sc-show")) {
-        dismissLinkPipPrompt();
-        return true;
-      }
-      return false;
-    });
-    new MutationObserver((muts) => {
-      muts.forEach((m) => m.addedNodes.forEach((node) => {
-        if (node.nodeType !== 1 || !node.matches || !node.matches('[class*="chat-msg-"]')) return;
-        const link = findQualifyingLinks(node)[0];
-        if (link) {
-          link.dataset.scPipChecked = "1";
-          showLinkPipPrompt(link.href);
-        }
-      }));
-    }).observe(buf, { childList: true });
+    new MutationObserver(() => scanImageEmbeds(buf2)).observe(buf2, { childList: true, subtree: true });
+    scanImageEmbeds(buf2);
   }
 
   // src/channelscript.js
@@ -9062,7 +8482,9 @@
                 padding-left: 0 !important; padding-right: 0 !important; margin: 0 !important;
                 background: transparent !important; color: white !important; border: none !important;
                 font-family: 'Inter', 'Roboto', system-ui, sans-serif !important;
-                font-size: 14px !important; overflow-x: hidden !important; overflow-y: auto !important; padding-bottom: 5px !important;
+                font-size: 14px !important; overflow-x: hidden !important; overflow-y: auto !important;
+                padding-bottom: 10px !important; scroll-padding-bottom: 10px !important;
+                overflow-anchor: auto !important;
             }
             /* Long usernames / links must wrap, never widen the panel */
             #messagebuffer, #messagebuffer * {
@@ -9884,13 +9306,13 @@
                 height: var(--sc-chat-h) !important;
                 bottom: var(--sc-kb-h) !important;
             }
-            /* Lift floating buttons above the keyboard */
-            body.sc-kb-open.sc-horizontal #sc-chatmode-btn,
-            body.sc-kb-open.sc-horizontal #sc-desync-btn,
-            body.sc-kb-open.sc-horizontal #fs-toggle-btn,
-            body.sc-kb-open.sc-horizontal #sc-settings-btn,
-            body.sc-kb-open.sc-horizontal #sc-subtitles-btn {
-                bottom: calc(var(--sc-kb-h) + 6px) !important;
+            /* Hide floating buttons while typing (matches the vertical rule above) --
+               they used to be lifted above the keyboard, but that left them floating
+               on top of the expanded chat input. The scrubber is simply occluded by
+               the keyboard; the dock row now goes with it. */
+            body.sc-kb-open.sc-horizontal .sc-dock-btn {
+                opacity: 0 !important;
+                pointer-events: none !important;
             }
 
             /* ── HORIZONTAL (landscape phone / tablet / TV) ──── */
@@ -10099,6 +9521,10 @@
             #sc-mobile-input-row {
                 display: flex !important; align-items: flex-end !important;
                 gap: 8px !important; width: 100% !important; padding: 4px 0 !important;
+                /* Always take our full height from the flex column so the split with
+                   #messagebuffer is deterministic — the message list gives up the
+                   space, never this row. */
+                flex-shrink: 0 !important;
             }
             #sc-mobile-input-row #sc-chat-textarea { flex: 1 !important; }
 
@@ -10734,7 +10160,7 @@
             html body.sc-pip #sc-users-panel, html body.sc-pip #sc-poll-panel,
             html body.sc-pip #sc-np-card, html body.sc-pip #sc-trivia-card, html body.sc-pip #sc-subtitles-overlay,
             html body.sc-pip #sc-subtitles-btn, html body.sc-pip #sc-subtitles-picker, html body.sc-pip #sc-movie-subtitles-overlay,
-            html body.sc-pip #sc-upnext-card, html body.sc-pip #sc-link-pip-panel, html body.sc-pip #sc-link-pip-prompt,
+            html body.sc-pip #sc-upnext-card,
             html body.sc-pip #sc-lineup-screen,
             html body.sc-pip #sc-mobile-input-row, html body.sc-pip .video-js .vjs-control-bar,
             html body.sc-pip #sc-seek-hud {
@@ -11274,241 +10700,6 @@
             #sc-mention-toast.sc-show { opacity: 1 !important; transform: translateX(-50%) translateY(0) !important; pointer-events: auto !important; }
             #sc-mention-toast .sc-mt-name { color: var(--np-accent, #ff5b73) !important; font-weight: 800 !important; margin-right: 6px !important; }
             body.sc-tv #sc-mention-toast { font-size: 21px !important; padding: 16px 26px !important; top: 40px !important; }
-
-            /* ── LINK PIP PROMPT — auto-focused "View this?" pill for a new YouTube link
-               posted in chat. Styled on #sc-mention-toast's conventions. ─────────────── */
-            #sc-link-pip-prompt {
-                position: fixed !important; top: 26px !important; left: 50% !important;
-                transform: translateX(-50%) translateY(-20px) !important;
-                z-index: 21600 !important;
-                opacity: 0 !important; pointer-events: none !important;
-                transition: opacity 0.35s ease, transform 0.35s ease !important;
-            }
-            #sc-link-pip-prompt.sc-show { opacity: 1 !important; transform: translateX(-50%) translateY(0) !important; pointer-events: auto !important; }
-            #sc-link-pip-prompt-btn {
-                display: flex !important; align-items: center !important; gap: 10px !important;
-                background: rgba(20,8,14,0.97) !important; color: #fff !important;
-                border: 1px solid var(--np-accent, #ff5b73) !important;
-                border-radius: 999px !important; padding: 12px 20px !important;
-                box-shadow: 0 10px 36px rgba(0,0,0,0.65) !important;
-                cursor: pointer !important; font-size: 14px !important; line-height: 1.3 !important;
-            }
-            #sc-link-pip-prompt-btn .sc-lpp-label { color: rgba(255,255,255,0.65) !important; }
-            #sc-link-pip-prompt-btn .sc-lpp-action { font-weight: 800 !important; color: var(--np-accent, #ff5b73) !important; }
-            body.sc-tv #sc-link-pip-prompt { top: 40px !important; }
-            body.sc-tv #sc-link-pip-prompt-btn { font-size: 21px !important; padding: 16px 26px !important; }
-
-            /* ── LINK PIP PANEL — floating YouTube preview opened from the prompt ──────── */
-            #sc-link-pip-panel {
-                position: fixed !important; right: 24px !important; bottom: 24px !important;
-                width: min(420px, 44vw) !important;
-                background: rgba(14,10,18,0.97) !important;
-                border: 1px solid rgba(255,255,255,0.14) !important;
-                border-radius: 12px !important; overflow: hidden !important;
-                box-shadow: 0 20px 60px rgba(0,0,0,0.7) !important;
-                z-index: 21200 !important;
-                opacity: 0 !important; pointer-events: none !important;
-                transition: opacity 0.3s ease !important;
-            }
-            #sc-link-pip-panel.sc-link-pip-visible { opacity: 1 !important; pointer-events: auto !important; }
-            #sc-link-pip-head {
-                display: flex !important; align-items: center !important; justify-content: space-between !important;
-                padding: 8px 12px !important; color: rgba(255,255,255,0.75) !important;
-                font-size: 13px !important; font-weight: 700 !important;
-                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-            }
-            #sc-link-pip-close {
-                background: rgba(255,255,255,0.1) !important; border: none !important; color: #fff !important;
-                width: 26px !important; height: 26px !important; border-radius: 50% !important;
-                cursor: pointer !important; font-size: 12px !important; flex-shrink: 0 !important;
-            }
-            #sc-link-pip-close:hover { background: rgba(255,255,255,0.2) !important; }
-            #sc-link-pip-body { position: relative !important; width: 100% !important; aspect-ratio: 16 / 9 !important; }
-            .sc-link-pip-frame { position: absolute !important; inset: 0 !important; width: 100% !important; height: 100% !important; border: none !important; }
-            body.sc-tv #sc-link-pip-panel { width: min(560px, 38vw) !important; right: 32px !important; bottom: 32px !important; }
-            body.sc-tv #sc-link-pip-head { font-size: 17px !important; padding: 12px 16px !important; }
-            body.sc-tv #sc-link-pip-close { width: 38px !important; height: 38px !important; font-size: 16px !important; }
-
-            /* ── EMOTE PICKER — replaces CyTube's native #emotelist popup ──────── */
-            #sc-emotes-panel {
-                position: fixed !important;
-                z-index: 30002 !important;
-                width: 340px !important; max-width: 92vw !important;
-                max-height: 56vh !important;
-                display: flex !important; flex-direction: column !important;
-                background: #0c0c0e !important;
-                border: 1px solid rgba(244,244,242,0.14) !important;
-                border-radius: 12px !important;
-                box-shadow: 0 12px 40px rgba(0,0,0,0.6) !important;
-                color: #f4f4f2 !important; font-size: 13px !important;
-                font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif !important;
-            }
-            #sc-emotes-head {
-                display: flex !important; align-items: center !important; justify-content: space-between !important;
-                flex: none !important;
-                padding: 10px 16px !important;
-                border-bottom: 1px solid rgba(244,244,242,0.08) !important;
-                font-weight: 700 !important; font-size: 14px !important; color: #3ecbff !important;
-                letter-spacing: 0.01em !important;
-                cursor: grab !important; user-select: none !important; touch-action: none !important;
-            }
-            #sc-emotes-head.sc-emotes-dragging { cursor: grabbing !important; }
-            #sc-emotes-close {
-                background: transparent !important; border: none !important; color: rgba(244,244,242,0.62) !important;
-                font-size: 15px !important; cursor: pointer !important; padding: 0 4px !important;
-                transition: color 120ms ease !important;
-            }
-            #sc-emotes-close:hover { color: #f4f4f2 !important; }
-            #sc-emotes-body {
-                padding: 10px 12px 12px !important;
-                display: flex !important; flex-direction: column !important; gap: 8px !important;
-                flex: 1 1 auto !important; min-height: 0 !important;
-            }
-            .sc-emotes-search {
-                flex: none !important;
-                background: rgba(255,255,255,0.06) !important; color: #f4f4f2 !important;
-                border: 1px solid rgba(255,255,255,0.18) !important; border-radius: 6px !important;
-                padding: 6px 10px !important; font-size: 13px !important;
-                box-sizing: border-box !important; width: 100% !important;
-                transition: border-color 120ms ease !important;
-            }
-            .sc-emotes-search:hover, .sc-emotes-search:focus { border-color: rgba(62,203,255,0.5) !important; }
-            .sc-emotes-search::placeholder { color: rgba(244,244,242,0.34) !important; }
-            .sc-emotes-grid {
-                flex: 1 1 auto !important; min-height: 0 !important; overflow-y: auto !important;
-                display: grid !important;
-                grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)) !important;
-                gap: 6px !important;
-                align-content: start !important;
-                scrollbar-width: thin !important; scrollbar-color: rgba(244,244,242,0.2) #000 !important;
-            }
-            .sc-emotes-grid::-webkit-scrollbar { width: 10px !important; }
-            .sc-emotes-grid::-webkit-scrollbar-track { background: #000 !important; }
-            .sc-emotes-grid::-webkit-scrollbar-thumb {
-                background: rgba(244,244,242,0.2) !important; border-radius: 6px !important; border: 2px solid #000 !important;
-            }
-            .sc-emotes-grid::-webkit-scrollbar-thumb:hover { background: #3ecbff !important; }
-            .sc-emotes-tile {
-                position: relative !important;
-                display: flex !important; align-items: center !important; justify-content: center !important;
-                background: rgba(244,244,242,0.04) !important;
-                border: 1px solid rgba(244,244,242,0.08) !important; border-radius: 6px !important;
-                padding: 4px !important; height: 60px !important; box-sizing: border-box !important;
-                cursor: pointer !important;
-                transition: background-color 120ms ease, border-color 120ms ease !important;
-            }
-            .sc-emotes-tile:hover, .sc-emotes-tile:focus-visible, .sc-emotes-tile.sc-tv-focus {
-                background: rgba(62,203,255,0.14) !important; border-color: #3ecbff !important;
-                outline: none !important;
-            }
-            .sc-emotes-tile img {
-                max-width: 100% !important; max-height: 46px !important;
-                display: block !important; pointer-events: none !important;
-                opacity: 0 !important; transition: opacity 150ms ease !important;
-            }
-            .sc-emotes-tile.sc-emotes-img-loaded img { opacity: 1 !important; }
-            .sc-emotes-spinner {
-                position: absolute !important; top: 50% !important; left: 50% !important;
-                transform: translate(-50%, -50%) !important;
-                width: 18px !important; height: 18px !important; box-sizing: border-box !important;
-                border: 2px solid rgba(244,244,242,0.18) !important;
-                border-top-color: #3ecbff !important;
-                border-radius: 50% !important;
-                animation: sc-emotes-spin 700ms linear infinite !important;
-                pointer-events: none !important;
-            }
-            .sc-emotes-tile.sc-emotes-img-loaded .sc-emotes-spinner { display: none !important; }
-            @keyframes sc-emotes-spin { to { transform: translate(-50%, -50%) rotate(360deg); } }
-            .sc-emotes-tile-actions {
-                position: absolute !important; top: 2px !important; right: 2px !important;
-                pointer-events: none !important;
-            }
-            .sc-emotes-star {
-                pointer-events: auto !important;
-                display: flex !important; align-items: center !important; justify-content: center !important;
-                width: 16px !important; height: 16px !important;
-                font-size: 12px !important; line-height: 1 !important;
-                color: rgba(244,244,242,0.5) !important;
-                background: rgba(0,0,0,0.4) !important;
-                border-radius: 4px !important;
-                cursor: pointer !important;
-                transition: color 120ms ease, transform 120ms ease !important;
-            }
-            .sc-emotes-star:hover, .sc-emotes-star:focus-visible, .sc-emotes-star.sc-tv-focus {
-                color: #f4f4f2 !important; outline: none !important; transform: scale(1.12) !important;
-            }
-            .sc-emotes-star-active { color: #ffd24a !important; }
-            .sc-emotes-star-active:hover, .sc-emotes-star-active:focus-visible { color: #ffdd70 !important; }
-            .sc-emotes-empty {
-                grid-column: 1 / -1 !important;
-                padding: 18px 4px !important; text-align: center !important;
-                color: rgba(244,244,242,0.4) !important; font-size: 12px !important;
-            }
-            #sc-emotes-tabs { display: flex !important; gap: 4px !important; flex: none !important; }
-            .sc-emotes-tab {
-                flex: 1 1 0 !important;
-                background: rgba(255,255,255,0.04) !important; color: rgba(244,244,242,0.62) !important;
-                border: 1px solid rgba(255,255,255,0.1) !important; border-radius: 6px !important;
-                padding: 6px 8px !important; font-size: 12px !important; font-weight: 600 !important;
-                cursor: pointer !important; text-align: center !important;
-                transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease !important;
-            }
-            .sc-emotes-tab:hover { color: #f4f4f2 !important; border-color: rgba(62,203,255,0.4) !important; }
-            .sc-emotes-tab-active {
-                background: rgba(62,203,255,0.16) !important; color: #3ecbff !important; border-color: #3ecbff !important;
-            }
-
-            /* Default spawn point -- anchored near #sc-emote-proxy's own position in each
-               layout (base.css), offset past its footprint so the trigger stays clickable
-               once the panel is open. Only applies while no saved drag position exists. */
-            body.sc-horizontal #sc-emotes-panel {
-                bottom: 54px !important; right: 8px !important;
-                width: 340px !important; max-height: 50vh !important;
-            }
-            body.sc-vertical #sc-emotes-panel {
-                bottom: 60px !important; right: 8px !important;
-                width: 280px !important; max-height: 60vh !important;
-            }
-            body.sc-vertical .sc-emotes-grid {
-                grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)) !important;
-            }
-            body.sc-tv .sc-emotes-tile { height: 76px !important; }
-            body.sc-tv .sc-emotes-search { font-size: 17px !important; padding: 9px 12px !important; }
-            body.sc-tv .sc-emotes-tab { font-size: 15px !important; padding: 8px 10px !important; }
-            body.sc-tv #sc-emotes-head { font-size: 17px !important; }
-            body.sc-tv #sc-emotes-close { width: 32px !important; height: 32px !important; font-size: 19px !important; }
-
-            /* Floating GIF preview -- appended to <body>, not the grid, so it's never
-               clipped by .sc-emotes-grid's own overflow:auto. */
-            #sc-emotes-preview {
-                position: fixed !important;
-                z-index: 30003 !important;
-                display: none !important;
-                pointer-events: none !important;
-                background: #0c0c0e !important;
-                border: 1px solid rgba(244,244,242,0.14) !important;
-                border-radius: 10px !important;
-                box-shadow: 0 12px 40px rgba(0,0,0,0.6) !important;
-                padding: 6px !important;
-                box-sizing: border-box !important;
-            }
-            #sc-emotes-preview img {
-                display: block !important;
-                width: 176px !important; height: 176px !important;
-                object-fit: contain !important;
-                opacity: 0 !important;
-                transition: opacity 100ms ease !important;
-            }
-            #sc-emotes-preview.sc-emotes-preview-loaded img { opacity: 1 !important; }
-            #sc-emotes-preview.sc-emotes-preview-loaded .sc-emotes-spinner { display: none !important; }
-            #sc-emotes-preview-name {
-                display: block !important;
-                width: 176px !important; max-width: 176px !important;
-                margin-top: 6px !important;
-                color: #f4f4f2 !important; font-size: 12px !important; text-align: center !important;
-                white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important;
-                box-sizing: border-box !important;
-            }
 `;
 
   // src/settings.js
@@ -11553,13 +10744,7 @@
       couchScrollBottom();
     }
     function couchScrollBottom() {
-      const buf = document.getElementById("messagebuffer");
-      if (!buf) return;
-      const toBottom = () => {
-        buf.scrollTop = buf.scrollHeight;
-      };
-      requestAnimationFrame(toBottom);
-      [120, 300, 420].forEach((ms) => setTimeout(toBottom, ms));
+      pinChatToBottom({ force: true });
     }
     function couchTypingOff() {
       clearTimeout(_couchIdleTimer);
@@ -11621,12 +10806,7 @@
       const isVert = isVerticalMonitor();
       document.body.classList.toggle("sc-vertical", isVert);
       document.body.classList.toggle("sc-horizontal", !isVert);
-      if (wasVert !== isVert) {
-        const buf = document.getElementById("messagebuffer");
-        if (buf) setTimeout(() => {
-          buf.scrollTop = buf.scrollHeight;
-        }, 200);
-      }
+      if (wasVert !== isVert) pinChatToBottom({ force: true });
     }
     function startMonitorWatcher() {
       applyMonitorLayout();
@@ -11660,6 +10840,7 @@
         } else {
           textarea.style.height = "auto";
           textarea.style.height = Math.min(textarea.scrollHeight, 120) + "px";
+          if (isStuck()) pinChatToBottom();
         }
       });
       textarea.addEventListener("keydown", (e) => {
@@ -11719,10 +10900,11 @@
       socket.on("chatMsg", (data) => {
         try {
           if (!data || typeof data.time !== "number") return;
-          const buf = document.getElementById("messagebuffer");
-          const node = buf && buf.lastElementChild;
+          const buf2 = document.getElementById("messagebuffer");
+          const node = buf2 && buf2.lastElementChild;
           if (!node || node.dataset.scTs) return;
           node.dataset.scTs = String(data.time);
+          if (data.username) node.dataset.scUser = data.username;
           node.title = "Sent " + fmt(data.time);
         } catch (e) {
         }
@@ -11759,31 +10941,42 @@
       document.addEventListener("touchmove", cancelPress, { passive: true });
       document.addEventListener("touchcancel", cancelPress, { passive: true });
     }
-    function applyUserColors() {
-      document.querySelectorAll('#messagebuffer [class*="chat-msg-"]').forEach((el) => {
-        const cls = [...el.classList].find((c) => c.startsWith("chat-msg-"));
-        if (!cls) return;
-        const u = cls.replace("chat-msg-", "");
-        const span = el.querySelector(".username");
-        if (span) {
-          span.style.color = usernameToColor(u);
-          span.style.fontWeight = "700";
-          const emoji = getExternalUserEmoji(u);
-          if (emoji) span.dataset.emoji = emoji;
-        }
-        el.classList.toggle("sc-own-msg", !!(window.CLIENT && CLIENT.name && u === CLIENT.name));
-      });
+    function colorOneMsg(el) {
+      const cls = [...el.classList].find((c) => c.startsWith("chat-msg-"));
+      if (!cls) return;
+      const u = el.dataset.scUser || cls.replace("chat-msg-", "");
+      const span = el.querySelector(".username");
+      if (span && span.dataset.scColored !== u) {
+        const color = getExternalUserColor(u) || usernameToColor(u);
+        span.style.setProperty("color", color, "important");
+        span.style.setProperty("font-weight", "700", "important");
+        span.dataset.scColored = u;
+        const emoji = getExternalUserEmoji(u);
+        if (emoji) span.dataset.emoji = emoji;
+      }
+      el.classList.toggle("sc-own-msg", !!(window.CLIENT && CLIENT.name && u === CLIENT.name));
+    }
+    function applyUserColors(root) {
+      (root || document).querySelectorAll('#messagebuffer [class*="chat-msg-"]').forEach(colorOneMsg);
     }
     let _colorObserverStarted = false;
     function startUserColorObserver() {
-      const buf = document.getElementById("messagebuffer");
-      if (!buf) return;
+      const buf2 = document.getElementById("messagebuffer");
+      if (!buf2) return;
       if (_colorObserverStarted) {
         applyUserColors();
         return;
       }
       _colorObserverStarted = true;
-      new MutationObserver(applyUserColors).observe(buf, { childList: true, subtree: true });
+      new MutationObserver((muts) => {
+        for (const m of muts) {
+          for (const n of m.addedNodes) {
+            if (n.nodeType !== 1) continue;
+            if (n.matches && n.matches('[class*="chat-msg-"]')) colorOneMsg(n);
+            else if (n.querySelectorAll) n.querySelectorAll('[class*="chat-msg-"]').forEach(colorOneMsg);
+          }
+        }
+      }).observe(buf2, { childList: true, subtree: true });
       applyUserColors();
     }
     function openSettingsModal() {
@@ -12394,7 +11587,6 @@
         addSettingsButton();
         startUserColorObserver();
         startImageEmbedObserver();
-        startLinkPipObserver();
         startSubtitlesObserver();
         if (document.getElementById("sc-chat-textarea") && document.getElementById("sc-emote-proxy") && document.getElementById("fs-toggle-btn") && document.getElementById("sc-settings-btn")) {
           bootObserver.disconnect();
@@ -12547,11 +11739,7 @@
         root.setProperty("--sc-vid-h", vidH + "px");
         root.setProperty("--sc-chat-h", chatH + "px");
         document.body.classList.add("sc-kb-open");
-        const buf = document.getElementById("messagebuffer");
-        const wasNearBottom = buf && buf.scrollHeight - buf.scrollTop - buf.clientHeight < 80;
-        if (buf && wasNearBottom) setTimeout(() => {
-          buf.scrollTop = buf.scrollHeight;
-        }, 120);
+        if (isStuck()) pinChatToBottom();
       };
       const onClose = () => {
         const root = document.documentElement.style;

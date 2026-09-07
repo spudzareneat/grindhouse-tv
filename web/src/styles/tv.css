@@ -148,13 +148,13 @@
                 height: var(--sc-chat-h) !important;
                 bottom: var(--sc-kb-h) !important;
             }
-            /* Lift floating buttons above the keyboard */
-            body.sc-kb-open.sc-horizontal #sc-chatmode-btn,
-            body.sc-kb-open.sc-horizontal #sc-desync-btn,
-            body.sc-kb-open.sc-horizontal #fs-toggle-btn,
-            body.sc-kb-open.sc-horizontal #sc-settings-btn,
-            body.sc-kb-open.sc-horizontal #sc-subtitles-btn {
-                bottom: calc(var(--sc-kb-h) + 6px) !important;
+            /* Hide floating buttons while typing (matches the vertical rule above) --
+               they used to be lifted above the keyboard, but that left them floating
+               on top of the expanded chat input. The scrubber is simply occluded by
+               the keyboard; the dock row now goes with it. */
+            body.sc-kb-open.sc-horizontal .sc-dock-btn {
+                opacity: 0 !important;
+                pointer-events: none !important;
             }
 
             /* ── HORIZONTAL (landscape phone / tablet / TV) ──── */
@@ -363,6 +363,10 @@
             #sc-mobile-input-row {
                 display: flex !important; align-items: flex-end !important;
                 gap: 8px !important; width: 100% !important; padding: 4px 0 !important;
+                /* Always take our full height from the flex column so the split with
+                   #messagebuffer is deterministic — the message list gives up the
+                   space, never this row. */
+                flex-shrink: 0 !important;
             }
             #sc-mobile-input-row #sc-chat-textarea { flex: 1 !important; }
 
@@ -998,7 +1002,7 @@
             html body.sc-pip #sc-users-panel, html body.sc-pip #sc-poll-panel,
             html body.sc-pip #sc-np-card, html body.sc-pip #sc-trivia-card, html body.sc-pip #sc-subtitles-overlay,
             html body.sc-pip #sc-subtitles-btn, html body.sc-pip #sc-subtitles-picker, html body.sc-pip #sc-movie-subtitles-overlay,
-            html body.sc-pip #sc-upnext-card, html body.sc-pip #sc-link-pip-panel, html body.sc-pip #sc-link-pip-prompt,
+            html body.sc-pip #sc-upnext-card,
             html body.sc-pip #sc-lineup-screen,
             html body.sc-pip #sc-mobile-input-row, html body.sc-pip .video-js .vjs-control-bar,
             html body.sc-pip #sc-seek-hud {
@@ -1538,238 +1542,3 @@
             #sc-mention-toast.sc-show { opacity: 1 !important; transform: translateX(-50%) translateY(0) !important; pointer-events: auto !important; }
             #sc-mention-toast .sc-mt-name { color: var(--np-accent, #ff5b73) !important; font-weight: 800 !important; margin-right: 6px !important; }
             body.sc-tv #sc-mention-toast { font-size: 21px !important; padding: 16px 26px !important; top: 40px !important; }
-
-            /* ── LINK PIP PROMPT — auto-focused "View this?" pill for a new YouTube link
-               posted in chat. Styled on #sc-mention-toast's conventions. ─────────────── */
-            #sc-link-pip-prompt {
-                position: fixed !important; top: 26px !important; left: 50% !important;
-                transform: translateX(-50%) translateY(-20px) !important;
-                z-index: 21600 !important;
-                opacity: 0 !important; pointer-events: none !important;
-                transition: opacity 0.35s ease, transform 0.35s ease !important;
-            }
-            #sc-link-pip-prompt.sc-show { opacity: 1 !important; transform: translateX(-50%) translateY(0) !important; pointer-events: auto !important; }
-            #sc-link-pip-prompt-btn {
-                display: flex !important; align-items: center !important; gap: 10px !important;
-                background: rgba(20,8,14,0.97) !important; color: #fff !important;
-                border: 1px solid var(--np-accent, #ff5b73) !important;
-                border-radius: 999px !important; padding: 12px 20px !important;
-                box-shadow: 0 10px 36px rgba(0,0,0,0.65) !important;
-                cursor: pointer !important; font-size: 14px !important; line-height: 1.3 !important;
-            }
-            #sc-link-pip-prompt-btn .sc-lpp-label { color: rgba(255,255,255,0.65) !important; }
-            #sc-link-pip-prompt-btn .sc-lpp-action { font-weight: 800 !important; color: var(--np-accent, #ff5b73) !important; }
-            body.sc-tv #sc-link-pip-prompt { top: 40px !important; }
-            body.sc-tv #sc-link-pip-prompt-btn { font-size: 21px !important; padding: 16px 26px !important; }
-
-            /* ── LINK PIP PANEL — floating YouTube preview opened from the prompt ──────── */
-            #sc-link-pip-panel {
-                position: fixed !important; right: 24px !important; bottom: 24px !important;
-                width: min(420px, 44vw) !important;
-                background: rgba(14,10,18,0.97) !important;
-                border: 1px solid rgba(255,255,255,0.14) !important;
-                border-radius: 12px !important; overflow: hidden !important;
-                box-shadow: 0 20px 60px rgba(0,0,0,0.7) !important;
-                z-index: 21200 !important;
-                opacity: 0 !important; pointer-events: none !important;
-                transition: opacity 0.3s ease !important;
-            }
-            #sc-link-pip-panel.sc-link-pip-visible { opacity: 1 !important; pointer-events: auto !important; }
-            #sc-link-pip-head {
-                display: flex !important; align-items: center !important; justify-content: space-between !important;
-                padding: 8px 12px !important; color: rgba(255,255,255,0.75) !important;
-                font-size: 13px !important; font-weight: 700 !important;
-                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-            }
-            #sc-link-pip-close {
-                background: rgba(255,255,255,0.1) !important; border: none !important; color: #fff !important;
-                width: 26px !important; height: 26px !important; border-radius: 50% !important;
-                cursor: pointer !important; font-size: 12px !important; flex-shrink: 0 !important;
-            }
-            #sc-link-pip-close:hover { background: rgba(255,255,255,0.2) !important; }
-            #sc-link-pip-body { position: relative !important; width: 100% !important; aspect-ratio: 16 / 9 !important; }
-            .sc-link-pip-frame { position: absolute !important; inset: 0 !important; width: 100% !important; height: 100% !important; border: none !important; }
-            body.sc-tv #sc-link-pip-panel { width: min(560px, 38vw) !important; right: 32px !important; bottom: 32px !important; }
-            body.sc-tv #sc-link-pip-head { font-size: 17px !important; padding: 12px 16px !important; }
-            body.sc-tv #sc-link-pip-close { width: 38px !important; height: 38px !important; font-size: 16px !important; }
-
-            /* ── EMOTE PICKER — replaces CyTube's native #emotelist popup ──────── */
-            #sc-emotes-panel {
-                position: fixed !important;
-                z-index: 30002 !important;
-                width: 340px !important; max-width: 92vw !important;
-                max-height: 56vh !important;
-                display: flex !important; flex-direction: column !important;
-                background: #0c0c0e !important;
-                border: 1px solid rgba(244,244,242,0.14) !important;
-                border-radius: 12px !important;
-                box-shadow: 0 12px 40px rgba(0,0,0,0.6) !important;
-                color: #f4f4f2 !important; font-size: 13px !important;
-                font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif !important;
-            }
-            #sc-emotes-head {
-                display: flex !important; align-items: center !important; justify-content: space-between !important;
-                flex: none !important;
-                padding: 10px 16px !important;
-                border-bottom: 1px solid rgba(244,244,242,0.08) !important;
-                font-weight: 700 !important; font-size: 14px !important; color: #3ecbff !important;
-                letter-spacing: 0.01em !important;
-                cursor: grab !important; user-select: none !important; touch-action: none !important;
-            }
-            #sc-emotes-head.sc-emotes-dragging { cursor: grabbing !important; }
-            #sc-emotes-close {
-                background: transparent !important; border: none !important; color: rgba(244,244,242,0.62) !important;
-                font-size: 15px !important; cursor: pointer !important; padding: 0 4px !important;
-                transition: color 120ms ease !important;
-            }
-            #sc-emotes-close:hover { color: #f4f4f2 !important; }
-            #sc-emotes-body {
-                padding: 10px 12px 12px !important;
-                display: flex !important; flex-direction: column !important; gap: 8px !important;
-                flex: 1 1 auto !important; min-height: 0 !important;
-            }
-            .sc-emotes-search {
-                flex: none !important;
-                background: rgba(255,255,255,0.06) !important; color: #f4f4f2 !important;
-                border: 1px solid rgba(255,255,255,0.18) !important; border-radius: 6px !important;
-                padding: 6px 10px !important; font-size: 13px !important;
-                box-sizing: border-box !important; width: 100% !important;
-                transition: border-color 120ms ease !important;
-            }
-            .sc-emotes-search:hover, .sc-emotes-search:focus { border-color: rgba(62,203,255,0.5) !important; }
-            .sc-emotes-search::placeholder { color: rgba(244,244,242,0.34) !important; }
-            .sc-emotes-grid {
-                flex: 1 1 auto !important; min-height: 0 !important; overflow-y: auto !important;
-                display: grid !important;
-                grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)) !important;
-                gap: 6px !important;
-                align-content: start !important;
-                scrollbar-width: thin !important; scrollbar-color: rgba(244,244,242,0.2) #000 !important;
-            }
-            .sc-emotes-grid::-webkit-scrollbar { width: 10px !important; }
-            .sc-emotes-grid::-webkit-scrollbar-track { background: #000 !important; }
-            .sc-emotes-grid::-webkit-scrollbar-thumb {
-                background: rgba(244,244,242,0.2) !important; border-radius: 6px !important; border: 2px solid #000 !important;
-            }
-            .sc-emotes-grid::-webkit-scrollbar-thumb:hover { background: #3ecbff !important; }
-            .sc-emotes-tile {
-                position: relative !important;
-                display: flex !important; align-items: center !important; justify-content: center !important;
-                background: rgba(244,244,242,0.04) !important;
-                border: 1px solid rgba(244,244,242,0.08) !important; border-radius: 6px !important;
-                padding: 4px !important; height: 60px !important; box-sizing: border-box !important;
-                cursor: pointer !important;
-                transition: background-color 120ms ease, border-color 120ms ease !important;
-            }
-            .sc-emotes-tile:hover, .sc-emotes-tile:focus-visible, .sc-emotes-tile.sc-tv-focus {
-                background: rgba(62,203,255,0.14) !important; border-color: #3ecbff !important;
-                outline: none !important;
-            }
-            .sc-emotes-tile img {
-                max-width: 100% !important; max-height: 46px !important;
-                display: block !important; pointer-events: none !important;
-                opacity: 0 !important; transition: opacity 150ms ease !important;
-            }
-            .sc-emotes-tile.sc-emotes-img-loaded img { opacity: 1 !important; }
-            .sc-emotes-spinner {
-                position: absolute !important; top: 50% !important; left: 50% !important;
-                transform: translate(-50%, -50%) !important;
-                width: 18px !important; height: 18px !important; box-sizing: border-box !important;
-                border: 2px solid rgba(244,244,242,0.18) !important;
-                border-top-color: #3ecbff !important;
-                border-radius: 50% !important;
-                animation: sc-emotes-spin 700ms linear infinite !important;
-                pointer-events: none !important;
-            }
-            .sc-emotes-tile.sc-emotes-img-loaded .sc-emotes-spinner { display: none !important; }
-            @keyframes sc-emotes-spin { to { transform: translate(-50%, -50%) rotate(360deg); } }
-            .sc-emotes-tile-actions {
-                position: absolute !important; top: 2px !important; right: 2px !important;
-                pointer-events: none !important;
-            }
-            .sc-emotes-star {
-                pointer-events: auto !important;
-                display: flex !important; align-items: center !important; justify-content: center !important;
-                width: 16px !important; height: 16px !important;
-                font-size: 12px !important; line-height: 1 !important;
-                color: rgba(244,244,242,0.5) !important;
-                background: rgba(0,0,0,0.4) !important;
-                border-radius: 4px !important;
-                cursor: pointer !important;
-                transition: color 120ms ease, transform 120ms ease !important;
-            }
-            .sc-emotes-star:hover, .sc-emotes-star:focus-visible, .sc-emotes-star.sc-tv-focus {
-                color: #f4f4f2 !important; outline: none !important; transform: scale(1.12) !important;
-            }
-            .sc-emotes-star-active { color: #ffd24a !important; }
-            .sc-emotes-star-active:hover, .sc-emotes-star-active:focus-visible { color: #ffdd70 !important; }
-            .sc-emotes-empty {
-                grid-column: 1 / -1 !important;
-                padding: 18px 4px !important; text-align: center !important;
-                color: rgba(244,244,242,0.4) !important; font-size: 12px !important;
-            }
-            #sc-emotes-tabs { display: flex !important; gap: 4px !important; flex: none !important; }
-            .sc-emotes-tab {
-                flex: 1 1 0 !important;
-                background: rgba(255,255,255,0.04) !important; color: rgba(244,244,242,0.62) !important;
-                border: 1px solid rgba(255,255,255,0.1) !important; border-radius: 6px !important;
-                padding: 6px 8px !important; font-size: 12px !important; font-weight: 600 !important;
-                cursor: pointer !important; text-align: center !important;
-                transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease !important;
-            }
-            .sc-emotes-tab:hover { color: #f4f4f2 !important; border-color: rgba(62,203,255,0.4) !important; }
-            .sc-emotes-tab-active {
-                background: rgba(62,203,255,0.16) !important; color: #3ecbff !important; border-color: #3ecbff !important;
-            }
-
-            /* Default spawn point -- anchored near #sc-emote-proxy's own position in each
-               layout (base.css), offset past its footprint so the trigger stays clickable
-               once the panel is open. Only applies while no saved drag position exists. */
-            body.sc-horizontal #sc-emotes-panel {
-                bottom: 54px !important; right: 8px !important;
-                width: 340px !important; max-height: 50vh !important;
-            }
-            body.sc-vertical #sc-emotes-panel {
-                bottom: 60px !important; right: 8px !important;
-                width: 280px !important; max-height: 60vh !important;
-            }
-            body.sc-vertical .sc-emotes-grid {
-                grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)) !important;
-            }
-            body.sc-tv .sc-emotes-tile { height: 76px !important; }
-            body.sc-tv .sc-emotes-search { font-size: 17px !important; padding: 9px 12px !important; }
-            body.sc-tv .sc-emotes-tab { font-size: 15px !important; padding: 8px 10px !important; }
-            body.sc-tv #sc-emotes-head { font-size: 17px !important; }
-            body.sc-tv #sc-emotes-close { width: 32px !important; height: 32px !important; font-size: 19px !important; }
-
-            /* Floating GIF preview -- appended to <body>, not the grid, so it's never
-               clipped by .sc-emotes-grid's own overflow:auto. */
-            #sc-emotes-preview {
-                position: fixed !important;
-                z-index: 30003 !important;
-                display: none !important;
-                pointer-events: none !important;
-                background: #0c0c0e !important;
-                border: 1px solid rgba(244,244,242,0.14) !important;
-                border-radius: 10px !important;
-                box-shadow: 0 12px 40px rgba(0,0,0,0.6) !important;
-                padding: 6px !important;
-                box-sizing: border-box !important;
-            }
-            #sc-emotes-preview img {
-                display: block !important;
-                width: 176px !important; height: 176px !important;
-                object-fit: contain !important;
-                opacity: 0 !important;
-                transition: opacity 100ms ease !important;
-            }
-            #sc-emotes-preview.sc-emotes-preview-loaded img { opacity: 1 !important; }
-            #sc-emotes-preview.sc-emotes-preview-loaded .sc-emotes-spinner { display: none !important; }
-            #sc-emotes-preview-name {
-                display: block !important;
-                width: 176px !important; max-width: 176px !important;
-                margin-top: 6px !important;
-                color: #f4f4f2 !important; font-size: 12px !important; text-align: center !important;
-                white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important;
-                box-sizing: border-box !important;
-            }

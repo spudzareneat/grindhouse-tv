@@ -3,6 +3,7 @@ import { syncNativeInputFocus } from './inputfocus.js';
 import { emoteState } from './emotemirror.js';
 import { spellCheckEnabled } from '../store.js';
 import { detectReadabilityIssues } from '../readability.js';
+import { markStuck, pinChatToBottom } from './stickbottom.js';
 
 /* ==========================================================
    LANGUAGETOOL GRAMMAR CHECK
@@ -289,6 +290,8 @@ function doSend(textarea, originalInput, msg) {
 
     textarea.value = ''; textarea.style.height = '';
     emoteState.lastChatlineValue = ''; originalInput.value = '';
+    // You just sent a message — you want to see it: re-arm auto-follow and pin.
+    markStuck(); pinChatToBottom({ force: true });
     // Return focus to the chat input so user can keep typing immediately
     textarea.focus();
 }

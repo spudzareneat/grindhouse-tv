@@ -13,9 +13,10 @@ import {
     initVideoTapReveal, initVertControlBand, initRightZone,
 } from './chat/modes.js';
 import { initDesyncButton, addFloatingButtons, addCastButton } from './chrome/buttons.js';
+import { isStuck, pinChatToBottom } from './chat/stickbottom.js';
 import { layoutDock } from './chrome/dock.js';
 import { usernameToColor } from './usercolors.js';
-import { getExternalUserEmoji } from './useremoji.js';
+import { getExternalUserEmoji, getExternalUserColor } from './useremoji.js';
 import { nativeHttpGet } from './native.js';
 import { initPhoneKeyboard } from './chat/keyboard.js';
 import { renderQrToCanvas } from './vendor/qr.js';
@@ -44,7 +45,6 @@ import { initSeekHud } from './player/seekhud.js';
 import { openExternalUrl } from './player/drm.js';
 import { getMovieLeadSec, setMovieLeadSec, initMovieLeadOffset, MOVIE_LEAD_MIN, MOVIE_LEAD_MAX } from './player/leadtime.js';
 import { startImageEmbedObserver } from './chat/imageembed.js';
-import { startLinkPipObserver } from './chat/linkpip.js';
 import { initChannelScriptAutoApprove } from './channelscript.js';
 import baseCss from './styles/base.css';
 import overlaysCss from './styles/overlays.css';
@@ -115,11 +115,7 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
     // Pin the message list to the bottom of its reserved space, so the latest messages ride
     // up above the compose box instead of being hidden behind it.
     function couchScrollBottom() {
-        const buf = document.getElementById('messagebuffer');
-        if (!buf) return;
-        const toBottom = () => { buf.scrollTop = buf.scrollHeight; };
-        requestAnimationFrame(toBottom);
-        [120, 300, 420].forEach(ms => setTimeout(toBottom, ms));
+        pinChatToBottom({ force: true });
     }
     function couchTypingOff() {
         clearTimeout(_couchIdleTimer);
@@ -191,10 +187,7 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
         const isVert = isVerticalMonitor();
         document.body.classList.toggle('sc-vertical', isVert);
         document.body.classList.toggle('sc-horizontal', !isVert);
-        if (wasVert !== isVert) {
-            const buf = document.getElementById('messagebuffer');
-            if (buf) setTimeout(() => { buf.scrollTop = buf.scrollHeight; }, 200);
-        }
+        if (wasVert !== isVert) pinChatToBottom({ force: true });
     }
     function startMonitorWatcher() {
         applyMonitorLayout();
@@ -256,6 +249,9 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
             } else {
                 textarea.style.height = 'auto';
                 textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+                // The compose box just stole height from the message list — re-pin
+                // so the newest line doesn't slide behind it while you type.
+                if (isStuck()) pinChatToBottom();
             }
         });
         textarea.addEventListener('keydown', e => {
@@ -389,6 +385,9 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
                 const node = buf && buf.lastElementChild;
                 if (!node || node.dataset.scTs) return;
                 node.dataset.scTs = String(data.time);
+                // Real (un-sanitized) name for channel-userStyles lookups -- the
+                // chat-msg-<u> class mangles '.'/spaces. See colorOneMsg below.
+                if (data.username) node.dataset.scUser = data.username;
                 node.title = 'Sent ' + fmt(data.time);   // native hover tooltip
             } catch (e) {}
         });
@@ -450,22 +449,29 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
        USER COLOR SYSTEM
     ========================================================== */
 
-    function applyUserColors() {
-        document.querySelectorAll('#messagebuffer [class*="chat-msg-"]').forEach(el => {
-            const cls = [...el.classList].find(c => c.startsWith('chat-msg-'));
-            if (!cls) return;
-            const u = cls.replace('chat-msg-', '');
-            const span = el.querySelector('.username');
-            if (span) {
-                span.style.color = usernameToColor(u);
-                span.style.fontWeight = '700';
-                // data attribute + CSS ::before, not textContent, so autocomplete/mention
-                // matching (which reads the raw name) is unaffected.
-                const emoji = getExternalUserEmoji(u);
-                if (emoji) span.dataset.emoji = emoji;
-            }
-            el.classList.toggle('sc-own-msg', !!(window.CLIENT && CLIENT.name && u === CLIENT.name));
-        });
+    function colorOneMsg(el) {
+        const cls = [...el.classList].find(c => c.startsWith('chat-msg-'));
+        if (!cls) return;
+        const u = el.dataset.scUser || cls.replace('chat-msg-', '');
+        const span = el.querySelector('.username');
+        if (span && span.dataset.scColored !== u) {
+            // Prefer the channel userscript's hand-picked color so its own colorer and
+            // ours land on the same value (no flashing); hash-fallback otherwise.
+            // Written !important so a later plain inline write by the channel script
+            // can't repaint it.
+            const color = getExternalUserColor(u) || usernameToColor(u);
+            span.style.setProperty('color', color, 'important');
+            span.style.setProperty('font-weight', '700', 'important');
+            span.dataset.scColored = u;
+            // data attribute + CSS ::before, not textContent, so autocomplete/mention
+            // matching (which reads the raw name) is unaffected.
+            const emoji = getExternalUserEmoji(u);
+            if (emoji) span.dataset.emoji = emoji;
+        }
+        el.classList.toggle('sc-own-msg', !!(window.CLIENT && CLIENT.name && u === CLIENT.name));
+    }
+    function applyUserColors(root) {
+        (root || document).querySelectorAll('#messagebuffer [class*="chat-msg-"]').forEach(colorOneMsg);
     }
     let _colorObserverStarted = false;
     function startUserColorObserver() {
@@ -473,7 +479,18 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
         if (!buf) return;
         if (_colorObserverStarted) { applyUserColors(); return; }
         _colorObserverStarted = true;
-        new MutationObserver(applyUserColors).observe(buf, { childList: true, subtree: true });
+        // Only touch newly-added message nodes -- the scColored guard makes this
+        // idempotent, so unrelated subtree churn (image embeds, link-PiP,
+        // stickbottom, subtitle mode) no longer re-triggers a full recolor.
+        new MutationObserver(muts => {
+            for (const m of muts) {
+                for (const n of m.addedNodes) {
+                    if (n.nodeType !== 1) continue;
+                    if (n.matches && n.matches('[class*="chat-msg-"]')) colorOneMsg(n);
+                    else if (n.querySelectorAll) n.querySelectorAll('[class*="chat-msg-"]').forEach(colorOneMsg);
+                }
+            }
+        }).observe(buf, { childList: true, subtree: true });
         applyUserColors();
     }
 
@@ -1147,7 +1164,6 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
             addSettingsButton();
             startUserColorObserver();
             startImageEmbedObserver();
-            startLinkPipObserver();
             startSubtitlesObserver();
             // Disconnect once all one-time elements are in place
             if (
@@ -1332,9 +1348,10 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
             root.setProperty('--sc-chat-h', chatH + 'px');
             document.body.classList.add('sc-kb-open');
 
-            const buf = document.getElementById('messagebuffer');
-            const wasNearBottom = buf && buf.scrollHeight - buf.scrollTop - buf.clientHeight < 80;
-            if (buf && wasNearBottom) setTimeout(() => { buf.scrollTop = buf.scrollHeight; }, 120);
+            // The chat pane resizes with the keyboard; keep the newest line visible
+            // if we were following the bottom. (The ResizeObserver in stickbottom.js
+            // also catches this, but firing here removes the visible lag.)
+            if (isStuck()) pinChatToBottom();
         };
 
         const onClose = () => {

@@ -4,8 +4,12 @@
    channelscript.js) that defines a `userStyles` map of
    `{ username: [emoji, color] }`. Rather than keeping a second copy
    in this app that drifts out of sync, read that map live off the
-   channel -- colors are skipped since usercolors.js already assigns
-   everyone a color via hash, only the emoji is pulled in.
+   channel -- the emoji is always pulled in; the channel-assigned
+   color is exposed too (getExternalUserColor) so applyUserColors can
+   respect a hand-picked color and fall back to the usercolors.js hash
+   only when the channel didn't style that user. Respecting the
+   channel's color also stops our colorer and the channel script's own
+   colorer from fighting over the same .username (name-color flashing).
 
    CyTube's client inserts embedded channel JS via jQuery's
    `.text().appendTo()` (see channelCSSJS in calzoneman/sync's
@@ -43,5 +47,18 @@ export function getExternalUserEmoji(username) {
     const entry = _cachedStyles[username];
     if (Array.isArray(entry)) return entry[0] || null;
     if (typeof entry === 'string') return entry;
+    return null;
+}
+
+export function getExternalUserColor(username) {
+    const jsText = window.CHANNEL && CHANNEL.js;
+    if (!jsText) return null;
+    if (jsText !== _cachedSourceText) {
+        _cachedSourceText = jsText;
+        _cachedStyles = parseUserStyles(jsText);
+    }
+    if (!_cachedStyles) return null;
+    const entry = _cachedStyles[username];
+    if (Array.isArray(entry)) return entry[1] || null;
     return null;
 }

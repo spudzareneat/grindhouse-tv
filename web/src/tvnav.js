@@ -5,19 +5,12 @@ import { hideTriviaCard } from './cards/trivia.js';
 import { hideNowPlayingCard } from './cards/nowplaying.js';
 import { hideLineupScreen, stepLineupSection } from './lineup/screen.js';
 import { hideUpNextCard } from './cards/upnext.js';
-import { closeLinkPip } from './cards/linkpip.js';
-import { closeEmotesPanel } from './cards/emotepicker.js';
 import { pickDirectional } from './tvnav/geometry.js';
 import { getDesyncLiveSeconds } from './mediatime.js';
 
 // Let other UI (settings modal) place the remote's focus ring on an element.
 // settings.js reads tvNavState.setFocus instead of a bare reassignable binding.
-// preBackHooks: transient, non-overlay popups (e.g. the link-pip "View this?" prompt)
-// that need to consume a Back press without joining the OVERLAY_IDS/overlayFocusStack
-// system register a `() => boolean` here — return true to consume the press. Keeps
-// tvnav.js from having to import those modules directly (they already import
-// tvNavState FROM here to request focus; this avoids a circular import back).
-export const tvNavState = { setFocus: null, preBackHooks: [] };
+export const tvNavState = { setFocus: null };
 
 // Self-contained D-pad navigation for the /login page. None of the channel UI
 // (or its CSS, or the module-level isTv) runs here, so this re-detects TV and
@@ -121,6 +114,24 @@ export function initTvNav() {
     let focusEl = null;
     let overlayFocusStack = [];
 
+    // The orange D-pad focus ring fades out RING_IDLE_MS after the last remote press
+    // so it isn't parked over a movie. focusEl is kept intact -- the next press just
+    // re-lights the ring where it was (no move). Re-armed on every __scTvKey call.
+    let ringIdleTimer = null;
+    let ringHidden = false;
+    const RING_IDLE_MS = 10000;
+
+    function hideRingIdle() {
+        // Drop the ring visually only -- keep focusEl + overlay stack, don't blur or
+        // release holdScrubber -- so the next press restores exactly where we were.
+        document.querySelectorAll('.sc-tv-focus').forEach(e => e.classList.remove('sc-tv-focus'));
+        ringHidden = true;
+    }
+    function armRingIdle() {
+        clearTimeout(ringIdleTimer);
+        ringIdleTimer = setTimeout(hideRingIdle, RING_IDLE_MS);
+    }
+
     const isVisible = (el) => {
         if (!el || !el.getBoundingClientRect) return false;
         const r = el.getBoundingClientRect();
@@ -132,12 +143,11 @@ export function initTvNav() {
     };
 
     // Topmost interactive overlay (poster strip excluded so its toggle stays reachable)
-    const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card', 'sc-upnext-card', 'sc-link-pip-panel', 'sc-emotes-panel', 'sc-lineup-screen', 'sc-subtitles-picker', 'sc-subtitles-manage'];
+    const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card', 'sc-upnext-card', 'sc-lineup-screen', 'sc-subtitles-picker', 'sc-subtitles-manage'];
     const isOverlayOpen = (id, o) => !!(o && isVisible(o) &&
         (id !== 'sc-np-card' || o.classList.contains('sc-np-visible')) &&
         (id !== 'sc-upnext-card' || o.classList.contains('sc-upnext-visible')) &&
         (id !== 'sc-trivia-card' || o.classList.contains('sc-show')) &&
-        (id !== 'sc-link-pip-panel' || o.classList.contains('sc-link-pip-visible')) &&
         (id !== 'sc-lineup-screen' || o.classList.contains('sc-lineup-visible')));
     const openOverlay = () => {
         for (const id of OVERLAY_IDS) {
@@ -252,6 +262,7 @@ export function initTvNav() {
         try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e) {}
         holdScrubber(false);
         focusEl = null;
+        ringHidden = false;
     }
 
     // Back-from-overlay restores focus to whatever opened it (settings gear, trivia
@@ -282,6 +293,7 @@ export function initTvNav() {
         // new one. querySelectorAll (not just focusEl) so a stale ring can't survive.
         document.querySelectorAll('.sc-tv-focus').forEach(e => { if (e !== el) e.classList.remove('sc-tv-focus'); });
         focusEl = el;
+        ringHidden = false;
         el.classList.add('sc-tv-focus');
         try { el.focus({ preventScroll: true }); } catch (e) {}
         try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
@@ -604,9 +616,6 @@ export function initTvNav() {
     }
 
     function closeTop() {
-        // Transient popups outside the OVERLAY_IDS/overlayFocusStack system (e.g. the
-        // link-pip "View this?" prompt) get first crack at consuming Back.
-        for (const hook of tvNavState.preBackHooks) { if (hook()) return true; }
         // Innermost first: an open captions/quality menu closes back to its button.
         const menu = openVjsMenu();
         if (menu) {
@@ -637,10 +646,6 @@ export function initTvNav() {
         if (np && np.classList.contains('sc-np-visible')) { hideNowPlayingCard(); restoreFocusAfterOverlayClose(); return true; }
         const upNext = document.getElementById('sc-upnext-card');
         if (upNext && upNext.classList.contains('sc-upnext-visible')) { hideUpNextCard(); restoreFocusAfterOverlayClose(); return true; }
-        const linkPip = document.getElementById('sc-link-pip-panel');
-        if (linkPip && linkPip.classList.contains('sc-link-pip-visible')) { closeLinkPip(); restoreFocusAfterOverlayClose(); return true; }
-        const emotes = document.getElementById('sc-emotes-panel');
-        if (emotes && isVisible(emotes)) { closeEmotesPanel(); restoreFocusAfterOverlayClose(); return true; }
         const lineup = document.getElementById('sc-lineup-screen');
         if (lineup && lineup.classList.contains('sc-lineup-visible')) { hideLineupScreen(); restoreFocusAfterOverlayClose(); return true; }
         for (const id of ['sc-users-panel', 'sc-poll-panel']) {
@@ -678,7 +683,20 @@ export function initTvNav() {
 
     window.__scTvKey = function (dir, repeatCount) {
         try {
+            armRingIdle();
+            // Ring faded out while idle -- first press just brings it back where it
+            // was, it does not move (Back still falls through to normal handling).
+            if (ringHidden && dir !== 'back') {
+                ringHidden = false;
+                if (focusEl && focusEl.isConnected) {
+                    focusEl.classList.add('sc-tv-focus');
+                    try { focusEl.focus({ preventScroll: true }); } catch (e) {}
+                }
+                revealChrome();
+                return;
+            }
             if (dir === 'back') {
+                ringHidden = false;
                 if (!closeTop()) { try { if (window.CytubeNative && CytubeNative.tvBack) CytubeNative.tvBack(); } catch (e) {} }
                 return;
             }
@@ -687,4 +705,6 @@ export function initTvNav() {
             else move(dir, repeatCount || 0);
         } catch (e) { /* never let remote nav throw */ }
     };
+
+    armRingIdle();
 }
