@@ -71,6 +71,14 @@ TV devices don't ship with a browser, so the easiest path is the free **Download
 4. Downloader fetches the APK and offers to install it — choose **Install**. Click through the same **Play Protect / unknown developer** prompt as above (**More details → Install anyway**).
 5. After installing, you can delete the downloaded APK when Downloader offers, to save space.
 
+### Fire TV: optional widescreen tile
+
+Fire TV shows sideloaded apps with a square icon instead of the widescreen banner. For a wide
+tile, also install the small **[Fire TV launcher](../../releases/download/firetv-launcher/grindhouse-firetv-launcher.apk)**
+(in Downloader: `https://github.com/spudzareneat/grindhouse-tv/releases/download/firetv-launcher/grindhouse-firetv-launcher.apk`).
+It's a shortcut that just opens Grindhouse — keep Grindhouse itself installed, and move the new
+tile to your favourites row. It never needs updating. Not needed on Android TV / Google TV.
+
 ## Settings
 
 Open the **⚙ settings** (in the control drawer) to:
