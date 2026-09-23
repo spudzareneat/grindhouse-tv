@@ -48,10 +48,23 @@
                 <action android:name="android.intent.action.MAIN" />
                 <!-- Phone/tablet launcher -->
                 <category android:name="android.intent.category.LAUNCHER" />
-                <!-- Android TV home-screen launcher -->
-                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- TV home-screen launcher. A separate alias so its icon can be the wide banner:
+             Fire TV ignores android:banner for sideloaded apps and draws android:icon instead. -->
+        <activity-alias
+            android:name=".TvLauncher"
+            android:targetActivity=".MainActivity"
+            android:exported="true"
+            android:icon="@drawable/tv_banner_img"
+            android:roundIcon="@drawable/tv_banner_img"
+            android:banner="@drawable/tv_banner_img">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
     </application>
 
 </manifest>
