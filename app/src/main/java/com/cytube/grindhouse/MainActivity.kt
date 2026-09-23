@@ -69,6 +69,11 @@ class MainActivity : AppCompatActivity() {
     private var webViewUa: String = ""           // browser UA, reused for native Drive stream fetches
     private var mediaProxy: LocalMediaProxy? = null  // localhost server that proxies Drive streams
     private var stoppedAtMs = 0L                  // >0 once onStop ran; gates the on-resume player health check
+    // Left in the background this long, the app closes itself so the next launch starts clean
+    // (Fire OS never kills it on Home, and a long-frozen WebView resumes into a dead player/socket).
+    private val BACKGROUND_EXIT_MS = 10 * 60_000L
+    private val backgroundExitHandler = Handler(Looper.getMainLooper())
+    private val backgroundExit = Runnable { finishAndRemoveTask() }
     private lateinit var fullscreenContainer: FrameLayout
     private lateinit var prefs: SharedPreferences
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
@@ -797,10 +802,16 @@ class MainActivity : AppCompatActivity() {
             webView.pauseTimers()
             stoppedAtMs = SystemClock.elapsedRealtime()
         }
+        // Skip while casting: this app is the cast conductor, and closing it ends the cast.
+        val casting = castContext?.sessionManager?.currentCastSession?.isConnected == true
+        if (!isChangingConfigurations && !isInPictureInPictureMode && !casting) {
+            backgroundExitHandler.postDelayed(backgroundExit, BACKGROUND_EXIT_MS)
+        }
     }
 
     override fun onStart() {
         super.onStart()
+        backgroundExitHandler.removeCallbacks(backgroundExit)
         if (::webView.isInitialized) {
             webView.resumeTimers()
             webView.onResume()
@@ -836,6 +847,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        backgroundExitHandler.removeCallbacks(backgroundExit)
         mediaProxy?.stop()
         mediaProxy = null
         stopConductor()
