@@ -698,6 +698,72 @@
     return null;
   }
 
+  // src/emojisupport.js
+  var TWEMOJI_BASE = "https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/svg/";
+  function twemojiUrl(str) {
+    let cps = [...str].map((c) => c.codePointAt(0));
+    if (!cps.includes(8205)) cps = cps.filter((cp) => cp !== 65039);
+    return TWEMOJI_BASE + cps.map((cp) => cp.toString(16)).join("-") + ".svg";
+  }
+  var _renders = /* @__PURE__ */ new Map();
+  var _canvas = null;
+  function emojiRenders(str) {
+    if (_renders.has(str)) return _renders.get(str);
+    let ok = true;
+    try {
+      if (!_canvas) {
+        _canvas = document.createElement("canvas");
+        _canvas.width = _canvas.height = 40;
+      }
+      const ctx = _canvas.getContext("2d");
+      ctx.clearRect(0, 0, 40, 40);
+      ctx.fillStyle = "#000";
+      ctx.textBaseline = "top";
+      ctx.font = "32px sans-serif";
+      ctx.fillText(str, 2, 2);
+      const d = ctx.getImageData(0, 0, 40, 40).data;
+      ok = false;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] && (d[i] !== d[i + 1] || d[i + 1] !== d[i + 2])) {
+          ok = true;
+          break;
+        }
+      }
+    } catch (e) {
+      ok = true;
+    }
+    _renders.set(str, ok);
+    return ok;
+  }
+  var _needs = null;
+  function needsEmojiFallback() {
+    if (_needs === null) {
+      let forced = false;
+      try {
+        forced = localStorage.getItem("scForceEmojiFallback") === "1";
+      } catch (e) {
+      }
+      _needs = forced || !emojiRenders("🟢");
+    }
+    return _needs;
+  }
+  function shouldSwapEmoji(str) {
+    if (!str || !needsEmojiFallback()) return false;
+    let forced = false;
+    try {
+      forced = localStorage.getItem("scForceEmojiFallback") === "1";
+    } catch (e) {
+    }
+    return forced || !emojiRenders(str);
+  }
+  function _esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function emojiSlotHtml(str, cls, textHtml) {
+    if (!shouldSwapEmoji(str)) return `<span class="${cls}">${textHtml}</span>`;
+    return `<span class="${cls}"><img class="sc-emoji-img" alt="${_esc(str)}" src="${twemojiUrl(str)}" onerror="this.replaceWith(this.alt)"></span>`;
+  }
+
   // src/socket.js
   function whenSocket(cb, tries = 120) {
     const s = typeof window !== "undefined" && window.socket;
@@ -3645,7 +3711,7 @@
             ${users.map((u) => {
         const color = usernameToColor(u.name);
         const emoji = getExternalUserEmoji(u.name);
-        const emojiHtml = emoji ? `<span class="sc-users-panel-emoji">${emoji}</span>` : "";
+        const emojiHtml = emoji ? emojiSlotHtml(emoji, "sc-users-panel-emoji", emoji) : "";
         const afkClass = u.afk ? " sc-users-panel-afk" : "";
         return `<div class="sc-users-panel-name${afkClass}" style="color:${color}">${emojiHtml}${u.name}</div>`;
       }).join("")}
@@ -3751,7 +3817,7 @@
     return { username, color: usernameToColor(username), emoji: getExternalUserEmoji(username), html };
   }
   function renderSubtitleLine(line) {
-    const emojiHtml = line.emoji ? `<span class="sc-subtitle-emoji">${_escHtml2(line.emoji)}</span>` : "";
+    const emojiHtml = line.emoji ? emojiSlotHtml(line.emoji, "sc-subtitle-emoji", _escHtml2(line.emoji)) : "";
     return `<div class="sc-subtitle-pill">${emojiHtml}<span class="sc-subtitle-name" style="color:${line.color}">${_escHtml2(line.username)}:</span> <span class="sc-subtitle-text">${line.html}</span></div>`;
   }
   function ensureContainer() {
@@ -6642,9 +6708,17 @@
       if (killCount !== null) statParts.push(`💀 ${killCount} on-screen kills`);
       if (parentalGuide && parentalGuide.length) {
         const PG_SEV_DOT = { Severe: "🔴", Moderate: "🟡", Mild: "🟢", None: "" };
+        const cssDots = needsEmojiFallback();
         parentalGuide.forEach(({ category, severity }) => {
           const dot = PG_SEV_DOT[severity] || "";
-          if (dot) statParts.push(`${dot} ${category}`);
+          if (!dot) return;
+          if (cssDots) {
+            const sev = document.createElement("span");
+            sev.className = `sc-sev-dot sc-sev-${severity.toLowerCase()}`;
+            statParts.push([sev, ` ${category}`]);
+          } else {
+            statParts.push(`${dot} ${category}`);
+          }
         });
       }
       const lastAired = getLastAired(cleanTitle || title, cleanYear || year);
@@ -6658,7 +6732,14 @@
           if (movieState.lastMovieTitle !== rawTitle) return;
           const statsEl = document.createElement("div");
           statsEl.id = "sc-movie-stats";
-          statsEl.textContent = statParts.join("  ·  ");
+          if (statParts.every((p) => typeof p === "string")) {
+            statsEl.textContent = statParts.join("  ·  ");
+          } else {
+            statParts.forEach((p, i) => {
+              if (i) statsEl.append("  ·  ");
+              statsEl.append(...[].concat(p));
+            });
+          }
           document.body.appendChild(statsEl);
           if (typeof chromeState.pinChromeVisible === "function") chromeState.pinChromeVisible();
           setTimeout(() => {
@@ -8500,6 +8581,21 @@
                 line-height: 1;
                 margin-right: 2px;
             }
+            /* Old-emoji-font fallback (emojisupport.js): Twemoji image in the same slot */
+            #messagebuffer .username.sc-emoji-img[data-emoji]::before {
+                content: "";
+                height: 1em;
+                background: var(--sc-emoji-img) center / contain no-repeat;
+            }
+            img.sc-emoji-img { width: 1em; height: 1em; vertical-align: -0.15em; }
+            /* CSS severity dots for the stats bar where 🟡/🟢 can't render */
+            .sc-sev-dot {
+                display: inline-block; width: 0.8em; height: 0.8em;
+                border-radius: 50%; vertical-align: -0.05em;
+            }
+            .sc-sev-severe { background: #e53935; }
+            .sc-sev-moderate { background: #fdd835; }
+            .sc-sev-mild { background: #43a047; }
             #messagebuffer .sc-own-msg {
                 background: rgba(125, 200, 255, 0.07) !important;
                 margin: 0 -4px !important; padding: 1px 4px !important;
@@ -10952,7 +11048,13 @@
         span.style.setProperty("font-weight", "700", "important");
         span.dataset.scColored = u;
         const emoji = getExternalUserEmoji(u);
-        if (emoji) span.dataset.emoji = emoji;
+        if (emoji) {
+          span.dataset.emoji = emoji;
+          if (shouldSwapEmoji(emoji)) {
+            span.classList.add("sc-emoji-img");
+            span.style.setProperty("--sc-emoji-img", `url("${twemojiUrl(emoji)}")`);
+          }
+        }
       }
       el.classList.toggle("sc-own-msg", !!(window.CLIENT && CLIENT.name && u === CLIENT.name));
     }

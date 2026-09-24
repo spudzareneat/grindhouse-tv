@@ -8,6 +8,7 @@ import { isTv } from './tvdetect.js';
 import { chromeState } from './chrome/state.js';
 import { updateSubtitleButton } from './subtitles/ui.js';
 import { renderTriviaPopupButton } from './cards/triviapopup.js';
+import { needsEmojiFallback } from './emojisupport.js';
 
 // Auto-announce hold time for the Now-Playing card (see showNowPlayingCard's opts.autoHideMs).
 const NP_AUTO_HIDE_MS = isTv ? 10000 : 8000;
@@ -207,9 +208,18 @@ function injectMovieLinks(titleEl) {
         // same compact format as the sibling PC userscript's stats bar.
         if (parentalGuide && parentalGuide.length) {
             const PG_SEV_DOT = { Severe: '🔴', Moderate: '🟡', Mild: '🟢', None: '' };
+            // Old emoji fonts (Android 9 / Fire OS 7) lack 🟡/🟢 -- draw CSS dots there instead.
+            const cssDots = needsEmojiFallback();
             parentalGuide.forEach(({ category, severity }) => {
                 const dot = PG_SEV_DOT[severity] || '';
-                if (dot) statParts.push(`${dot} ${category}`);
+                if (!dot) return;
+                if (cssDots) {
+                    const sev = document.createElement('span');
+                    sev.className = `sc-sev-dot sc-sev-${severity.toLowerCase()}`;
+                    statParts.push([sev, ` ${category}`]);
+                } else {
+                    statParts.push(`${dot} ${category}`);
+                }
             });
         }
         const lastAired = getLastAired(cleanTitle || title, cleanYear || year);
@@ -230,7 +240,14 @@ function injectMovieLinks(titleEl) {
                 if (movieState.lastMovieTitle !== rawTitle) return; // superseded by a newer title
                 const statsEl = document.createElement('div');
                 statsEl.id = 'sc-movie-stats';
-                statsEl.textContent = statParts.join('  ·  ');
+                if (statParts.every(p => typeof p === 'string')) {
+                    statsEl.textContent = statParts.join('  ·  ');
+                } else {
+                    statParts.forEach((p, i) => {
+                        if (i) statsEl.append('  ·  ');
+                        statsEl.append(...[].concat(p));
+                    });
+                }
                 document.body.appendChild(statsEl);
                 // Pin the scrubber bar (+ docked button cluster, vertical mode) open for as
                 // long as this is up -- they read as one announcement and should disappear

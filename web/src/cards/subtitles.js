@@ -1,6 +1,7 @@
 import { getKey, LS_SUBTITLE_OPACITY, LS_SUBTITLE_FONTSIZE, LS_SUBTITLE_LINES } from '../store.js';
 import { usernameToColor } from '../usercolors.js';
 import { getExternalUserEmoji } from '../useremoji.js';
+import { emojiSlotHtml } from '../emojisupport.js';
 
 /* ==========================================================
    CHAT-AS-SUBTITLES OVERLAY
@@ -81,7 +82,7 @@ export function extractSubtitleLine(msgEl) {
 }
 
 function renderSubtitleLine(line) {
-    const emojiHtml = line.emoji ? `<span class="sc-subtitle-emoji">${_escHtml(line.emoji)}</span>` : '';
+    const emojiHtml = line.emoji ? emojiSlotHtml(line.emoji, 'sc-subtitle-emoji', _escHtml(line.emoji)) : '';
     return `<div class="sc-subtitle-pill">${emojiHtml}` +
         `<span class="sc-subtitle-name" style="color:${line.color}">${_escHtml(line.username)}:</span> ` +
         `<span class="sc-subtitle-text">${line.html}</span></div>`;

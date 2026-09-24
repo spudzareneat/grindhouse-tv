@@ -17,6 +17,7 @@ import { isStuck, pinChatToBottom } from './chat/stickbottom.js';
 import { layoutDock } from './chrome/dock.js';
 import { usernameToColor } from './usercolors.js';
 import { getExternalUserEmoji, getExternalUserColor } from './useremoji.js';
+import { shouldSwapEmoji, twemojiUrl } from './emojisupport.js';
 import { nativeHttpGet } from './native.js';
 import { initPhoneKeyboard } from './chat/keyboard.js';
 import { renderQrToCanvas } from './vendor/qr.js';
@@ -466,7 +467,13 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
             // data attribute + CSS ::before, not textContent, so autocomplete/mention
             // matching (which reads the raw name) is unaffected.
             const emoji = getExternalUserEmoji(u);
-            if (emoji) span.dataset.emoji = emoji;
+            if (emoji) {
+                span.dataset.emoji = emoji;
+                if (shouldSwapEmoji(emoji)) {
+                    span.classList.add('sc-emoji-img');
+                    span.style.setProperty('--sc-emoji-img', `url("${twemojiUrl(emoji)}")`);
+                }
+            }
         }
         el.classList.toggle('sc-own-msg', !!(window.CLIENT && CLIENT.name && u === CLIENT.name));
     }

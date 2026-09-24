@@ -739,6 +739,21 @@
                 line-height: 1;
                 margin-right: 2px;
             }
+            /* Old-emoji-font fallback (emojisupport.js): Twemoji image in the same slot */
+            #messagebuffer .username.sc-emoji-img[data-emoji]::before {
+                content: "";
+                height: 1em;
+                background: var(--sc-emoji-img) center / contain no-repeat;
+            }
+            img.sc-emoji-img { width: 1em; height: 1em; vertical-align: -0.15em; }
+            /* CSS severity dots for the stats bar where 🟡/🟢 can't render */
+            .sc-sev-dot {
+                display: inline-block; width: 0.8em; height: 0.8em;
+                border-radius: 50%; vertical-align: -0.05em;
+            }
+            .sc-sev-severe { background: #e53935; }
+            .sc-sev-moderate { background: #fdd835; }
+            .sc-sev-mild { background: #43a047; }
             #messagebuffer .sc-own-msg {
                 background: rgba(125, 200, 255, 0.07) !important;
                 margin: 0 -4px !important; padding: 1px 4px !important;
