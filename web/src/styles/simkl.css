@@ -1,0 +1,111 @@
+            /* Simkl scrobble card (cards/simkl.js). Port of the userscript's style minus its
+               backdrop-filter blur -- blurring live video every frame is expensive on low-end
+               Fire Stick GPUs, so the card uses a near-opaque solid background instead. */
+            #sc-simkl-panel {
+                position: fixed !important;
+                z-index: 15500 !important; /* above video chrome, below settings/review modals */
+                box-sizing: border-box !important;
+                width: 340px !important; max-width: calc(100vw - 32px) !important;
+                padding: 14px 14px 18px !important;
+                background: rgba(14, 14, 18, 0.92) !important;
+                border: 1px solid rgba(255, 255, 255, 0.10) !important;
+                border-radius: 14px !important;
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+                color: #ececf1 !important;
+                font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif !important;
+                font-size: 13px !important; line-height: 1.4 !important;
+                overflow: hidden !important;
+                opacity: 0 !important; transform: translateY(8px) !important;
+                transition: opacity 0.3s ease, transform 0.3s ease !important;
+            }
+            #sc-simkl-panel.sc-simkl-in  { opacity: 1 !important; transform: translateY(0) !important; }
+            #sc-simkl-panel.sc-simkl-out { opacity: 0 !important; transform: translateY(8px) !important; }
+            #sc-simkl-panel * { box-sizing: border-box !important; font-family: inherit !important; }
+
+            #sc-simkl-panel .sc-simkl-row  { display: flex !important; gap: 12px !important; align-items: flex-start !important; }
+            #sc-simkl-panel .sc-simkl-poster {
+                flex: 0 0 auto !important; width: 60px !important; height: 90px !important;
+                object-fit: cover !important; border-radius: 8px !important;
+                background: rgba(255, 255, 255, 0.06) !important;
+            }
+            #sc-simkl-panel .sc-simkl-noposter {
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                font-size: 22px !important; color: rgba(236, 236, 241, 0.5) !important;
+            }
+            #sc-simkl-panel .sc-simkl-main  { flex: 1 1 auto !important; min-width: 0 !important; }
+            #sc-simkl-panel .sc-simkl-title {
+                font-size: 15px !important; font-weight: 600 !important; line-height: 1.25 !important;
+                margin: 0 0 6px !important; color: #f4f4f7 !important;
+                overflow: hidden !important; text-overflow: ellipsis !important; display: -webkit-box !important;
+                -webkit-line-clamp: 2 !important; -webkit-box-orient: vertical !important;
+            }
+            #sc-simkl-panel .sc-simkl-year { font-weight: 400 !important; color: rgba(236, 236, 241, 0.55) !important; }
+            #sc-simkl-panel .sc-simkl-q    { font-size: 13px !important; color: rgba(236, 236, 241, 0.85) !important; margin: 0 0 8px !important; }
+            #sc-simkl-panel .sc-simkl-ok   { color: #7fd99a !important; font-weight: 600 !important; }
+            #sc-simkl-panel .sc-simkl-bad  { color: #ff8a8c !important; }
+            #sc-simkl-panel .sc-simkl-help { font-size: 12px !important; color: rgba(236, 236, 241, 0.62) !important; margin: 0 0 6px !important; }
+
+            #sc-simkl-panel .sc-simkl-stars { display: flex !important; gap: 1px !important; margin: 0 0 2px -2px !important; }
+            #sc-simkl-panel .sc-simkl-star {
+                background: none !important; border: 0 !important; box-shadow: none !important;
+                padding: 0 1px !important; margin: 0 !important; cursor: pointer !important;
+                font-size: 18px !important; line-height: 1 !important; color: rgba(255, 255, 255, 0.24) !important;
+            }
+            #sc-simkl-panel .sc-simkl-star.on { color: #ed2224 !important; }
+            #sc-simkl-panel .sc-simkl-rating-label { font-size: 11px !important; color: rgba(236, 236, 241, 0.5) !important; margin: 0 0 10px !important; }
+
+            #sc-simkl-panel .sc-simkl-actions { display: flex !important; gap: 8px !important; flex-wrap: wrap !important; }
+            #sc-simkl-panel .sc-simkl-btn {
+                appearance: none !important; cursor: pointer !important;
+                padding: 7px 12px !important; margin: 0 !important; border-radius: 8px !important;
+                background: rgba(255, 255, 255, 0.07) !important; color: #ececf1 !important;
+                border: 1px solid rgba(255, 255, 255, 0.16) !important; box-shadow: none !important;
+                font-size: 12.5px !important; font-weight: 500 !important; line-height: 1.2 !important;
+            }
+            #sc-simkl-panel .sc-simkl-primary { background: #ed2224 !important; border-color: #ed2224 !important; color: #fff !important; font-weight: 600 !important; }
+
+            #sc-simkl-panel .sc-simkl-link {
+                display: inline-block !important; margin-top: 8px !important;
+                font-size: 11.5px !important; color: rgba(236, 236, 241, 0.6) !important; text-decoration: underline !important;
+            }
+            #sc-simkl-panel .sc-simkl-help .sc-simkl-link { margin: 0 !important; font-size: inherit !important; color: #ff8a8c !important; }
+
+            #sc-simkl-panel .sc-simkl-code {
+                margin: 4px 0 8px !important; padding: 8px 12px !important; text-align: center !important;
+                font-family: ui-monospace, "Cascadia Mono", Consolas, "Roboto Mono", monospace !important;
+                font-size: 22px !important; font-weight: 600 !important; letter-spacing: 0.18em !important;
+                background: rgba(255, 255, 255, 0.07) !important; border-radius: 8px !important; color: #fff !important;
+            }
+            #sc-simkl-panel .sc-simkl-qr {
+                display: block !important; margin: 6px auto !important; width: 132px !important; height: auto !important;
+                background: #fff !important; padding: 8px !important; border-radius: 8px !important;
+                image-rendering: pixelated !important;
+            }
+
+            #sc-simkl-panel .sc-simkl-life { position: absolute !important; left: 0 !important; right: 0 !important; bottom: 0 !important; height: 3px !important; background: rgba(255, 255, 255, 0.06) !important; }
+            #sc-simkl-panel .sc-simkl-life-bar { height: 100% !important; width: 100% !important; background: rgba(236, 236, 241, 0.35) !important; transition: width 1s linear !important; }
+
+            /* 10-foot sizing: bigger text and star targets for the remote */
+            body.sc-tv #sc-simkl-panel { width: 420px !important; font-size: 16px !important; padding: 18px 18px 22px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-title { font-size: 19px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-q { font-size: 16px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-help { font-size: 14px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-star { font-size: 24px !important; padding: 2px 3px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-rating-label { font-size: 14px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-btn { font-size: 16px !important; padding: 9px 16px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-link { font-size: 14px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-poster { width: 80px !important; height: 120px !important; }
+
+            /* Settings (not the card): the device code + QR shown under the Test button */
+            #sc-simkl-fields.sc-hidden, #sc-simkl-signin.sc-hidden, #sc-simkl-signin-qr.sc-hidden { display: none !important; }
+            #sc-settings-overlay .sc-simkl-set-code {
+                margin: 6px 0 !important; padding: 8px 12px !important; text-align: center !important;
+                font-family: ui-monospace, "Cascadia Mono", Consolas, "Roboto Mono", monospace !important;
+                font-size: 20px !important; font-weight: 600 !important; letter-spacing: 0.18em !important;
+                background: rgba(255, 255, 255, 0.08) !important; border-radius: 6px !important; color: #fff !important;
+            }
+            #sc-settings-overlay .sc-simkl-set-qr {
+                display: block !important; margin: 8px auto !important; width: min(100%, 200px) !important; height: auto !important;
+                background: #fff !important; padding: 10px !important; border-radius: 10px !important;
+                image-rendering: pixelated !important;
+            }

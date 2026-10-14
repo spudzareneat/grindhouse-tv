@@ -12,6 +12,9 @@ const DEFS = {
     lineupTiming: { key: 'sc_lineup_timing',      type: 'onbool', def: false },          // Experimental; off by default
     triviaPopup:  { key: 'sc_trivia_popup',       type: 'onbool', def: false },          // Experimental; off by default
     triviaPopupFreq: { key: 'sc_trivia_popup_freq', type: 'string', def: 'occasional' }, // 'frequent' | 'occasional' | 'rare'
+    simklEnabled: { key: 'sc_simkl_enabled',      type: 'onbool', def: false },          // opt-in end-of-movie Simkl card
+    simklClientId: { key: 'sc_simkl_client_id',   type: 'string', def: '' },             // the user's own Simkl app Client ID
+    simklThreshold: { key: 'sc_simkl_threshold',  type: 'number', def: 90 },             // % of runtime; clamped 50-100 in simkl/helpers.js
     chatMode:     { key: 'sc_chat_mode',          type: 'string', def: 'sidebar' },
     vertSplit:    { key: 'sc_vert_split',         type: 'number', def: 50 },
     updateCache:  { key: 'sc_update_cache',       type: 'json',   def: null },

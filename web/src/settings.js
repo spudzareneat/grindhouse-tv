@@ -25,6 +25,7 @@ import { _appVersion, checkForUpdate, initUpdateCheck, _updateInfo, GH_RELEASES_
 import {
     LS_TMDB, LS_ONBOARDED, LS_SPELLCHECK, LS_CHAT_FONT, LS_COUCH, LS_WATCHALONG, LS_CAST_MUTE, LS_LINEUP_TIMING, LS_AUTOEMBED, LS_TRIVIA_POPUP, LS_TRIVIA_POPUP_FREQ,
     LS_SUBTITLE_OPACITY, LS_SUBTITLE_FONTSIZE, LS_SUBTITLE_LINES, LS_OPENSUBTITLES,
+    LS_SIMKL_ENABLED, LS_SIMKL_CLIENT_ID, LS_SIMKL_THRESHOLD, simklEnabled, simklClientId, simklThresholdRaw,
     getKey, setKey, hasKey, spellCheckEnabled, couchModeEnabled, watchAlongEnabled, castFallbackMuted, lineupTimingEnabled, autoEmbedEnabled, triviaPopupEnabled, triviaPopupFrequency,
 } from './store.js';
 import { fetchImdbParentalGuide } from './metadata/imdb.js';
@@ -33,6 +34,9 @@ import { movieState, getKillCountDb, validateTmdbKey } from './metadata/tmdb.js'
 import { validateOpensubtitlesKey } from './subtitles/opensubtitles.js';
 import { npState, showNowPlayingCard, hideNowPlayingCard, initNowPlayingWatcher } from './cards/nowplaying.js';
 import { triviaPopupBoot, renderTriviaPopupButton } from './cards/triviapopup.js';
+import { simklBoot } from './cards/simkl.js';
+import { simklConnectAndVerify } from './simkl/client.js';
+import { simklClampThreshold, simklVerificationLink, simklEsc, SIMKL_THRESHOLD_MIN, SIMKL_THRESHOLD_MAX } from './simkl/helpers.js';
 import {
     initSubtitles, startSubtitlesObserver, refreshSubtitles,
     getSubtitleOpacity, getSubtitleFontSize, getSubtitleLines,
@@ -50,6 +54,7 @@ import { initChannelScriptAutoApprove } from './channelscript.js';
 import baseCss from './styles/base.css';
 import overlaysCss from './styles/overlays.css';
 import tvCss from './styles/tv.css';
+import simklCss from './styles/simkl.css';
 
 // Trivia pop-up frequency, as a slider (0-2) instead of a <select> -- a native <select>'s
 // OS-level dropdown popup is unreachable by a TV remote (see tvnav.js's move()/activate() D-pad
@@ -57,9 +62,9 @@ import tvCss from './styles/tv.css';
 // line-count control below are the two concrete instances, converted instead of relying on that
 // fix so the UI itself doesn't still look/feel like a dropdown you're expected to open).
 const TRIVIA_FREQ_STEPS = [
-    { value: 'frequent',   label: 'Frequent — about once a minute' },
-    { value: 'occasional', label: 'Occasional — every few minutes' },
-    { value: 'rare',       label: 'Rare — every 8–15 minutes' },
+    { value: 'frequent',   label: 'Frequent — about once a minute (all timed facts)' },
+    { value: 'occasional', label: 'Occasional — every few minutes (the better timed facts)' },
+    { value: 'rare',       label: 'Rare — every 8–15 minutes (only the best timed facts)' },
 ];
 const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => s.value === value));
 
@@ -586,6 +591,39 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
                         </div>
                     </div>
 
+                    <div class="sc-settings-group sc-settings-divider">
+                        <label class="sc-settings-toggle-label">
+                            <span class="sc-toggle-row">
+                                <input type="checkbox" id="sc-input-simkl-enable" ${simklEnabled() ? 'checked' : ''} />
+                                <span class="sc-toggle-text">Log finished movies on Simkl</span>
+                            </span>
+                            <span class="sc-settings-note">Near the end of a movie, a small card offers to add it (and an optional 1–10 rating) to your simkl.com watch history. Movies only — not YouTube or TV episodes.</span>
+                        </label>
+                        <div id="sc-simkl-fields" class="${simklEnabled() ? '' : 'sc-hidden'}">
+                            <div class="sc-settings-input-row">
+                                <input id="sc-input-simkl-clientid" class="sc-settings-input" type="text"
+                                    placeholder="Paste Simkl Client ID…" value="${simklEsc(simklClientId())}" spellcheck="false" />
+                                <button id="sc-test-simkl" class="sc-settings-test" type="button">Test</button>
+                            </div>
+                            <span id="sc-test-simkl-status" class="sc-settings-test-status"></span>
+                            <div id="sc-simkl-signin" class="sc-hidden">
+                                <div class="sc-settings-note" id="sc-simkl-signin-help"></div>
+                                <div class="sc-simkl-set-code" id="sc-simkl-signin-code"></div>
+                                <canvas id="sc-simkl-signin-qr" class="sc-simkl-set-qr"></canvas>
+                            </div>
+                            <span class="sc-settings-note">Register a free app at simkl.com/settings/developer (choose <b>TV, devices &amp; command line</b>), paste its Client ID, then press Test to sign in. No secret needed.</span>
+                            <a class="sc-settings-link" href="https://simkl.com/settings/developer/" target="_blank" rel="noopener">
+                                Register a free Simkl app ↗
+                            </a>
+                            <label class="sc-settings-label" style="margin-top:8px">
+                                Show the card at
+                                <span class="sc-settings-note" id="sc-simkl-threshold-val">${simklClampThreshold(simklThresholdRaw())}% of the movie</span>
+                            </label>
+                            <input type="range" id="sc-input-simkl-threshold" class="sc-settings-range"
+                                min="${SIMKL_THRESHOLD_MIN}" max="${SIMKL_THRESHOLD_MAX}" step="5" value="${simklClampThreshold(simklThresholdRaw())}" />
+                        </div>
+                    </div>
+
                     <div class="sc-settings-group">
                         <label class="sc-settings-label">CyTube Account
                             <span class="sc-settings-note">Opens the CyTube login page — your settings here are saved first</span>
@@ -650,7 +688,7 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
                                 <input type="checkbox" id="sc-input-triviapopup" ${triviaPopupEnabled() ? 'checked' : ''} />
                                 <span class="sc-toggle-text">Pop-up trivia bubbles during movies (Experimental)</span>
                             </span>
-                            <span class="sc-settings-note">Shows a small IMDb trivia fact over the video, VH1 Pop-up Video style, then fades out. Off by default. Cycles without repeats and stops once all trivia for the current movie has been shown.</span>
+                            <span class="sc-settings-note">Shows a small trivia fact over the video, VH1 Pop-up Video style, then fades out. Off by default. Movies with curated Pop-up Video trivia get hand-picked facts timed to the movie — everyone in the channel sees each one at the same moment, and ones you missed by joining late show up in the gaps. Other movies fall back to IMDb trivia at random intervals. ${isTv ? 'Movies Joe Bob Briggs reviewed open with his Drive-In Totals card. ' : ''}Facts never repeat, and that's remembered for a few hours so an app restart won't re-show them.</span>
                         </label>
                         <label class="sc-settings-label" style="margin-top:8px">
                             Pop-up frequency
@@ -814,6 +852,60 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
             });
         }
 
+        // ── Simkl: enable toggle (applies now -- the card's heartbeat re-reads it), Client ID +
+        // Test (saves the ID, then signs in with a device code shown inline), prompt-point slider ─
+        const simklEnable = document.getElementById('sc-input-simkl-enable');
+        const simklFields = document.getElementById('sc-simkl-fields');
+        if (simklEnable && simklFields) {
+            simklEnable.addEventListener('change', () => {
+                setKey(LS_SIMKL_ENABLED, simklEnable.checked ? 'on' : 'off');
+                simklFields.classList.toggle('sc-hidden', !simklEnable.checked);
+                if (simklEnable.checked) {
+                    const i = document.getElementById('sc-input-simkl-clientid');
+                    if (i) { if (tvNavState.setFocus) tvNavState.setFocus(i); else i.focus(); }
+                }
+            });
+        }
+        (function wireSimklTest() {
+            const btn    = document.getElementById('sc-test-simkl');
+            const input  = document.getElementById('sc-input-simkl-clientid');
+            const status = document.getElementById('sc-test-simkl-status');
+            const signin = document.getElementById('sc-simkl-signin');
+            if (!btn || !input || !status || !signin) return;
+            let handle = null;   // { cancelled } of the in-flight run; the button reads "Cancel" meanwhile
+            const ui = {
+                setStatus: (text, kind) => {
+                    status.className = 'sc-settings-test-status' + (kind ? ' sc-test-' + kind : '');
+                    status.textContent = text;
+                },
+                showCode: (dev) => {
+                    signin.classList.toggle('sc-hidden', !dev);
+                    if (!dev) return;
+                    const link = simklVerificationLink(dev);
+                    document.getElementById('sc-simkl-signin-help').textContent =
+                        (isTv ? 'Scan with your phone, or go to ' : 'Go to ') + link.shown + ' and enter:';
+                    document.getElementById('sc-simkl-signin-code').textContent = dev.user_code;
+                    const qr = document.getElementById('sc-simkl-signin-qr');
+                    try { renderQrToCanvas(qr, link.url, 4); qr.classList.remove('sc-hidden'); }
+                    catch (e) { qr.classList.add('sc-hidden'); }
+                },
+                isOpen: () => overlay.isConnected,
+            };
+            btn.addEventListener('click', async () => {
+                if (handle) { handle.cancelled = true; return; }
+                handle = { cancelled: false };
+                btn.textContent = 'Cancel';
+                try { await simklConnectAndVerify(input.value.trim(), ui, handle); }
+                finally { handle = null; btn.textContent = 'Test'; }
+            });
+        })();
+        const simklThreshold = document.getElementById('sc-input-simkl-threshold');
+        const simklThresholdVal = document.getElementById('sc-simkl-threshold-val');
+        if (simklThreshold) simklThreshold.addEventListener('input', () => {
+            if (simklThresholdVal) simklThresholdVal.textContent = simklThreshold.value + '% of the movie';
+            setKey(LS_SIMKL_THRESHOLD, simklThreshold.value);
+        });
+
         // Persist the non-live settings (TMDB + OpenSubtitles keys + spellcheck). The
         // toggles for keyboard, movie-links and font size already save themselves on
         // change. Used by Save AND by Login, so navigating to the login page never
@@ -825,6 +917,9 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
             const osEnabled = osEnable && osEnable.checked;
             const osInput = document.getElementById('sc-input-opensubtitles');
             setKey(LS_OPENSUBTITLES, (osEnabled && osInput) ? osInput.value.trim() : '');
+            // Kept even while Simkl is switched off, so turning it back on doesn't need a new sign-in.
+            const simklInput = document.getElementById('sc-input-simkl-clientid');
+            if (simklInput) setKey(LS_SIMKL_CLIENT_ID, simklInput.value.trim());
             const sc = document.getElementById('sc-input-spellcheck');
             if (sc) setKey(LS_SPELLCHECK, sc.checked ? 'on' : 'off');
             movieState.movieLinkCache = {};   // flush so the re-lookup hits the network
@@ -1231,6 +1326,7 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
         initUpdateCheck();
         loadLastAiredSheet();
         triviaPopupBoot();
+        simklBoot();
         initSubtitles();
 
         // First-run settings modal — only the very first launch, never forced again.
@@ -1246,7 +1342,7 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
         initUpNextButton();
 
         const style = document.createElement('style');
-        style.textContent = baseCss + overlaysCss;
+        style.textContent = baseCss + overlaysCss + simklCss;
         document.head.appendChild(style);
     }
     if (document.readyState === 'complete') {

@@ -21,6 +21,9 @@ export const LS_TRIVIA_POPUP_FREQ = 'sc_trivia_popup_freq'; // 'frequent' | 'occ
 export const LS_SUBTITLE_OPACITY   = 'sc_subtitle_opacity';   // 0.2-0.9 background opacity of each subtitle pill
 export const LS_SUBTITLE_FONTSIZE  = 'sc_subtitle_fontsize';  // px, separate from the sidebar chat's own font size
 export const LS_SUBTITLE_LINES     = 'sc_subtitle_lines';     // 1-3, how many recent messages stay on screen
+export const LS_SIMKL_ENABLED   = 'sc_simkl_enabled';   // 'on' = offer to log finished movies on Simkl; off by default
+export const LS_SIMKL_CLIENT_ID = 'sc_simkl_client_id'; // the user's own free Simkl app Client ID (no secret)
+export const LS_SIMKL_THRESHOLD = 'sc_simkl_threshold'; // % of runtime at which the card appears, 50-100
 export const getKey   = id => localStorage.getItem(id) || '';
 export const setKey   = (id, v) => localStorage.setItem(id, v.trim());
 export const hasKey   = id => !!getKey(id);
@@ -36,3 +39,6 @@ export const castFallbackMuted = () => getSetting('castMute'); // default: unmut
 export const lineupTimingEnabled = () => getSetting('lineupTiming'); // Experimental; default: off
 export const triviaPopupEnabled  = () => getSetting('triviaPopup');  // Experimental; default: off
 export const triviaPopupFrequency = () => getSetting('triviaPopupFreq'); // 'frequent' | 'occasional' | 'rare'; default: 'occasional'
+export const simklEnabled  = () => getSetting('simklEnabled');   // opt-in; default: off
+export const simklClientId = () => getSetting('simklClientId');
+export const simklThresholdRaw = () => getSetting('simklThreshold'); // clamp with simklClampThreshold()

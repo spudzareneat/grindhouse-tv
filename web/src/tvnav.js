@@ -5,12 +5,16 @@ import { hideTriviaCard } from './cards/trivia.js';
 import { hideNowPlayingCard } from './cards/nowplaying.js';
 import { hideLineupScreen, stepLineupSection } from './lineup/screen.js';
 import { hideUpNextCard } from './cards/upnext.js';
+import { simklDismiss } from './cards/simkl.js';
 import { pickDirectional } from './tvnav/geometry.js';
 import { getDesyncLiveSeconds } from './mediatime.js';
 
 // Let other UI (settings modal) place the remote's focus ring on an element.
 // settings.js reads tvNavState.setFocus instead of a bare reassignable binding.
-export const tvNavState = { setFocus: null };
+// getFocus / clearFocus / overlayOpen let a card that pops up on its own (the
+// Simkl scrobble card) take the ring, hand it back, and avoid popping over
+// another overlay.
+export const tvNavState = { setFocus: null, getFocus: null, clearFocus: null, overlayOpen: null };
 
 // Self-contained D-pad navigation for the /login page. None of the channel UI
 // (or its CSS, or the module-level isTv) runs here, so this re-detects TV and
@@ -143,8 +147,11 @@ export function initTvNav() {
     };
 
     // Topmost interactive overlay (poster strip excluded so its toggle stays reachable)
-    const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card', 'sc-upnext-card', 'sc-lineup-screen', 'sc-subtitles-picker', 'sc-subtitles-manage'];
+    const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card', 'sc-upnext-card', 'sc-lineup-screen', 'sc-subtitles-picker', 'sc-subtitles-manage', 'sc-simkl-panel'];
     const isOverlayOpen = (id, o) => !!(o && isVisible(o) &&
+        // Simkl card: counts from creation (it takes focus before its fade-in class lands) until
+        // its fade-out starts.
+        (id !== 'sc-simkl-panel' || !o.classList.contains('sc-simkl-out')) &&
         (id !== 'sc-np-card' || o.classList.contains('sc-np-visible')) &&
         (id !== 'sc-upnext-card' || o.classList.contains('sc-upnext-visible')) &&
         (id !== 'sc-trivia-card' || o.classList.contains('sc-show')) &&
@@ -300,6 +307,9 @@ export function initTvNav() {
     }
     // Let other UI (settings modal) place the remote's focus ring on an element.
     tvNavState.setFocus = setFocus;
+    tvNavState.getFocus = () => focusEl;
+    tvNavState.clearFocus = clearFocus;
+    tvNavState.overlayOpen = () => !!openOverlay();
 
     // Ramped seek step: index = native Android key-repeat count (0 on a fresh press,
     // auto-incrementing while Left/Right is held — see MainActivity.kt's dispatchKeyEvent).
@@ -646,6 +656,8 @@ export function initTvNav() {
         if (np && np.classList.contains('sc-np-visible')) { hideNowPlayingCard(); restoreFocusAfterOverlayClose(); return true; }
         const upNext = document.getElementById('sc-upnext-card');
         if (upNext && upNext.classList.contains('sc-upnext-visible')) { hideUpNextCard(); restoreFocusAfterOverlayClose(); return true; }
+        // Simkl card = "Not now"; it hands focus back to what it took it from itself.
+        if (simklDismiss()) return true;
         const lineup = document.getElementById('sc-lineup-screen');
         if (lineup && lineup.classList.contains('sc-lineup-visible')) { hideLineupScreen(); restoreFocusAfterOverlayClose(); return true; }
         for (const id of ['sc-users-panel', 'sc-poll-panel']) {
