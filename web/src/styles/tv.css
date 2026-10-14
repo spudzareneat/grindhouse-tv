@@ -704,6 +704,38 @@
                 color: rgba(255,255,255,0.86) !important; font-size: 14px !important; line-height: 1.5 !important;
                 padding: 12px 0 !important; border-bottom: 1px solid rgba(255,255,255,0.07) !important;
             }
+            /* Trivia card sections: curated Pop-up Video facts, Drive-In Totals (phone), IMDb. */
+            .sc-trivia-section {
+                color: var(--np-accent,#ff5b73) !important; font-size: 11px !important; font-weight: 700 !important;
+                text-transform: uppercase !important; letter-spacing: 0.06em !important;
+                padding: 14px 0 2px !important;
+            }
+            .sc-trivia-time {
+                display: inline-block !important; margin-right: 8px !important; padding: 0 6px !important;
+                border-radius: 4px !important; background: rgba(255,255,255,0.1) !important;
+                color: rgba(255,255,255,0.7) !important; font-size: 11px !important;
+                font-variant-numeric: tabular-nums !important; vertical-align: 1px !important;
+            }
+            .sc-trivia-face {
+                width: 22px !important; height: 22px !important; border-radius: 50% !important;
+                object-fit: cover !important; margin-right: 6px !important; vertical-align: -6px !important;
+                border: 1px solid #c81d25 !important;
+            }
+            .sc-trivia-by { color: rgba(255,255,255,0.55) !important; font-size: 12px !important; }
+            .sc-trivia-src { color: rgba(255,255,255,0.55) !important; font-size: 11px !important; text-decoration: underline !important; }
+            .sc-trivia-drivein ul { margin: 0 !important; padding: 0 0 0 18px !important; }
+            .sc-trivia-drivein li { padding: 2px 0 !important; }
+            .sc-trivia-di-verdict {
+                display: flex !important; flex-wrap: wrap !important; align-items: center !important;
+                gap: 8px !important; margin: 10px 0 2px !important;
+            }
+            .sc-trivia-di-stars { display: inline-flex !important; gap: 2px !important; }
+            .sc-trivia-di-stars svg { width: 18px !important; height: 18px !important; }
+            .sc-trivia-di-says { color: #f5d76e !important; font-weight: 700 !important; }
+            .sc-trivia-di-awards-h {
+                color: rgba(255,255,255,0.7) !important; font-size: 12px !important; font-weight: 700 !important;
+                margin: 12px 0 4px !important;
+            }
             body.sc-tv #sc-trivia-panel { width: min(1100px, 84vw) !important; max-height: 84vh !important; }
             body.sc-tv #sc-trivia-title { font-size: 26px !important; }
             body.sc-tv #sc-trivia-close { width: 44px !important; height: 44px !important; font-size: 20px !important; }

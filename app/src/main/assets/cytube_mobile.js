@@ -152,6 +152,12 @@
     // Experimental; off by default
     triviaPopupFreq: { key: "sc_trivia_popup_freq", type: "string", def: "occasional" },
     // 'frequent' | 'occasional' | 'rare'
+    simklEnabled: { key: "sc_simkl_enabled", type: "onbool", def: false },
+    // opt-in end-of-movie Simkl card
+    simklClientId: { key: "sc_simkl_client_id", type: "string", def: "" },
+    // the user's own Simkl app Client ID
+    simklThreshold: { key: "sc_simkl_threshold", type: "number", def: 90 },
+    // % of runtime; clamped 50-100 in simkl/helpers.js
     chatMode: { key: "sc_chat_mode", type: "string", def: "sidebar" },
     vertSplit: { key: "sc_vert_split", type: "number", def: 50 },
     updateCache: { key: "sc_update_cache", type: "json", def: null }
@@ -195,6 +201,9 @@
   var LS_SUBTITLE_OPACITY = "sc_subtitle_opacity";
   var LS_SUBTITLE_FONTSIZE = "sc_subtitle_fontsize";
   var LS_SUBTITLE_LINES = "sc_subtitle_lines";
+  var LS_SIMKL_ENABLED = "sc_simkl_enabled";
+  var LS_SIMKL_CLIENT_ID = "sc_simkl_client_id";
+  var LS_SIMKL_THRESHOLD = "sc_simkl_threshold";
   var getKey = (id) => localStorage.getItem(id) || "";
   var setKey = (id, v) => localStorage.setItem(id, v.trim());
   var hasKey = (id) => !!getKey(id);
@@ -206,6 +215,9 @@
   var lineupTimingEnabled = () => getSetting("lineupTiming");
   var triviaPopupEnabled = () => getSetting("triviaPopup");
   var triviaPopupFrequency = () => getSetting("triviaPopupFreq");
+  var simklEnabled = () => getSetting("simklEnabled");
+  var simklClientId = () => getSetting("simklClientId");
+  var simklThresholdRaw = () => getSetting("simklThreshold");
 
   // src/readability.js
   function detectReadabilityIssues(text) {
@@ -2135,9 +2147,359 @@
     return window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
   }();
 
+  // src/trivia/curated.js
+  var TP_CURATED_SCHEMA = 1;
+  var TP_TIMELINE_WINDOW_S = 20;
+  var TP_CURATED_MAX_LEN = 280;
+  var TP_IMAGE_URL_RE = /^https:\/\/m\.media-amazon\.com\/images\/[A-Za-z0-9@._,%\/-]+$/;
+  function tpSafeImageUrl(url) {
+    return typeof url === "string" && url.length < 500 && TP_IMAGE_URL_RE.test(url);
+  }
+  var TP_LINK_URL_RE = /^https?:\/\/[^\s"'<>`]+$/;
+  function tpSafeLinkUrl(url) {
+    return typeof url === "string" && url.length < 1e3 && TP_LINK_URL_RE.test(url);
+  }
+  function tpValidateCurated(doc, expectedId) {
+    if (!doc || typeof doc !== "object" || doc.schema !== TP_CURATED_SCHEMA) return null;
+    if (expectedId && doc.imdbId !== expectedId) return null;
+    if (!Array.isArray(doc.facts)) return null;
+    const facts = [];
+    for (const f of doc.facts) {
+      if (!f || typeof f !== "object") continue;
+      if (typeof f.t !== "number" || !Number.isFinite(f.t) || f.t < 0) continue;
+      if (typeof f.text !== "string") continue;
+      const text = f.text.trim();
+      if (!text || text.length > TP_CURATED_MAX_LEN) continue;
+      facts.push({
+        t: f.t,
+        rank: [1, 2, 3].includes(f.rank) ? f.rank : 2,
+        anchor: f.anchor === "scene" ? "scene" : "spread",
+        text,
+        icon: typeof f.icon === "string" ? f.icon : null,
+        byline: typeof f.byline === "string" && f.byline.trim() ? f.byline.trim() : null,
+        ...tpSafeImageUrl(f.image) ? { image: f.image } : {},
+        ...tpSafeLinkUrl(f.source && f.source.url) ? { sourceUrl: f.source.url } : {}
+      });
+    }
+    if (!facts.length) return null;
+    facts.sort((a, b) => a.t - b.t);
+    return facts;
+  }
+  var TP_RANK_CUTOFF = { frequent: 3, occasional: 2, rare: 1 };
+  function tpRankAllowed(rank, tierName) {
+    return rank <= (TP_RANK_CUTOFF[tierName] || TP_RANK_CUTOFF.occasional);
+  }
+  function tpDueFact(facts, currentTime, tierName, seenTexts) {
+    if (!Array.isArray(facts) || typeof currentTime !== "number" || !Number.isFinite(currentTime)) return null;
+    for (const f of facts) {
+      if (f.t > currentTime) break;
+      if (currentTime - f.t > TP_TIMELINE_WINDOW_S) continue;
+      if (!tpRankAllowed(f.rank, tierName)) continue;
+      if (seenTexts.includes(f.text)) continue;
+      return f;
+    }
+    return null;
+  }
+  var TP_CATCHUP_MIN_GAP_S = 45;
+  var TP_CATCHUP_CLEAR_S = 60;
+  function tpCatchUpFact(facts, currentTime, tierName, seenTexts, secsSinceLastPop) {
+    if (!Array.isArray(facts) || typeof currentTime !== "number" || !Number.isFinite(currentTime)) return null;
+    if (!(secsSinceLastPop >= TP_CATCHUP_MIN_GAP_S)) return null;
+    const shows = (f) => tpRankAllowed(f.rank, tierName) && !seenTexts.includes(f.text);
+    const next = facts.find((f) => f.t + TP_TIMELINE_WINDOW_S >= currentTime && shows(f));
+    if (next && next.t - currentTime < TP_CATCHUP_CLEAR_S) return null;
+    const missed = facts.filter((f) => f.t + TP_TIMELINE_WINDOW_S < currentTime && f.anchor !== "scene" && shows(f));
+    if (!missed.length) return null;
+    return missed.slice().sort((a, b) => a.rank - b.rank || a.t - b.t)[0];
+  }
+  var TP_DRIVEIN_SEEN_KEY = "[drive-in-totals card]";
+  var TP_DRIVEIN_T = 15;
+  function tpParseCsv(text) {
+    const rows = [];
+    let row = [], field = "", inQuotes = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inQuotes) {
+        if (c === '"' && text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else if (c === '"') inQuotes = false;
+        else field += c;
+      } else if (c === '"') inQuotes = true;
+      else if (c === ",") {
+        row.push(field);
+        field = "";
+      } else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text[i + 1] === "\n") i++;
+        row.push(field);
+        rows.push(row);
+        row = [];
+        field = "";
+      } else field += c;
+    }
+    if (field !== "" || row.length) {
+      row.push(field);
+      rows.push(row);
+    }
+    return rows;
+  }
+  function tpIndexDriveInCsv(text) {
+    const [header, ...rows] = tpParseCsv(text || "");
+    const index = {};
+    if (!header) return index;
+    const col = (name) => header.indexOf(name);
+    const ii = col("imdb_id"), ti = col("totals"), ai = col("academy_award_nominations"), ri = col("star_rating"), si = col("stars");
+    if (ii < 0 || ti < 0) return index;
+    for (const r of rows) {
+      const id = (r[ii] || "").trim();
+      if (!/^tt\d+$/.test(id)) continue;
+      index[id] = { totals: (r[ti] || "").trim(), nominations: (r[ai] || "").trim(), starRating: (r[ri] || "").trim(), stars: (r[si] || "").trim() };
+    }
+    return index;
+  }
+  var TP_ABBREV = /* @__PURE__ */ new Set(["mr", "mrs", "ms", "dr", "st", "jr", "sr", "vs", "etc", "approx", "lt", "sgt", "capt", "col", "gen", "prof", "mt"]);
+  function tpSplitSentences(text) {
+    const out = [];
+    let buf2 = "", depth = 0, inQuote = false;
+    for (const c of text) {
+      if (c === "(") depth++;
+      else if (c === ")") depth = Math.max(0, depth - 1);
+      else if (c === '"') inQuote = !inQuote;
+      else if (c === "“") inQuote = true;
+      else if (c === "”") inQuote = false;
+      if (/\s/.test(c) && depth === 0 && !inQuote && /[.!?]["'”’)]*$/.test(buf2)) {
+        const lastWord = (buf2.match(/([A-Za-z]+)\.$/) || [])[1];
+        const initial = /(^|[\s.])[A-Z]\.$/.test(buf2);
+        if (!(lastWord && TP_ABBREV.has(lastWord.toLowerCase())) && !initial) {
+          if (buf2.trim()) out.push(buf2.trim());
+          buf2 = "";
+          continue;
+        }
+      }
+      buf2 += c;
+    }
+    if (buf2.trim()) out.push(buf2.trim());
+    return out;
+  }
+  function tpSplitOutside(text, sep) {
+    const out = [];
+    let buf2 = "", depth = 0, inQuote = false;
+    for (const c of text) {
+      if (c === "(") depth++;
+      else if (c === ")") depth = Math.max(0, depth - 1);
+      else if (c === '"') inQuote = !inQuote;
+      else if (c === "“") inQuote = true;
+      else if (c === "”") inQuote = false;
+      if (c === sep && depth === 0 && !inQuote) {
+        out.push(buf2);
+        buf2 = "";
+        continue;
+      }
+      buf2 += c;
+    }
+    out.push(buf2);
+    return out;
+  }
+  var TP_SMALL_WORDS = /* @__PURE__ */ new Set(["a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "of", "on", "or", "the", "to", "with", "n", "vs"]);
+  var TP_UNITS = [
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen"
+  ];
+  var TP_TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+  function tpLeadingNumberToDigits(s) {
+    const m = s.match(/^((?:one|a)\s+hundred\s+(?:and\s+)?)?([a-z]+)(?:[-\s]([a-z]+))?\b/i);
+    if (!m) return s;
+    const hundred = m[1] ? 100 : 0;
+    const w1 = m[2].toLowerCase(), w2 = m[3] && m[3].toLowerCase();
+    const t = TP_TENS.indexOf(w1), u2 = w2 ? TP_UNITS.indexOf(w2) : -1;
+    if (t >= 2 && u2 >= 1 && u2 <= 9) return `${hundred + t * 10 + u2}${s.slice(m[0].length)}`;
+    if (t >= 2) return `${hundred + t * 10}${s.slice((m[1] || "").length + m[2].length)}`;
+    if (TP_UNITS.includes(w1)) return `${hundred + TP_UNITS.indexOf(w1)}${s.slice((m[1] || "").length + m[2].length)}`;
+    return s;
+  }
+  function tpTitleCase(s) {
+    let first = true;
+    return s.replace(/[A-Za-z][A-Za-z']*/g, (w, off) => {
+      const prev = s[off - 1];
+      const lead = first || prev === "(" || prev === "-";
+      first = false;
+      if (!lead && TP_SMALL_WORDS.has(w.toLowerCase())) return w.toLowerCase();
+      return w[0].toUpperCase() + w.slice(1);
+    });
+  }
+  function tpCleanTotalsLine(sentence) {
+    let s = sentence.trim().replace(/\.+$/, "").trim();
+    s = s.replace(/^(?:we(?:'ve)?\s+(?:got|have)\s+(?:a\s+total\s+of\s+)?|we're\s+talking\s+|there\s+(?:are|is|were|was)\s+)/i, "");
+    s = s.replace(/^approximately\b/i, "About");
+    return tpTitleCase(tpLeadingNumberToDigits(s));
+  }
+  var TP_STAR_SENTENCE = /\b(?:zero|no|one|two|three|four|[0-4](?:\.5)?)(?:\s+and\s+(?:a\s+)?half)?\s+stars?\b/i;
+  var TP_SIGN_OFF = /check (?:it|this) out|joe bob says?\b/i;
+  var tpIsVerdict = (s) => (TP_STAR_SENTENCE.test(s) || TP_SIGN_OFF.test(s)) && s.split(/\s+/).length <= 8;
+  var tpTrimTail = (s) => s.replace(/[\s,;:.-]+$/, "");
+  function tpClip(s, max) {
+    if (s.length <= max) return s;
+    const cut = s.lastIndexOf(" ", max - 1);
+    return tpTrimTail(s.slice(0, cut > 0 ? cut : max - 1)) + "…";
+  }
+  var TP_NOMS_PREFIX = /^(?:drive-?in\s+academy\s+awards?(?:\s+nominations?)?|diaa(?:\s+nominations?)?)\s*(?:go(?:es)?\s+to|for)?\s*:?\s*/i;
+  function tpNominationLines(text) {
+    const sentences = tpSplitSentences((text || "").trim()).filter((s) => !tpIsVerdict(s));
+    if (!sentences.length) return [];
+    const [first, ...rest] = sentences;
+    const body = tpTrimTail(first.replace(TP_NOMS_PREFIX, ""));
+    let names = tpSplitOutside(body, ";");
+    if (names.length === 1) {
+      const parts = body.split(/,\s+(?:and\s+)?|\s+and\s+/);
+      if (parts.length > 1 && parts.every((p) => p.trim().split(/\s+/).length <= 5)) names = parts;
+    }
+    return names.concat(rest).map((n) => tpTrimTail(n.trim().replace(/^and\s+/i, ""))).filter(Boolean).map((n) => tpClip(n[0].toUpperCase() + n.slice(1), 300)).slice(0, 30);
+  }
+  function tpNormalizeSays(says) {
+    const t = says.trim();
+    return /^(?:joe bob says? )?check it out\.?$/i.test(t) ? "Joe Bob says check it out." : t;
+  }
+  function tpDriveInCardFromRow(row) {
+    if (!row || !row.totals) return null;
+    const lines = [], signOff = [];
+    for (const s of tpSplitSentences(row.totals)) {
+      if (tpIsVerdict(s)) {
+        if (TP_SIGN_OFF.test(s)) signOff.push(s);
+        continue;
+      }
+      const parts = s.split(/,\s+(?:and\s+)?/);
+      for (const part of parts.length >= 4 ? parts : [s]) {
+        const line = tpCleanTotalsLine(part);
+        if (line && !/^(?:and|but|also|plus|so)$/i.test(line)) lines.push(tpClip(line, 300));
+      }
+    }
+    if (!lines.length) return null;
+    const n = parseFloat(row.stars);
+    const stars = Number.isFinite(n) ? Math.min(4, Math.max(0, Math.round(n * 2) / 2)) : null;
+    const says = tpClip([row.starRating, ...signOff.map(tpNormalizeSays)].filter(Boolean).join(" "), 120);
+    return { t: TP_DRIVEIN_T, lines: lines.slice(0, 60), stars, says, awards: tpNominationLines(row.nominations) };
+  }
+  var TP_DRIVEIN_CATCHUP_S = 15;
+  function tpDriveInAction(card, currentTime, seenTexts, secsSinceLastPop) {
+    if (!card || typeof currentTime !== "number" || !Number.isFinite(currentTime)) return null;
+    if (seenTexts.includes(TP_DRIVEIN_SEEN_KEY) || currentTime < card.t) return null;
+    if (currentTime - card.t <= TP_TIMELINE_WINDOW_S) return "due";
+    return secsSinceLastPop >= TP_DRIVEIN_CATCHUP_S ? "catchup" : null;
+  }
+  function tpStarFills(stars) {
+    return [0, 1, 2, 3].map((k) => Math.max(0, Math.min(1, stars - k)));
+  }
+
+  // src/trivia/sources.js
+  init_native();
+  var CURATED_BASE = "https://raw.githubusercontent.com/spudzareneat/grindhouse-popup-trivia/main/data/";
+  var DRIVEIN_CSV_URL = "https://raw.githubusercontent.com/spudzareneat/JoeBobBriggsDriveInTotals/main/drivein_totals.csv";
+  var LS_TRIVIA_CURATED_DEV = "sc_trivia_curated_dev";
+  var CURATED_RECHECK_MS = 10 * 60 * 1e3;
+  var _curatedCache = {};
+  function _curated(doc, id) {
+    const facts = tpValidateCurated(doc, id);
+    return facts ? { facts } : null;
+  }
+  async function fetchCuratedTrivia(id) {
+    if (!id) return null;
+    let devRaw = null;
+    try {
+      devRaw = localStorage.getItem(LS_TRIVIA_CURATED_DEV);
+    } catch (e) {
+    }
+    if (devRaw) {
+      console.warn("[trivia-popup] curated dev override active (localStorage sc_trivia_curated_dev) -- applies to every movie");
+      try {
+        return _curated(JSON.parse(devRaw), null);
+      } catch (e) {
+        return null;
+      }
+    }
+    const cached = _curatedCache[id];
+    if (cached && (cached.curated || Date.now() - cached.at < CURATED_RECHECK_MS)) return cached.curated;
+    try {
+      const res = await nativeHttpGet(CURATED_BASE + encodeURIComponent(id) + ".json");
+      const ok = res && res.status >= 200 && res.status < 300;
+      let curated = null;
+      if (ok) {
+        try {
+          curated = _curated(JSON.parse(res.body), id);
+        } catch (e) {
+        }
+      }
+      if (ok || res && res.status === 404) _curatedCache[id] = { curated, at: Date.now() };
+      return curated;
+    } catch (e) {
+      return null;
+    }
+  }
+  var _driveInIndex = null;
+  function _fetchDriveInIndex() {
+    if (_driveInIndex) return _driveInIndex;
+    _driveInIndex = nativeHttpGet(DRIVEIN_CSV_URL).then((res) => res && res.status >= 200 && res.status < 300 ? tpIndexDriveInCsv(res.body) : null).catch(() => null).then((index) => {
+      if (!index || !Object.keys(index).length) {
+        _driveInIndex = null;
+        return null;
+      }
+      return index;
+    });
+    return _driveInIndex;
+  }
+  async function fetchDriveInCard(id) {
+    if (!id) return null;
+    const index = await _fetchDriveInIndex();
+    return index ? tpDriveInCardFromRow(index[id]) : null;
+  }
+
   // src/cards/trivia.js
   function _escHtml(s) {
     return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  var _attr = (s) => _escHtml(s).replace(/"/g, "&quot;");
+  function _fmtTime(sec) {
+    const s = Math.max(0, Math.round(sec));
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = String(s % 60).padStart(2, "0");
+    return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+  }
+  function _curatedItemHtml(f) {
+    const face = f.image ? `<img class="sc-trivia-face" src="${_attr(f.image)}" alt="">` : "";
+    const by = f.byline ? ` <span class="sc-trivia-by">— ${_escHtml(f.byline)}</span>` : "";
+    const src = f.sourceUrl ? ` <a class="sc-trivia-src" href="${_attr(f.sourceUrl)}" target="_blank" rel="noopener noreferrer">source</a>` : "";
+    return `<div class="sc-trivia-item sc-trivia-curated"><span class="sc-trivia-time">${_fmtTime(f.t)}</span>${face}${_escHtml(f.text)}${by}${src}</div>`;
+  }
+  var STAR_PATH = "M12 1.8l3.1 6.6 7.1.8-5.3 4.9 1.4 7.1L12 17.6l-6.3 3.6 1.4-7.1L1.8 9.2l7.1-.8z";
+  function _starSvg(fill, k) {
+    const id = `sc-trivia-star-clip-${k}`;
+    return `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><defs><clipPath id="${id}"><rect x="0" y="0" width="${24 * fill}" height="24"/></clipPath></defs><path d="${STAR_PATH}" fill="none" stroke="#f5d76e" stroke-width="1.4"/><path d="${STAR_PATH}" fill="#f5d76e" clip-path="url(#${id})"/></svg>`;
+  }
+  function _driveInHtml(card) {
+    let html = `<div class="sc-trivia-section">Drive-In Totals</div><div class="sc-trivia-item sc-trivia-drivein"><ul class="sc-trivia-di-lines">${card.lines.map((l) => `<li>${_escHtml(l)}</li>`).join("")}</ul>`;
+    if (card.stars !== null || card.says) {
+      html += '<div class="sc-trivia-di-verdict">' + (card.stars !== null ? `<span class="sc-trivia-di-stars">${tpStarFills(card.stars).map(_starSvg).join("")}</span>` : "") + (card.says ? `<span class="sc-trivia-di-says">${_escHtml(card.says)}</span>` : "") + "</div>";
+    }
+    if (card.awards && card.awards.length) {
+      html += `<div class="sc-trivia-di-awards-h">Drive-In Academy Award Nominations</div><ul class="sc-trivia-di-awards">${card.awards.map((a) => `<li>${_escHtml(a)}</li>`).join("")}</ul>`;
+    }
+    return html + "</div>";
   }
   function showTriviaCard() {
     const tconst = npState.data && npState.data.imdbId;
@@ -2166,13 +2528,25 @@
     const list = card.querySelector("#sc-trivia-list");
     list.innerHTML = '<div class="sc-trivia-item">Loading…</div>';
     card.classList.add("sc-show");
-    fetchImdbTrivia(tconst).then((items) => {
+    Promise.all([
+      fetchCuratedTrivia(tconst).catch(() => null),
+      isTv ? Promise.resolve(null) : fetchDriveInCard(tconst).catch(() => null),
+      fetchImdbTrivia(tconst).catch(() => null)
+    ]).then(([curated, driveIn, items]) => {
       if (!document.getElementById("sc-trivia-card")) return;
-      if (!items || !items.length) {
-        list.innerHTML = '<div class="sc-trivia-item">No trivia found.</div>';
-        return;
+      if ((npState.data && npState.data.imdbId) !== tconst) return;
+      const facts = curated && curated.facts;
+      let html = "";
+      if (facts && facts.length) {
+        html += `<div class="sc-trivia-section">Pop-up Video trivia (${facts.length})</div>` + facts.map(_curatedItemHtml).join("");
       }
-      list.innerHTML = items.map((t) => `<div class="sc-trivia-item">${_escHtml(t)}</div>`).join("");
+      if (driveIn) html += _driveInHtml(driveIn);
+      if (items && items.length) {
+        if (html) html += `<div class="sc-trivia-section">IMDb trivia (${items.length})</div>`;
+        html += items.map((t) => `<div class="sc-trivia-item">${_escHtml(t)}</div>`).join("");
+      }
+      list.innerHTML = html || '<div class="sc-trivia-item">No trivia found.</div>';
+      list.querySelectorAll("img.sc-trivia-face").forEach((img) => img.addEventListener("error", () => img.remove()));
       list.scrollTop = 0;
     });
   }
@@ -2658,1118 +3032,394 @@
     (_a = document.getElementById("sc-upnext-card")) == null ? void 0 : _a.classList.remove("sc-upnext-visible");
   }
 
-  // src/tvnav/geometry.js
-  function pickDirectional(dir, curRect, rects) {
-    const cx = curRect.left + curRect.width / 2, cy = curRect.top + curRect.height / 2;
-    let best = -1, bestScore = Infinity, cone = -1, coneScore = Infinity;
-    for (let i = 0; i < rects.length; i++) {
-      const r = rects[i];
-      if (!r) continue;
-      const dx = r.left + r.width / 2 - cx, dy = r.top + r.height / 2 - cy;
-      let primary, perp;
-      if (dir === "left") {
-        if (dx > -4) continue;
-        primary = -dx;
-        perp = Math.abs(dy);
-      } else if (dir === "right") {
-        if (dx < 4) continue;
-        primary = dx;
-        perp = Math.abs(dy);
-      } else if (dir === "up") {
-        if (dy > -4) continue;
-        primary = -dy;
-        perp = Math.abs(dx);
-      } else {
-        if (dy < 4) continue;
-        primary = dy;
-        perp = Math.abs(dx);
-      }
-      const score = primary + perp * 2;
-      if (primary >= perp && score < coneScore) {
-        coneScore = score;
-        cone = i;
-      }
-      if (score < bestScore) {
-        bestScore = score;
-        best = i;
-      }
+  // src/titleinject.js
+  init_native();
+
+  // src/subtitles/opensubtitles.js
+  init_native();
+  var API_BASE = "https://api.opensubtitles.com/api/v1";
+  var USER_AGENT = "GrindhouseTV v1.0";
+  function authHeaders(key) {
+    return { "Api-Key": key, "User-Agent": USER_AGENT, "Content-Type": "application/json" };
+  }
+  async function validateOpensubtitlesKey(key) {
+    if (!key) return "invalid";
+    try {
+      const r = await nativeHttpPost(`${API_BASE}/download`, authHeaders(key), JSON.stringify({ file_id: 0 }));
+      if (r.status === 503) return "invalid";
+      if (r.status >= 400 && r.status < 500) return "valid";
+      return "error";
+    } catch (e) {
+      return "error";
     }
-    return cone !== -1 ? cone : best;
+  }
+  async function searchSubtitles(imdbId) {
+    const key = getKey(LS_OPENSUBTITLES);
+    if (!key || !imdbId) return [];
+    const numericId = String(imdbId).replace(/^tt/i, "");
+    try {
+      const r = await nativeHttpGet(
+        `${API_BASE}/subtitles?imdb_id=${encodeURIComponent(numericId)}&languages=en`,
+        authHeaders(key)
+      );
+      if (r.status !== 200) return [];
+      const data = JSON.parse(r.body);
+      return (data.data || []).map((entry) => {
+        const a = entry.attributes || {};
+        const file = (a.files || [])[0];
+        if (!file || !file.file_id) return null;
+        return {
+          fileId: file.file_id,
+          release: a.release || "Unknown release",
+          uploader: a.uploader && a.uploader.name || "Unknown",
+          downloadCount: a.download_count || 0,
+          fromTrusted: !!a.from_trusted,
+          hearingImpaired: !!a.hearing_impaired,
+          machineTranslated: !!(a.machine_translated || a.ai_translated)
+        };
+      }).filter(Boolean).sort((a, b) => b.downloadCount - a.downloadCount).slice(0, 8);
+    } catch (e) {
+      return [];
+    }
+  }
+  async function downloadSubtitle(fileId) {
+    const key = getKey(LS_OPENSUBTITLES);
+    if (!key || !fileId) return null;
+    try {
+      const r = await nativeHttpPost(`${API_BASE}/download`, authHeaders(key), JSON.stringify({ file_id: fileId }));
+      if (r.status !== 200) return null;
+      const data = JSON.parse(r.body);
+      return data.link || null;
+    } catch (e) {
+      return null;
+    }
+  }
+  async function fetchSrtText(link) {
+    if (!link) return null;
+    try {
+      const r = await nativeHttpGet(link);
+      return r.status === 200 ? r.body : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function srtTimeToSeconds(t) {
+    const m = String(t).match(/(\d+):(\d\d):(\d\d)[,.](\d+)/);
+    if (!m) return 0;
+    return +m[1] * 3600 + +m[2] * 60 + +m[3] + +m[4] / 1e3;
+  }
+  var _ALLOWED_TAGS = ["i", "b", "u"];
+  function escapeSubtitleText(raw) {
+    const escaped = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return escaped.replace(/&lt;(\/?)(\w+)&gt;/g, (m, close, tag) => _ALLOWED_TAGS.includes(tag.toLowerCase()) ? `<${close}${tag.toLowerCase()}>` : m);
+  }
+  function parseSrt(text) {
+    if (!text) return [];
+    const noBom = text.charCodeAt(0) === 65279 ? text.slice(1) : text;
+    const clean = noBom.replace(/\r\n/g, "\n");
+    const blocks = clean.split(/\n\n+/);
+    const cues = [];
+    for (const block of blocks) {
+      const lines = block.split("\n").filter((l) => l.trim());
+      if (!lines.length) continue;
+      const timeLineIdx = lines.findIndex((l) => l.includes("-->"));
+      if (timeLineIdx === -1) continue;
+      const [startStr, endStr] = lines[timeLineIdx].split("-->").map((s) => s.trim());
+      const start = srtTimeToSeconds(startStr);
+      const end = srtTimeToSeconds(endStr);
+      if (end <= start) continue;
+      const textLines = lines.slice(timeLineIdx + 1);
+      if (!textLines.length) continue;
+      cues.push({ start, end, text: escapeSubtitleText(textLines.join("\n")) });
+    }
+    return cues;
   }
 
-  // src/tvnav.js
-  var tvNavState = { setFocus: null };
-  function initLoginTvNav() {
-    let isTv2 = false;
+  // src/subtitles/overlay.js
+  var REFRESH_MS = 500;
+  var _cues = [];
+  var _timer = null;
+  var _lastCueIndex = -1;
+  var _offset = 0;
+  function ensureContainer() {
+    let el = document.getElementById("sc-movie-subtitles-overlay");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "sc-movie-subtitles-overlay";
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+  function findActiveCueIndex(cues, seconds, offset = 0) {
+    const adjusted = seconds - offset;
+    for (let i = 0; i < cues.length; i++) {
+      if (adjusted >= cues[i].start && adjusted <= cues[i].end) return i;
+    }
+    return -1;
+  }
+  function tick() {
+    const idx = findActiveCueIndex(_cues, getCurrentPlaybackSeconds(), _offset);
+    if (idx === _lastCueIndex) return;
+    _lastCueIndex = idx;
+    ensureContainer().innerHTML = idx >= 0 ? _cues[idx].text.replace(/\n/g, "<br>") : "";
+  }
+  function showMovieSubtitles(cues) {
+    _cues = cues || [];
+    _lastCueIndex = -1;
+    ensureContainer().classList.add("sc-movie-subtitles-visible");
+    if (!_timer) _timer = setInterval(tick, REFRESH_MS);
+    tick();
+  }
+  function resetSubtitleOffset() {
+    _offset = 0;
+  }
+  function getSubtitleOffset() {
+    return _offset;
+  }
+  function setSubtitleOffset(seconds) {
+    _offset = seconds;
+    _lastCueIndex = -1;
+    if (isMovieSubtitlesVisible()) tick();
+  }
+  function hideMovieSubtitles() {
+    if (_timer) {
+      clearInterval(_timer);
+      _timer = null;
+    }
+    const el = document.getElementById("sc-movie-subtitles-overlay");
+    if (el) {
+      el.classList.remove("sc-movie-subtitles-visible");
+      el.innerHTML = "";
+    }
+  }
+  function isMovieSubtitlesVisible() {
+    const el = document.getElementById("sc-movie-subtitles-overlay");
+    return !!(el && el.classList.contains("sc-movie-subtitles-visible"));
+  }
+
+  // src/chrome/dock.js
+  var DOCK_ORDER = ["sc-chatmode-btn", "sc-settings-btn", "sc-subtitles-btn", "sc-desync-btn", "sc-cast-btn"];
+  function layoutDock() {
+    let slot = 0;
+    for (const id of DOCK_ORDER) {
+      const el = document.getElementById(id);
+      if (!el || el.classList.contains("sc-hidden")) continue;
+      el.style.setProperty("--sc-dock-slot", String(slot));
+      slot++;
+    }
+    document.body.style.setProperty("--sc-dock-count", String(slot));
+  }
+
+  // src/subtitles/ui.js
+  var SUBTITLE_CACHE_MAX_ENTRIES = 15;
+  var _subtitleCache = {};
+  function loadSubtitleCache() {
     try {
-      if (window.CytubeNative && CytubeNative.isTv) isTv2 = !!CytubeNative.isTv();
+      const raw = localStorage.getItem(LS_SUBTITLE_CACHE);
+      if (raw) _subtitleCache = JSON.parse(raw);
+    } catch (e) {
+      _subtitleCache = {};
+    }
+  }
+  loadSubtitleCache();
+  function persistSubtitleCache() {
+    try {
+      const keys = Object.keys(_subtitleCache);
+      if (keys.length > SUBTITLE_CACHE_MAX_ENTRIES) {
+        const oldestFirst = keys.sort((a, b) => (_subtitleCache[a].ts || 0) - (_subtitleCache[b].ts || 0));
+        for (const k of oldestFirst.slice(0, keys.length - SUBTITLE_CACHE_MAX_ENTRIES)) delete _subtitleCache[k];
+      }
+      localStorage.setItem(LS_SUBTITLE_CACHE, JSON.stringify(_subtitleCache));
     } catch (e) {
     }
-    if (!isTv2) isTv2 = window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
-    if (!isTv2) return;
-    const style = document.createElement("style");
-    style.textContent = ".sc-tv-focus{outline:3px solid #e0701a !important;outline-offset:2px !important;box-shadow:0 0 0 5px rgba(224,112,26,0.32) !important;border-radius:5px !important;}";
-    (document.head || document.documentElement).appendChild(style);
-    let focusEl = null;
-    const isVisible = (el) => {
-      if (!el || !el.getBoundingClientRect) return false;
-      const r = el.getBoundingClientRect();
-      if (r.width < 3 || r.height < 3) return false;
-      const cs = getComputedStyle(el);
-      return cs.visibility !== "hidden" && cs.display !== "none";
-    };
-    const FOCUS_SEL = "input:not([type=hidden]), button, a[href], select, textarea, [tabindex]";
-    const candidates = () => [...document.querySelectorAll(FOCUS_SEL)].filter(isVisible).filter((e) => !e.disabled);
-    function setFocus(el) {
-      if (!el) return;
-      if (focusEl && focusEl !== el) focusEl.classList.remove("sc-tv-focus");
-      focusEl = el;
-      el.classList.add("sc-tv-focus");
-      try {
-        el.focus({ preventScroll: true });
-      } catch (e) {
-      }
-      try {
-        el.scrollIntoView({ block: "nearest" });
-      } catch (e) {
-      }
-    }
-    function move(dir) {
-      const list = candidates();
-      if (!list.length) return;
-      if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) {
-        setFocus(list[0]);
-        return;
-      }
-      const cur = focusEl.getBoundingClientRect();
-      const cx = cur.left + cur.width / 2, cy = cur.top + cur.height / 2;
-      let best = null, bestScore = Infinity;
-      for (const el of list) {
-        if (el === focusEl) continue;
-        const r = el.getBoundingClientRect();
-        const dx = r.left + r.width / 2 - cx, dy = r.top + r.height / 2 - cy;
-        let primary, perp;
-        if (dir === "left") {
-          if (dx > -4) continue;
-          primary = -dx;
-          perp = Math.abs(dy);
-        } else if (dir === "right") {
-          if (dx < 4) continue;
-          primary = dx;
-          perp = Math.abs(dy);
-        } else if (dir === "up") {
-          if (dy > -4) continue;
-          primary = -dy;
-          perp = Math.abs(dx);
-        } else {
-          if (dy < 4) continue;
-          primary = dy;
-          perp = Math.abs(dx);
-        }
-        const score = primary + perp * 2;
-        if (score < bestScore) {
-          bestScore = score;
-          best = el;
-        }
-      }
-      if (best) setFocus(best);
-    }
-    function activate() {
-      if (!focusEl) {
-        move("down");
-        return;
-      }
-      const tag = focusEl.tagName, type = (focusEl.type || "").toLowerCase();
-      if (tag === "INPUT" && !/^(checkbox|radio|submit|button|reset)$/.test(type) || tag === "TEXTAREA") {
-        try {
-          focusEl.focus();
-        } catch (e) {
-        }
-      } else {
-        focusEl.click();
-      }
-    }
-    window.__scTvKey = function(dir) {
-      try {
-        if (dir === "back") {
-          if (history.length > 1) history.back();
-          else {
-            try {
-              if (window.CytubeNative && CytubeNative.tvBack) CytubeNative.tvBack();
-            } catch (e) {
-            }
-          }
-          return;
-        }
-        if (dir === "center") activate();
-        else move(dir);
-      } catch (e) {
-      }
-    };
-    const seed = () => {
-      const l = candidates();
-      if (l.length) setFocus(l.find((e) => e.tagName === "INPUT" && /^(text|password|email)$/i.test(e.type)) || l[0]);
-    };
-    if (document.readyState === "complete" || document.readyState === "interactive") seed();
-    else window.addEventListener("DOMContentLoaded", seed);
   }
-  function initTvNav() {
-    if (!isTv) return;
-    let focusEl = null;
-    let overlayFocusStack = [];
-    let ringIdleTimer = null;
-    let ringHidden = false;
-    const RING_IDLE_MS = 1e4;
-    function hideRingIdle() {
-      document.querySelectorAll(".sc-tv-focus").forEach((e) => e.classList.remove("sc-tv-focus"));
-      ringHidden = true;
-    }
-    function armRingIdle() {
-      clearTimeout(ringIdleTimer);
-      ringIdleTimer = setTimeout(hideRingIdle, RING_IDLE_MS);
-    }
-    const isVisible = (el) => {
-      if (!el || !el.getBoundingClientRect) return false;
-      const r = el.getBoundingClientRect();
-      if (r.width < 3 || r.height < 3) return false;
-      if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return false;
-      const cs = getComputedStyle(el);
-      return cs.visibility !== "hidden" && cs.display !== "none";
-    };
-    const OVERLAY_IDS = ["sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card", "sc-upnext-card", "sc-lineup-screen", "sc-subtitles-picker", "sc-subtitles-manage"];
-    const isOverlayOpen = (id, o) => !!(o && isVisible(o) && (id !== "sc-np-card" || o.classList.contains("sc-np-visible")) && (id !== "sc-upnext-card" || o.classList.contains("sc-upnext-visible")) && (id !== "sc-trivia-card" || o.classList.contains("sc-show")) && (id !== "sc-lineup-screen" || o.classList.contains("sc-lineup-visible")));
-    const openOverlay = () => {
-      for (const id of OVERLAY_IDS) {
-        const o = document.getElementById(id);
-        if (isOverlayOpen(id, o)) return o;
-      }
-      return null;
-    };
-    const countOpenOverlays = () => {
-      let n = 0;
-      for (const id of OVERLAY_IDS) {
-        if (isOverlayOpen(id, document.getElementById(id))) n++;
-      }
-      return n;
-    };
-    const isDesynced = () => {
-      const b = document.getElementById("sc-desync-btn");
-      return !!(b && b.classList.contains("sc-desync-active"));
-    };
-    const openVjsMenu = () => {
-      const m = document.querySelector("#videowrap .vjs-menu.vjs-lock-showing");
-      return m && [...m.querySelectorAll(".vjs-menu-item")].some(isVisible) ? m : null;
-    };
-    function controlBarTargets() {
-      try {
-        const bar = document.querySelector("#videowrap .vjs-control-bar");
-        if (!bar || !isVisible(bar)) return [];
-        const allowSeek = isDesynced();
-        return [...bar.querySelectorAll("button.vjs-control, button.vjs-menu-button, .vjs-progress-control")].filter((c) => {
-          if (!isVisible(c)) return false;
-          if (c.classList.contains("vjs-progress-control") && !allowSeek) return false;
-          if (c.disabled || c.classList.contains("vjs-disabled")) return false;
-          return true;
-        });
-      } catch (e) {
-        return [];
-      }
-    }
-    const MAIN_IDS = [
-      "sc-drm-open",
-      "sc-title-text",
-      "sc-chatmode-btn",
-      "sc-emote-proxy",
-      "sc-desync-btn",
-      "sc-settings-btn",
-      "sc-usercount-connected",
-      "sc-usercount-online",
-      "sc-poll-btn",
-      "sc-trivia-popup-btn",
-      "sc-poster-toggle",
-      "sc-up-next-btn",
-      "sc-subtitles-btn",
-      "sc-newmsg-pill",
-      "messagebuffer",
-      "sc-chat-textarea"
-    ];
-    const CHAT_HEADER_IDS = ["sc-usercount-connected", "sc-usercount-online", "sc-poll-btn"];
-    const FOCUS_SEL = "button, a[href], input:not([type=hidden]), textarea, select, [tabindex]";
-    const makeFocusable = (el) => {
-      if (!el.hasAttribute("tabindex") && !/^(BUTTON|A|INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) el.tabIndex = -1;
-    };
-    function candidates() {
-      const menu = openVjsMenu();
-      if (menu) {
-        const list = [...menu.querySelectorAll(".vjs-menu-item")].filter(isVisible);
-        if (list.length) return { scope: menu, list };
-      }
-      const ov = openOverlay();
-      if (ov) {
-        let list = [...ov.querySelectorAll(FOCUS_SEL)].filter(isVisible).filter((e) => !e.disabled);
-        if (!list.length) list = [ov];
-        return { scope: ov, list };
-      }
-      const main = MAIN_IDS.map((id) => document.getElementById(id)).filter((el) => el && isVisible(el) && // The new-message pill is opacity-hidden (still sized) until shown — only
-      // make it a focus target while it's actually visible.
-      (el.id !== "sc-newmsg-pill" || el.classList.contains("sc-show")));
-      return { scope: document, list: main.concat(controlBarTargets()) };
-    }
-    function clearFocus() {
-      document.querySelectorAll(".sc-tv-focus").forEach((e) => e.classList.remove("sc-tv-focus"));
-      try {
-        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-      } catch (e) {
-      }
-      holdScrubber(false);
-      focusEl = null;
-      ringHidden = false;
-    }
-    function restoreFocusAfterOverlayClose() {
-      const restore = overlayFocusStack.pop() || null;
-      clearFocus();
-      if (restore && isVisible(restore)) setFocus(restore);
-    }
-    function setFocus(el) {
-      if (!el) return;
-      makeFocusable(el);
-      if (el.hasAttribute && el.hasAttribute("title")) el.removeAttribute("title");
-      if (focusEl && focusEl.id === "sc-chat-textarea" && el.id !== "sc-chat-textarea") wakeVideoControls();
-      holdScrubber(!!(el.closest && el.closest("#videowrap-header, .video-js")));
-      document.querySelectorAll(".sc-tv-focus").forEach((e) => {
-        if (e !== el) e.classList.remove("sc-tv-focus");
-      });
-      focusEl = el;
-      ringHidden = false;
-      el.classList.add("sc-tv-focus");
-      try {
-        el.focus({ preventScroll: true });
-      } catch (e) {
-      }
-      try {
-        el.scrollIntoView({ block: "nearest", inline: "nearest" });
-      } catch (e) {
-      }
-    }
-    tvNavState.setFocus = setFocus;
-    const SEEK_RAMP = [10, 10, 10, 10, 30, 30, 30, 60, 60, 120];
-    function seekStepSeconds(repeatCount) {
-      const i = Math.max(0, Math.min(SEEK_RAMP.length - 1, repeatCount | 0));
-      return SEEK_RAMP[i];
-    }
-    function clampForwardToLive(current, next, delta) {
-      if (delta <= 0) return next;
-      const live = getDesyncLiveSeconds();
-      return live != null ? Math.max(current, Math.min(next, live)) : next;
-    }
-    function seekBy(dirSign, repeatCount) {
-      const delta = dirSign * seekStepSeconds(repeatCount);
-      try {
-        const p = window.PLAYER && window.PLAYER.player;
-        if (p && typeof p.currentTime === "function") {
-          const current = p.currentTime() || 0;
-          const next = Math.max(0, current + delta);
-          p.currentTime(clampForwardToLive(current, next, delta));
-          wakeVideoControls();
-          return;
-        }
-      } catch (e) {
-      }
-      const v = document.querySelector("#videowrap video");
-      if (v) {
-        try {
-          const current = v.currentTime;
-          v.currentTime = clampForwardToLive(current, Math.max(0, current + delta), delta);
-          wakeVideoControls();
-        } catch (e) {
-        }
-      }
-    }
-    function jumpToLive() {
-      const live = getDesyncLiveSeconds();
-      if (live == null) return;
-      try {
-        const p = window.PLAYER && window.PLAYER.player;
-        if (p && typeof p.currentTime === "function") {
-          p.currentTime(Math.max(0, live));
-          wakeVideoControls();
-          return;
-        }
-      } catch (e) {
-      }
-      const v = document.querySelector("#videowrap video");
-      if (v) {
-        try {
-          v.currentTime = Math.max(0, live);
-          wakeVideoControls();
-        } catch (e) {
-        }
-      }
-    }
-    function move(dir, repeatCount) {
-      if (focusEl && focusEl.classList && focusEl.classList.contains("vjs-progress-control") && (dir === "left" || dir === "right")) {
-        if (isDesynced()) seekBy(dir === "right" ? 1 : -1, repeatCount || 0);
-        return;
-      }
-      if (focusEl && focusEl.classList && focusEl.classList.contains("vjs-progress-control") && dir === "down") {
-        const next = document.getElementById("sc-settings-btn");
-        if (next && isVisible(next)) {
-          setFocus(next);
-          return;
-        }
-      }
-      if (focusEl && (dir === "left" || dir === "right") && !openVjsMenu()) {
-        const barEls = controlBarTargets();
-        if (barEls.includes(focusEl)) {
-          const sorted = barEls.slice().sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-          const i = sorted.indexOf(focusEl);
-          const ni = dir === "right" ? i + 1 : i - 1;
-          if (ni >= 0 && ni < sorted.length) {
-            setFocus(sorted[ni]);
-            return;
-          }
-        }
-      }
-      if (focusEl && focusEl.type === "range" && (dir === "left" || dir === "right")) {
-        const step = parseFloat(focusEl.step) || 1;
-        const min = focusEl.min !== "" ? parseFloat(focusEl.min) : -Infinity;
-        const max = focusEl.max !== "" ? parseFloat(focusEl.max) : Infinity;
-        let v = (parseFloat(focusEl.value) || 0) + (dir === "right" ? step : -step);
-        focusEl.value = Math.max(min, Math.min(max, v));
-        focusEl.dispatchEvent(new Event("input", { bubbles: true }));
-        return;
-      }
-      const lineupScreen = document.getElementById("sc-lineup-screen");
-      if (lineupScreen && lineupScreen.classList.contains("sc-lineup-visible")) {
-        const rail = focusEl && focusEl.closest(".sc-lineup-rail");
-        if (rail && (dir === "left" || dir === "right")) {
-          const items = [...rail.querySelectorAll(".sc-lineup-item")];
-          const i = items.indexOf(focusEl);
-          const ni = dir === "right" ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
-          setFocus(items[ni]);
-          return;
-        }
-        if (rail && (dir === "up" || dir === "down")) {
-          const items = [...rail.querySelectorAll(".sc-lineup-item")];
-          const myIndex = items.indexOf(focusEl);
-          const target = stepLineupSection(dir === "down" ? 1 : -1, myIndex);
-          if (target) {
-            setFocus(target);
-            return;
-          }
-          const activeTab = document.querySelector(".sc-lineup-daytab-active");
-          if (activeTab) {
-            setFocus(activeTab);
-            return;
-          }
-        }
-        const onDayRow = focusEl && (focusEl.classList.contains("sc-lineup-daytab") || focusEl.id === "sc-lineup-close");
-        if (onDayRow && dir === "down") {
-          const body = document.getElementById("sc-lineup-body");
-          const firstItem = body && body.querySelector(".sc-lineup-item");
-          if (firstItem) {
-            setFocus(firstItem);
-            return;
-          }
-        }
-        if (dir === "right" && focusEl && focusEl.classList.contains("sc-lineup-daytab")) {
-          const tabs = [...document.querySelectorAll(".sc-lineup-daytab")];
-          if (focusEl === tabs[tabs.length - 1]) {
-            const close = document.getElementById("sc-lineup-close");
-            if (close) {
-              setFocus(close);
-              return;
-            }
-          }
-        }
-        if (dir === "left" && focusEl && focusEl.id === "sc-lineup-close") {
-          const tabs = [...document.querySelectorAll(".sc-lineup-daytab")];
-          const lastTab = tabs[tabs.length - 1];
-          if (lastTab) {
-            setFocus(lastTab);
-            return;
-          }
-        }
-      }
-      {
-        const buf2 = document.getElementById("messagebuffer");
-        const onHeaderBtn = focusEl && CHAT_HEADER_IDS.includes(focusEl.id);
-        const onLog = focusEl && focusEl.id === "messagebuffer";
-        const onTextarea = focusEl && focusEl.id === "sc-chat-textarea";
-        if (onHeaderBtn && (dir === "left" || dir === "right")) {
-          const i = CHAT_HEADER_IDS.indexOf(focusEl.id);
-          const step = dir === "right" ? 1 : -1;
-          for (let ni = i + step; ni >= 0 && ni < CHAT_HEADER_IDS.length; ni += step) {
-            const el = document.getElementById(CHAT_HEADER_IDS[ni]);
-            if (el && isVisible(el)) {
-              setFocus(el);
-              return;
-            }
-          }
-        }
-        if (onHeaderBtn && dir === "down" && buf2 && isVisible(buf2)) {
-          setFocus(buf2);
-          return;
-        }
-        if (onTextarea && dir === "up" && buf2 && isVisible(buf2)) {
-          setFocus(buf2);
-          return;
-        }
-        if (onLog && buf2 && (dir === "up" || dir === "down")) {
-          const scrollable = buf2.scrollHeight > buf2.clientHeight;
-          const atTop = buf2.scrollTop <= 0;
-          const atBottom2 = buf2.scrollTop + buf2.clientHeight >= buf2.scrollHeight - 1;
-          if (dir === "down") {
-            if (scrollable && !atBottom2) {
-              buf2.scrollTop += 140;
-              return;
-            }
-            const ta = document.getElementById("sc-chat-textarea");
-            if (ta && isVisible(ta)) {
-              setFocus(ta);
-              return;
-            }
-          } else {
-            if (scrollable && !atTop) {
-              buf2.scrollTop -= 140;
-              return;
-            }
-            const firstHeader = CHAT_HEADER_IDS.map((id) => document.getElementById(id)).find((e) => e && isVisible(e));
-            if (firstHeader) {
-              setFocus(firstHeader);
-              return;
-            }
-          }
-        }
-      }
-      const { scope, list } = candidates();
-      if (!list.length) return;
-      if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) {
-        setFocus(list[0]);
-        return;
-      }
-      if (scope && scope.id === "sc-settings-overlay") {
-        const isTabEl = (el) => !!(el.classList && el.classList.contains("sc-settings-tab"));
-        const isActionsEl = (el) => !!(el.closest && el.closest("#sc-settings-actions"));
-        const isPaneEl = (el) => !isTabEl(el) && !isActionsEl(el);
-        if (isTabEl(focusEl) && dir === "down") {
-          const target = list.find(isPaneEl);
-          if (target) {
-            setFocus(target);
-            return;
-          }
-        } else if (isActionsEl(focusEl) && dir === "up") {
-          const paneEls = list.filter(isPaneEl);
-          const target = paneEls[paneEls.length - 1];
-          if (target) {
-            setFocus(target);
-            return;
-          }
-        } else if (isPaneEl(focusEl) && (dir === "up" || dir === "down")) {
-          const paneEls = list.filter(isPaneEl);
-          const i = paneEls.indexOf(focusEl);
-          const ni = dir === "down" ? i + 1 : i - 1;
-          if (ni >= 0 && ni < paneEls.length) {
-            setFocus(paneEls[ni]);
-            return;
-          }
-          if (dir === "up") {
-            const activeTab = list.find((el) => isTabEl(el) && el.classList.contains("sc-settings-tab-active"));
-            if (activeTab) {
-              setFocus(activeTab);
-              return;
-            }
-          } else {
-            const firstAction = list.find(isActionsEl);
-            if (firstAction) {
-              setFocus(firstAction);
-              return;
-            }
-          }
-        }
-      }
-      const cur = focusEl.getBoundingClientRect();
-      const idx = pickDirectional(dir, cur, list.map((el) => el === focusEl ? null : el.getBoundingClientRect()));
-      if (idx !== -1) {
-        setFocus(list[idx]);
-        return;
-      }
-      if (dir === "up" || dir === "down") {
-        const sc = scope.querySelector && scope.querySelector("#sc-trivia-list, #sc-settings-modal, #sc-upnext-body, #messagebuffer") || document.getElementById("messagebuffer");
-        if (sc && sc.scrollHeight > sc.clientHeight) sc.scrollTop += dir === "down" ? 140 : -140;
-      }
-    }
-    function activate() {
-      if (!focusEl) {
-        move("right");
-        return;
-      }
-      if (focusEl.classList && focusEl.classList.contains("vjs-progress-control")) {
-        if (isDesynced()) jumpToLive();
-        return;
-      }
-      if (focusEl.tagName === "TEXTAREA" || focusEl.tagName === "INPUT") {
-        if (focusEl.type === "checkbox" || focusEl.type === "range") focusEl.click();
-        else {
-          try {
-            focusEl.focus();
-          } catch (e) {
-          }
-        }
-        return;
-      }
-      const ownerWrap = focusEl.classList && focusEl.classList.contains("vjs-menu-item") && focusEl.closest(".vjs-menu-button");
-      const ownerBtn = ownerWrap && ownerWrap.querySelector("button.vjs-menu-button");
-      const opener = focusEl;
-      const depthBefore = countOpenOverlays();
-      focusEl.click();
-      const depthAfter = countOpenOverlays();
-      if (depthAfter > depthBefore) {
-        overlayFocusStack.push(opener);
-      } else if (depthAfter < depthBefore) {
-        restoreFocusAfterOverlayClose();
-        return;
-      }
-      if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) {
-        clearFocus();
-        setFocus(ownerBtn);
-      }
-    }
-    function closeTop() {
-      const menu = openVjsMenu();
-      if (menu) {
-        const wrap = menu.closest(".vjs-menu-button");
-        const btn = wrap && wrap.querySelector("button.vjs-menu-button");
-        if (btn) {
-          try {
-            btn.click();
-          } catch (e) {
-            try {
-              menu.classList.remove("vjs-lock-showing");
-            } catch (e2) {
-            }
-          }
-        } else {
-          try {
-            menu.classList.remove("vjs-lock-showing");
-          } catch (e) {
-          }
-        }
-        clearFocus();
-        if (btn && isVisible(btn)) setFocus(btn);
-        return true;
-      }
-      const settings = document.getElementById("sc-settings-overlay");
-      if (settings && isVisible(settings)) {
-        const c = document.getElementById("sc-settings-cancel");
-        if (c) c.click();
-        else settings.remove();
-        restoreFocusAfterOverlayClose();
-        return true;
-      }
-      const modal = document.getElementById("sc-modal-overlay");
-      if (modal && isVisible(modal)) {
-        (document.getElementById("sc-btn-cancel") || { click() {
-          modal.remove();
-        } }).click();
-        restoreFocusAfterOverlayClose();
-        return true;
-      }
-      const trivia = document.getElementById("sc-trivia-card");
-      if (trivia && trivia.classList.contains("sc-show")) {
-        hideTriviaCard();
-        restoreFocusAfterOverlayClose();
-        return true;
-      }
-      const np = document.getElementById("sc-np-card");
-      if (np && np.classList.contains("sc-np-visible")) {
-        hideNowPlayingCard();
-        restoreFocusAfterOverlayClose();
-        return true;
-      }
-      const upNext = document.getElementById("sc-upnext-card");
-      if (upNext && upNext.classList.contains("sc-upnext-visible")) {
-        hideUpNextCard();
-        restoreFocusAfterOverlayClose();
-        return true;
-      }
-      const lineup = document.getElementById("sc-lineup-screen");
-      if (lineup && lineup.classList.contains("sc-lineup-visible")) {
-        hideLineupScreen();
-        restoreFocusAfterOverlayClose();
-        return true;
-      }
-      for (const id of ["sc-users-panel", "sc-poll-panel"]) {
-        const p = document.getElementById(id);
-        if (p && isVisible(p)) {
-          p.style.display = "none";
-          restoreFocusAfterOverlayClose();
-          return true;
-        }
-      }
-      const subsPicker = document.getElementById("sc-subtitles-picker");
-      if (subsPicker && isVisible(subsPicker)) {
-        const c = document.getElementById("sc-subtitles-picker-close");
-        if (c) c.click();
-        else subsPicker.remove();
-        restoreFocusAfterOverlayClose();
-        return true;
-      }
-      const subsManage = document.getElementById("sc-subtitles-manage");
-      if (subsManage && isVisible(subsManage)) {
-        const c = document.getElementById("sc-subtitles-manage-close");
-        if (c) c.click();
-        else subsManage.remove();
-        restoreFocusAfterOverlayClose();
-        return true;
-      }
-      return false;
-    }
-    function revealChrome() {
-      if (typeof chromeState.leftZoneReveal === "function") chromeState.leftZoneReveal(4e3);
-      else document.body.classList.add("sc-leftzone");
-      if (typeof chromeState.chromeWake === "function") chromeState.chromeWake();
-      else document.body.classList.remove("sc-chrome-hidden");
-      if (typeof chromeState.topBarWake === "function") chromeState.topBarWake();
-    }
-    window.__scTvKey = function(dir, repeatCount) {
-      try {
-        armRingIdle();
-        if (ringHidden && dir !== "back") {
-          ringHidden = false;
-          if (focusEl && focusEl.isConnected) {
-            focusEl.classList.add("sc-tv-focus");
-            try {
-              focusEl.focus({ preventScroll: true });
-            } catch (e) {
-            }
-          }
-          revealChrome();
-          return;
-        }
-        if (dir === "back") {
-          ringHidden = false;
-          if (!closeTop()) {
-            try {
-              if (window.CytubeNative && CytubeNative.tvBack) CytubeNative.tvBack();
-            } catch (e) {
-            }
-          }
-          return;
-        }
-        revealChrome();
-        if (dir === "center") activate();
-        else move(dir, repeatCount || 0);
-      } catch (e) {
-      }
-    };
-    armRingIdle();
+  var _imdbId = null;
+  var _cues2 = null;
+  var _lastResults = [];
+  var _loading = false;
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
-
-  // src/lineup/screen.js
-  var _lastData = null;
-  var _activeDay = null;
-  var _activeSectionIndex = 0;
-  function ensureScreenDom() {
-    ensureThemeFontsLoaded();
-    let screen2 = document.getElementById("sc-lineup-screen");
-    if (screen2) return screen2;
-    screen2 = document.createElement("div");
-    screen2.id = "sc-lineup-screen";
-    screen2.innerHTML = `
-        <button id="sc-lineup-close" type="button">✕</button>
-        <div id="sc-lineup-header"></div>
-        <div id="sc-lineup-subtitle">Titles/times may be subject to change.</div>
-        <nav id="sc-lineup-daytabs"></nav>
-        <div id="sc-lineup-body"></div>
-        <svg width="0" height="0" style="position:absolute">
-            <filter id="sc-ticket-grain">
-                <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" result="noise"/>
-                <feColorMatrix in="noise" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.08 0"/>
-            </filter>
-        </svg>`;
-    screen2.querySelector("#sc-lineup-close").addEventListener("click", hideLineupScreen);
-    document.body.appendChild(screen2);
-    return screen2;
-  }
-  function renderLoading(screen2) {
-    screen2.querySelector("#sc-lineup-daytabs").innerHTML = "";
-    screen2.querySelector("#sc-lineup-body").innerHTML = '<div id="sc-lineup-loading">Fetching tonight’s lineup…</div>';
-  }
-  function fallbackTitleFontSize(text) {
-    if (text.length > 55) return 10;
-    if (text.length > 38) return 12;
-    return 14;
-  }
-  function itemButton(item) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "sc-lineup-item" + (item.isNowPlaying ? " sc-lineup-item-current" : "") + (item.played ? " sc-lineup-item-played" : "") + (item.clickable === false ? " sc-lineup-item-static" : "");
-    const titleText = `${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ""}`;
-    const etaText = item.isNowPlaying ? "NOW PLAYING" : item.etaLabel || "";
-    btn.innerHTML = `
-        <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ""}">
-            ${!item.poster ? `<div class="sc-lineup-poster-fallback" style="font-size:${fallbackTitleFontSize(titleText)}px">${titleText}</div>` : ""}
-            ${etaText ? `<div class="sc-lineup-eta">${etaText}</div>` : ""}
-        </div>`;
-    if (item.clickable !== false) {
-      btn.addEventListener("click", () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
+  function ensureButton() {
+    let btn = document.getElementById("sc-subtitles-btn");
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.id = "sc-subtitles-btn";
+      btn.className = "sc-dock-btn";
+      btn.type = "button";
+      btn.title = "Download subtitles for this movie";
+      btn.dataset.tvLabel = "Subtitles";
+      btn.addEventListener("click", onButtonClick);
+      document.body.appendChild(btn);
     }
     return btn;
   }
-  function sectionEl(section) {
-    const el = document.createElement("div");
-    el.className = "sc-lineup-section";
-    const theme = getSectionTheme(section.slug);
-    el.style.setProperty("--sc-lineup-wash", theme.wash);
-    if (section.name) {
-      const name = document.createElement("div");
-      name.className = "sc-lineup-section-name";
-      name.style.setProperty("color", theme.color, "important");
-      if (theme.font) name.style.setProperty("font-family", `${theme.font}, cursive`, "important");
-      name.textContent = section.name;
-      el.appendChild(name);
-    }
-    const rail = document.createElement("div");
-    rail.className = "sc-lineup-rail";
-    section.items.forEach((item) => rail.appendChild(itemButton(item)));
-    el.appendChild(rail);
-    return el;
-  }
-  function renderDayTabs(screen2, days) {
-    const tabs = screen2.querySelector("#sc-lineup-daytabs");
-    tabs.innerHTML = "";
-    days.forEach((d) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "sc-lineup-daytab" + (d.day === _activeDay ? " sc-lineup-daytab-active" : "");
-      btn.innerHTML = `<span class="sc-lineup-daytab-label">${d.day}</span>`;
-      btn.addEventListener("click", () => showDay(screen2, d.day));
-      tabs.appendChild(btn);
-    });
-  }
-  function renderBody(screen2, days) {
-    const body = screen2.querySelector("#sc-lineup-body");
-    body.innerHTML = "";
-    const day = days.find((d) => d.day === _activeDay) || days[0];
-    if (!day || !day.sections.length) {
-      body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
-      return;
-    }
-    if (isTv) {
-      if (_activeSectionIndex >= day.sections.length) _activeSectionIndex = 0;
-      body.appendChild(sectionEl(day.sections[_activeSectionIndex]));
-    } else {
-      day.sections.forEach((section) => body.appendChild(sectionEl(section)));
-    }
-  }
-  function showDay(screen2, day) {
-    _activeDay = day;
-    _activeSectionIndex = 0;
-    const tabs = [...screen2.querySelectorAll(".sc-lineup-daytab")];
-    tabs.forEach((t) => t.classList.toggle("sc-lineup-daytab-active", t.textContent === day));
-    renderBody(screen2, _lastData.days);
-  }
-  function stepLineupSection(delta, columnIndex) {
-    if (!_lastData || _lastData.fallback) return null;
-    const days = _lastData.days || [];
-    const day = days.find((d) => d.day === _activeDay) || days[0];
-    if (!day) return null;
-    const newIndex = _activeSectionIndex + delta;
-    if (newIndex < 0 || newIndex >= day.sections.length) return null;
-    _activeSectionIndex = newIndex;
-    const screen2 = document.getElementById("sc-lineup-screen");
-    renderBody(screen2, days);
-    const rail = screen2.querySelector(".sc-lineup-rail");
-    if (!rail) return null;
-    const items = [...rail.querySelectorAll(".sc-lineup-item")];
-    return items[Math.min(columnIndex, items.length - 1)] || null;
-  }
-  function renderFallback(screen2, data) {
-    screen2.querySelector("#sc-lineup-daytabs").innerHTML = "";
-    const body = screen2.querySelector("#sc-lineup-body");
-    body.innerHTML = "";
-    const items = data.days && data.days[0] && data.days[0].sections[0] && data.days[0].sections[0].items || [];
-    if (!items.length) {
-      body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
-      return;
-    }
-    const section = document.createElement("div");
-    section.className = "sc-lineup-section sc-lineup-section-fallback";
-    const rail = document.createElement("div");
-    rail.className = "sc-lineup-rail";
-    items.forEach((item) => rail.appendChild(itemButton(item)));
-    section.appendChild(rail);
-    body.appendChild(section);
-  }
-  function renderItems(screen2, data) {
-    const header = screen2.querySelector("#sc-lineup-header");
-    if (header) header.textContent = data && data.listTitle || "Grindhouse Lineup";
-    _lastData = data;
-    if (!data || data.fallback) {
-      renderFallback(screen2, data || { days: [] });
-      return;
-    }
-    const days = data.days || [];
-    _activeDay = (days.find((d) => d.isToday) || days[0] || {}).day || null;
-    _activeSectionIndex = 0;
-    renderDayTabs(screen2, days);
-    renderBody(screen2, days);
-    if (tvNavState.setFocus) {
-      const activeTab = screen2.querySelector(".sc-lineup-daytab-active");
-      if (activeTab) tvNavState.setFocus(activeTab);
-    }
-  }
-  function showLineupScreen() {
-    const screen2 = ensureScreenDom();
-    screen2.classList.add("sc-lineup-visible");
-    renderLoading(screen2);
-    getTonightsLineup().then((data) => renderItems(screen2, data)).catch(() => {
-      renderItems(screen2, { fallback: true, days: [] });
-    });
-  }
-  function hideLineupScreen() {
-    const screen2 = document.getElementById("sc-lineup-screen");
-    if (screen2) screen2.classList.remove("sc-lineup-visible");
-  }
-
-  // src/posters.js
-  function initPosterStrip() {
-    if (document.getElementById("sc-poster-toggle")) return;
-    const toggleBtn = document.createElement("button");
-    toggleBtn.id = "sc-poster-toggle";
-    toggleBtn.textContent = "Coming Attractions";
-    toggleBtn.title = "Show tonight's lineup";
-    toggleBtn.dataset.noTvCaption = "1";
-    toggleBtn.addEventListener("click", () => showLineupScreen());
-    const header = document.getElementById("videowrap-header");
-    (header || document.body).appendChild(toggleBtn);
-  }
-  function initUpNextButton() {
-    if (document.getElementById("sc-up-next-btn")) return;
-    const btn = document.createElement("button");
-    btn.id = "sc-up-next-btn";
-    btn.textContent = "Up Next";
-    btn.title = "Preview what's playing next";
-    btn.dataset.noTvCaption = "1";
-    btn.addEventListener("click", () => showUpNextCard());
-    const header = document.getElementById("videowrap-header");
-    const posterToggle = document.getElementById("sc-poster-toggle");
-    if (header && posterToggle && posterToggle.parentNode === header) {
-      header.insertBefore(btn, posterToggle);
-    } else {
-      (header || document.body).appendChild(btn);
-    }
-  }
-  function initPollWatcher() {
-    const tryInit = () => {
-      const pollwrap = document.getElementById("pollwrap");
-      if (!pollwrap) {
-        const bodyObs = new MutationObserver(() => {
-          if (document.getElementById("pollwrap")) {
-            bodyObs.disconnect();
-            tryInit();
-          }
-        });
-        bodyObs.observe(document.body, { childList: true, subtree: true });
-        return;
+  function updateSubtitleButton(imdbId) {
+    if (imdbId !== _imdbId) {
+      _imdbId = imdbId;
+      _cues2 = null;
+      _lastResults = [];
+      closeSubtitlesPicker();
+      closeManageModal();
+      hideMovieSubtitles();
+      const cached = imdbId && _subtitleCache[imdbId];
+      if (cached) {
+        _cues2 = cached.cues;
+        setSubtitleOffset(cached.offset || 0);
       }
-      _initPollWatcher(pollwrap);
-    };
-    tryInit();
+    }
+    const show = !!(imdbId && hasKey(LS_OPENSUBTITLES));
+    const btn = show ? ensureButton() : document.getElementById("sc-subtitles-btn");
+    if (btn) btn.classList.toggle("sc-hidden", !show);
+    layoutDock();
   }
-  function _initPollWatcher(pollwrap) {
-    const header = document.getElementById("sc-chat-header");
-    if (!header) return;
-    const btn = document.createElement("button");
-    btn.id = "sc-poll-btn";
-    btn.title = "Channel announcement / poll";
-    btn.textContent = "POLL";
-    header.appendChild(btn);
+  async function onButtonClick() {
+    if (_loading) return;
+    if (_cues2) {
+      openManageModal();
+      return;
+    }
+    _loading = true;
+    const btn = document.getElementById("sc-subtitles-btn");
+    btn.disabled = true;
+    btn.title = "Searching…";
+    _lastResults = await searchSubtitles(_imdbId);
+    btn.disabled = false;
+    btn.title = "Download subtitles for this movie";
+    _loading = false;
+    openSubtitlesPicker();
+  }
+  function resultBadges(r) {
+    const badges = [];
+    if (r.fromTrusted) badges.push('<span class="sc-subtitles-badge sc-subtitles-badge-trusted">✓ Trusted</span>');
+    if (r.hearingImpaired) badges.push('<span class="sc-subtitles-badge">SDH</span>');
+    if (r.machineTranslated) badges.push('<span class="sc-subtitles-badge sc-subtitles-badge-warn">Machine-translated</span>');
+    return badges.join("");
+  }
+  function openSubtitlesPicker() {
+    closeManageModal();
+    closeSubtitlesPicker();
+    const results = _lastResults;
     const panel = document.createElement("div");
-    panel.id = "sc-poll-panel";
-    panel.style.display = "none";
+    panel.id = "sc-subtitles-picker";
+    panel.innerHTML = `
+        <div id="sc-subtitles-picker-box">
+            <div id="sc-subtitles-picker-head">
+                <span>Choose Subtitles</span>
+                <button id="sc-subtitles-picker-close" type="button">✕</button>
+            </div>
+            <div id="sc-subtitles-picker-body">
+                ${results.length ? results.map((r, i) => `
+                    <button type="button" class="sc-subtitles-result" data-idx="${i}">
+                        <span class="sc-subtitles-result-release">${escapeHtml(r.release)}</span>
+                        <span class="sc-subtitles-result-meta">${escapeHtml(r.uploader)} · ${r.downloadCount.toLocaleString()} downloads</span>
+                        ${resultBadges(r) ? `<span class="sc-subtitles-result-badges">${resultBadges(r)}</span>` : ""}
+                    </button>`).join("") : '<div class="sc-subtitles-empty">No subtitles found for this movie.</div>'}
+            </div>
+            <div id="sc-subtitles-picker-status"></div>
+        </div>`;
     document.body.appendChild(panel);
-    let panelOpen = false;
-    const renderPanel = () => {
-      var _a, _b, _c, _d, _e;
-      const well = pollwrap.querySelector(".well.active") || pollwrap.querySelector(".well");
-      if (!well) {
-        panel.innerHTML = "";
-        return;
-      }
-      const h = ((_b = (_a = well.querySelector("h3")) == null ? void 0 : _a.textContent) == null ? void 0 : _b.trim()) || "";
-      const opts = [...well.querySelectorAll(".option")].map((o) => {
-        const btn2 = o.querySelector("button");
-        const text = o.textContent.replace((btn2 == null ? void 0 : btn2.textContent) || "", "").trim();
-        const links = [...o.querySelectorAll("a")].map(
-          (a) => `<a href="${a.href}" target="_blank" rel="noopener noreferrer">${a.textContent}</a>`
-        );
-        let html = o.innerHTML.replace(/<button[^>]*>.*?<\/button>/i, "").trim();
-        return `<div class="sc-poll-option">${html}</div>`;
-      });
-      const label = ((_d = (_c = well.querySelector(".label")) == null ? void 0 : _c.textContent) == null ? void 0 : _d.trim()) || "";
-      const author = ((_e = well.querySelector(".label")) == null ? void 0 : _e.getAttribute("title")) || "";
-      panel.innerHTML = `
-            <div class="sc-poll-header">${h}</div>
-            <div class="sc-poll-options">${opts.join("")}</div>
-            ${label ? `<div class="sc-poll-meta">${author ? author + " · " : ""}${label}</div>` : ""}
-        `;
-    };
-    const hasPollContent = () => {
-      const activeWell = pollwrap.querySelector(".well.active") || pollwrap.querySelector(".well");
-      return !!(activeWell && activeWell.textContent.trim().length > 10);
-    };
-    const updateBtn = () => {
-      const hasContent = hasPollContent();
-      btn.style.display = hasContent ? "" : "none";
-      if (!hasContent && panelOpen) {
-        panel.style.display = "none";
-        panelOpen = false;
-        btn.classList.remove("sc-poll-btn-active");
-      }
-    };
-    btn.addEventListener("click", () => {
-      panelOpen = !panelOpen;
-      if (panelOpen) {
-        renderPanel();
-        panel.style.display = "block";
-        btn.classList.add("sc-poll-btn-active");
-      } else {
-        panel.style.display = "none";
-        btn.classList.remove("sc-poll-btn-active");
-      }
+    panel.querySelector("#sc-subtitles-picker-close").addEventListener("click", closeSubtitlesPicker);
+    panel.querySelectorAll(".sc-subtitles-result").forEach((el, i) => {
+      el.addEventListener("click", () => selectResult(results[i]));
     });
-    document.addEventListener("click", (e) => {
-      if (panelOpen && !btn.contains(e.target) && !panel.contains(e.target)) {
-        panel.style.display = "none";
-        panelOpen = false;
-        btn.classList.remove("sc-poll-btn-active");
-      }
-    });
-    const reactToPollChange = () => {
-      updateBtn();
-      if (panelOpen) renderPanel();
-    };
-    onSocket("newPoll", reactToPollChange);
-    onSocket("updatePoll", reactToPollChange);
-    onSocket("closePoll", reactToPollChange);
-    updateBtn();
+    const first = panel.querySelector(".sc-subtitles-result") || panel.querySelector("#sc-subtitles-picker-close");
+    if (first && tvNavState.setFocus) tvNavState.setFocus(first);
   }
-  function initUserCount() {
-    const header = document.getElementById("sc-chat-header");
-    if (!header) return;
-    const wrap = document.createElement("div");
-    wrap.id = "sc-usercount-btn";
-    header.appendChild(wrap);
-    const connectedBtn = document.createElement("button");
-    connectedBtn.id = "sc-usercount-connected";
-    connectedBtn.className = "sc-usercount-part";
-    connectedBtn.title = "Connected";
-    wrap.appendChild(connectedBtn);
-    const onlineBtn = document.createElement("button");
-    onlineBtn.id = "sc-usercount-online";
-    onlineBtn.className = "sc-usercount-part";
-    onlineBtn.title = "Online";
-    wrap.appendChild(onlineBtn);
-    const panel = document.createElement("div");
-    panel.id = "sc-users-panel";
-    document.body.appendChild(panel);
-    let activeMode = null;
-    let lastTotal = 0;
-    const readItemUsername = (item) => {
-      var _a, _b;
-      const spans = item.querySelectorAll("span");
-      return ((_b = (_a = spans[spans.length - 1]) == null ? void 0 : _a.textContent) == null ? void 0 : _b.trim()) || "";
-    };
-    const getUserItems = () => [...document.querySelectorAll("#userlist .userlist_item")];
-    const sortByName = (a, b) => a.toLowerCase().localeCompare(b.toLowerCase());
-    const getConnectedUsers = () => getUserItems().filter((item) => !item.classList.contains("userlist_afk")).map(readItemUsername).filter(Boolean).sort(sortByName);
-    const getOnlineUsers = () => {
-      const all = getUserItems().map((item) => ({ name: readItemUsername(item), afk: item.classList.contains("userlist_afk") })).filter((u) => u.name);
-      const active = all.filter((u) => !u.afk).sort((a, b) => sortByName(a.name, b.name));
-      const idle = all.filter((u) => u.afk).sort((a, b) => sortByName(a.name, b.name));
-      return [...active, ...idle];
-    };
-    const updateCount = (n) => {
-      const connected = getConnectedUsers().length;
-      const total = typeof n === "number" ? n : (() => {
-        var _a, _b;
-        const cytubCount = document.getElementById("usercount");
-        const raw = (_b = (_a = cytubCount == null ? void 0 : cytubCount.textContent) == null ? void 0 : _a.match(/\d+/)) == null ? void 0 : _b[0];
-        return raw ? parseInt(raw) : connected;
-      })();
-      lastTotal = total;
-      connectedBtn.textContent = `🗨 ${connected}`;
-      onlineBtn.textContent = `👁 ${total}`;
-    };
-    const renderPanel = () => {
-      const users = activeMode === "online" ? getOnlineUsers() : getConnectedUsers().map((name) => ({ name, afk: false }));
-      const headerText = activeMode === "online" ? `${users.length} of ${lastTotal} online` : `${users.length} connected`;
-      panel.innerHTML = `
-            <div class="sc-users-panel-header">${headerText}</div>
-            ${users.map((u) => {
-        const color = usernameToColor(u.name);
-        const emoji = getExternalUserEmoji(u.name);
-        const emojiHtml = emoji ? emojiSlotHtml(emoji, "sc-users-panel-emoji", emoji) : "";
-        const afkClass = u.afk ? " sc-users-panel-afk" : "";
-        return `<div class="sc-users-panel-name${afkClass}" style="color:${color}">${emojiHtml}${u.name}</div>`;
-      }).join("")}
-        `;
-    };
-    const closePanel = () => {
-      panel.style.display = "none";
-      connectedBtn.classList.remove("sc-users-active");
-      onlineBtn.classList.remove("sc-users-active");
-      activeMode = null;
-    };
-    const openPanel = (mode, modeBtn) => {
-      activeMode = mode;
-      renderPanel();
-      panel.style.display = "block";
-      connectedBtn.classList.toggle("sc-users-active", modeBtn === connectedBtn);
-      onlineBtn.classList.toggle("sc-users-active", modeBtn === onlineBtn);
-    };
-    const handleModeClick = (mode, modeBtn) => (e) => {
-      e.stopPropagation();
-      if (activeMode === mode) closePanel();
-      else openPanel(mode, modeBtn);
-    };
-    connectedBtn.addEventListener("click", handleModeClick("connected", connectedBtn));
-    onlineBtn.addEventListener("click", handleModeClick("online", onlineBtn));
-    document.addEventListener("click", (e) => {
-      if (activeMode && !panel.contains(e.target) && !connectedBtn.contains(e.target) && !onlineBtn.contains(e.target)) {
-        closePanel();
-      }
-    });
-    const ul = document.getElementById("userlist");
-    if (ul) {
-      new MutationObserver(() => {
-        updateCount();
-        if (activeMode) renderPanel();
-      }).observe(ul, { childList: true, subtree: true });
+  function closeSubtitlesPicker() {
+    const panel = document.getElementById("sc-subtitles-picker");
+    if (panel) panel.remove();
+  }
+  async function selectResult(result) {
+    const status = document.getElementById("sc-subtitles-picker-status");
+    if (status) status.textContent = "Downloading…";
+    const link = await downloadSubtitle(result.fileId);
+    if (!link) {
+      if (status) status.textContent = "Download failed — try another, or check your key/quota.";
+      return;
     }
-    onSocket("usercount", (n) => {
-      updateCount(n);
-      if (activeMode === "online") renderPanel();
-    });
-    updateCount();
-  }
-
-  // src/chat/fontsize.js
-  function getChatFontSize() {
-    const v = parseInt(getKey(LS_CHAT_FONT), 10);
-    if (Number.isFinite(v) && v >= 10 && v <= 32) return v;
-    return document.body && document.body.classList.contains("sc-tv") ? 18 : 14;
-  }
-  function applyChatFontSize(px) {
-    const buf2 = document.getElementById("messagebuffer");
-    if (buf2) buf2.style.setProperty("font-size", px + "px", "important");
-    const ta = document.getElementById("sc-chat-textarea");
-    if (ta) {
-      const overlay = document.body && document.body.classList.contains("sc-chat-overlay");
-      ta.style.setProperty("font-size", (overlay ? 13 : px) + "px", "important");
+    const srt = await fetchSrtText(link);
+    const cues = srt ? parseSrt(srt) : [];
+    if (!cues.length) {
+      if (status) status.textContent = "Couldn't read that subtitle file — try another.";
+      return;
     }
+    _cues2 = cues;
+    resetSubtitleOffset();
+    _subtitleCache[_imdbId] = { cues, offset: 0, release: result.release, uploader: result.uploader, ts: Date.now() };
+    persistSubtitleCache();
+    closeSubtitlesPicker();
+    showMovieSubtitles(_cues2);
+  }
+  var OFFSET_STEP = 0.5;
+  function renderOffsetReadout(modal) {
+    const seconds = getSubtitleOffset();
+    const el = modal.querySelector("#sc-subtitles-offset-val");
+    if (el) el.textContent = (seconds > 0 ? "+" : "") + seconds.toFixed(1) + "s";
+  }
+  function openManageModal() {
+    closeSubtitlesPicker();
+    closeManageModal();
+    const modal = document.createElement("div");
+    modal.id = "sc-subtitles-manage";
+    modal.innerHTML = `
+        <div id="sc-subtitles-manage-box">
+            <div id="sc-subtitles-manage-head">
+                <span>Subtitles</span>
+                <button id="sc-subtitles-manage-close" type="button">✕</button>
+            </div>
+            <button id="sc-subtitles-manage-toggle" type="button" class="sc-settings-btn-wide"></button>
+            <div class="sc-subtitles-offset-row">
+                <span class="sc-subtitles-offset-label">Sync offset</span>
+                <div class="sc-subtitles-offset-controls">
+                    <button id="sc-subtitles-offset-minus" type="button" class="sc-settings-test">−0.5s</button>
+                    <span id="sc-subtitles-offset-val"></span>
+                    <button id="sc-subtitles-offset-plus" type="button" class="sc-settings-test">+0.5s</button>
+                </div>
+            </div>
+            <button id="sc-subtitles-offset-reset" type="button" class="sc-update-github-link">Reset offset</button>
+            <button id="sc-subtitles-manage-different" type="button" class="sc-settings-btn-wide">Download a different one</button>
+        </div>`;
+    document.body.appendChild(modal);
+    const toggleBtn = modal.querySelector("#sc-subtitles-manage-toggle");
+    const syncToggleLabel = () => {
+      toggleBtn.textContent = isMovieSubtitlesVisible() ? "Hide Subtitles" : "Show Subtitles";
+    };
+    syncToggleLabel();
+    toggleBtn.addEventListener("click", () => {
+      if (isMovieSubtitlesVisible()) hideMovieSubtitles();
+      else showMovieSubtitles(_cues2);
+      syncToggleLabel();
+    });
+    const applyOffset = (seconds) => {
+      setSubtitleOffset(seconds);
+      renderOffsetReadout(modal);
+      if (_subtitleCache[_imdbId]) {
+        _subtitleCache[_imdbId].offset = seconds;
+        persistSubtitleCache();
+      }
+    };
+    renderOffsetReadout(modal);
+    modal.querySelector("#sc-subtitles-offset-minus").addEventListener("click", () => applyOffset(getSubtitleOffset() - OFFSET_STEP));
+    modal.querySelector("#sc-subtitles-offset-plus").addEventListener("click", () => applyOffset(getSubtitleOffset() + OFFSET_STEP));
+    modal.querySelector("#sc-subtitles-offset-reset").addEventListener("click", () => applyOffset(0));
+    modal.querySelector("#sc-subtitles-manage-close").addEventListener("click", closeManageModal);
+    modal.querySelector("#sc-subtitles-manage-different").addEventListener("click", async (e) => {
+      if (!_lastResults.length) {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = "Searching…";
+        _lastResults = await searchSubtitles(_imdbId);
+        btn.disabled = false;
+        btn.textContent = "Download a different one";
+      }
+      openSubtitlesPicker();
+    });
+    if (tvNavState.setFocus) tvNavState.setFocus(toggleBtn);
+  }
+  function closeManageModal() {
+    const modal = document.getElementById("sc-subtitles-manage");
+    if (modal) modal.remove();
   }
 
   // src/cards/subtitles.js
@@ -3820,7 +3470,7 @@
     const emojiHtml = line.emoji ? emojiSlotHtml(line.emoji, "sc-subtitle-emoji", _escHtml2(line.emoji)) : "";
     return `<div class="sc-subtitle-pill">${emojiHtml}<span class="sc-subtitle-name" style="color:${line.color}">${_escHtml2(line.username)}:</span> <span class="sc-subtitle-text">${line.html}</span></div>`;
   }
-  function ensureContainer() {
+  function ensureContainer2() {
     let el = document.getElementById("sc-subtitles-overlay");
     if (!el) {
       el = document.createElement("div");
@@ -3838,7 +3488,7 @@
   }
   function refreshSubtitles() {
     if (!inSubtitlesMode()) return;
-    const container = ensureContainer();
+    const container = ensureContainer2();
     const buf2 = document.getElementById("messagebuffer");
     if (!buf2) return;
     const maxLines = getSubtitleLines();
@@ -3847,7 +3497,7 @@
     container.innerHTML = lines.map(renderSubtitleLine).join("");
   }
   function initSubtitles() {
-    ensureContainer();
+    ensureContainer2();
     applySubtitleOpacity(getSubtitleOpacity());
     applySubtitleFontSize(getSubtitleFontSize());
     refreshSubtitles();
@@ -3865,554 +3515,1009 @@
     refreshSubtitles();
   }
 
-  // src/chat/modes.js
-  function initAmbientGlow() {
-    if (isTv) return;
+  // src/cards/driveincard.js
+  function _escHtml3(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  var CARD_MS = {
+    header: 1200,
+    line: 1500,
+    pause: 1200,
+    clear: 600,
+    starStart: 150,
+    star: 280,
+    says: 300,
+    hold: 6e3,
+    fade: 800,
+    // Academy Award slide: the verdict holds `verdictHold` first, then the
+    // header swaps; each nominee stays up long enough to read (`awardCharMs`
+    // per character, never less than `line`, at most `awardLineMax`), then
+    // the slide holds `awardHold`.
+    verdictHold: 4e3,
+    swap: 600,
+    awardCharMs: 55,
+    awardLineMax: 8e3,
+    awardHold: 1e4
+  };
+  var CARD_FONT_LINK_ID = "sc-tp-card-font";
+  var STAR_PATH2 = "M12 1.8l3.1 6.6 7.1.8-5.3 4.9 1.4 7.1L12 17.6l-6.3 3.6 1.4-7.1L1.8 9.2l7.1-.8z";
+  var _cardEl = null;
+  var _cardTimers = [];
+  var _onHidden = null;
+  var isDriveInCardUp = () => !!_cardEl;
+  function _ensureCardFont() {
+    if (document.getElementById(CARD_FONT_LINK_ID)) return;
+    const link = document.createElement("link");
+    link.id = CARD_FONT_LINK_ID;
+    link.rel = "stylesheet";
+    link.href = "https://fonts.googleapis.com/css2?family=Patua+One&display=swap";
+    document.head.appendChild(link);
+  }
+  function pictureRect() {
+    const v = document.querySelector("#videowrap video");
+    const r = v && v.getBoundingClientRect();
+    if (r && r.width > 0 && r.height > 0 && v.videoWidth > 0 && v.videoHeight > 0) {
+      const scale = Math.min(r.width / v.videoWidth, r.height / v.videoHeight);
+      const picW = v.videoWidth * scale, picH = v.videoHeight * scale;
+      return { left: r.left + (r.width - picW) / 2, top: r.top + (r.height - picH) / 2, width: picW, height: picH };
+    }
+    const wrap = document.getElementById("videowrap");
+    const wr = wrap && wrap.getBoundingClientRect();
+    if (wr && wr.width > 0 && wr.height > 0) return { left: wr.left, top: wr.top, width: wr.width, height: wr.height };
+    return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+  }
+  function _starSvg2(fill, k) {
+    const id = `sc-tp-star-clip-${k}`;
+    return `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><defs><clipPath id="${id}"><rect x="0" y="0" width="${24 * fill}" height="24"/></clipPath></defs><path d="${STAR_PATH2}" fill="rgba(20,20,20,.35)" stroke="#f5d76e" stroke-width="1.2"/><path d="${STAR_PATH2}" fill="#f5d76e" stroke="#7a5a10" stroke-width=".6" clip-path="url(#${id})"/></svg>`;
+  }
+  function _later(ms, fn) {
+    _cardTimers.push(setTimeout(fn, ms));
+  }
+  function showDriveInCard(card, onHidden) {
+    hideDriveInCard(true);
+    _ensureCardFont();
+    _onHidden = onHidden || null;
+    const P = pictureRect();
     const el = document.createElement("div");
-    el.id = "sc-ambient";
+    el.id = "sc-tp-card";
+    el.style.setProperty("left", P.left + P.width * 0.59 + "px", "important");
+    el.style.setProperty("top", P.top + P.height * 0.01 + "px", "important");
+    el.style.setProperty("width", P.width * 0.4 + "px", "important");
+    el.style.setProperty("--sc-tp-head", Math.max(18, P.height * 0.09) + "px");
+    el.style.setProperty("--sc-tp-line", Math.max(12, P.height * 0.046) + "px");
+    const awards = card.awards || [];
+    el.innerHTML = `
+        <div class="sc-tp-card-h">Drive-In<br>Totals</div>
+        <div class="sc-tp-card-rule"></div>
+        <div class="sc-tp-card-lines"><div class="sc-tp-card-track"></div></div>
+        <div class="sc-tp-card-verdict">
+            ${card.stars !== null ? `<div class="sc-tp-card-stars">${tpStarFills(card.stars).map(_starSvg2).join("")}</div>` : ""}
+            <div class="sc-tp-card-says">${_escHtml3(card.says)}</div>
+        </div>`;
     document.body.appendChild(el);
-    const canvas = document.createElement("canvas");
-    canvas.width = 16;
-    canvas.height = 9;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    let disabled = false;
-    const sample = () => {
-      if (disabled) return;
-      const v = document.querySelector("#videowrap video");
-      if (!v || v.paused || v.readyState < 2 || !v.videoWidth) return;
-      try {
-        ctx.drawImage(v, 0, 0, 16, 9);
-        const d = ctx.getImageData(0, 0, 16, 9).data;
-        let r = 0, g = 0, b = 0, n = 0;
-        for (let i = 0; i < d.length; i += 4) {
-          r += d[i];
-          g += d[i + 1];
-          b += d[i + 2];
-          n++;
-        }
-        r = Math.round(r / n);
-        g = Math.round(g / n);
-        b = Math.round(b / n);
-        const max = Math.max(r, g, b) || 1;
-        const boost = (c) => Math.min(255, Math.round(c * (1 + c / max * 0.35)));
-        r = boost(r);
-        g = boost(g);
-        b = boost(b);
-        document.documentElement.style.setProperty("--sc-ambient-color", `rgba(${r},${g},${b},0.5)`);
-        document.documentElement.style.setProperty("--np-accent", `rgb(${Math.min(255, r + 40)},${Math.min(255, g + 40)},${Math.min(255, b + 40)})`);
-      } catch (e) {
-        disabled = true;
-        document.body.classList.add("sc-ambient-off");
+    _cardEl = el;
+    const linesEl = el.querySelector(".sc-tp-card-lines");
+    const track = el.querySelector(".sc-tp-card-track");
+    requestAnimationFrame(() => el.classList.add("sc-tp-card-on"));
+    const addLine = (text) => {
+      const line = document.createElement("div");
+      line.className = "sc-tp-card-line";
+      line.textContent = text;
+      track.appendChild(line);
+      requestAnimationFrame(() => line.classList.add("sc-tp-card-in"));
+      const over = track.offsetHeight - linesEl.clientHeight;
+      if (over > 0) {
+        linesEl.classList.add("sc-tp-card-scrolling");
+        track.style.setProperty("transform", `translateY(${-over}px)`, "important");
       }
     };
-    setInterval(sample, 2500);
-  }
-  function initChromeAutohide() {
-    if (!isTv && !document.body.classList.contains("sc-vertical")) return;
-    let neutralizeAttempts = 0;
-    const tryNeutralize = () => {
-      neutralizeVjsInactivityTimer();
-      if (!(window.PLAYER && window.PLAYER.player) && neutralizeAttempts++ < 20) setTimeout(tryNeutralize, 500);
-    };
-    tryNeutralize();
-    onSocket("changeMedia", neutralizeVjsInactivityTimer);
-    let timer = null;
-    let pinned = false;
-    const hide = () => {
-      if (!pinned) document.body.classList.add("sc-chrome-hidden");
-    };
-    const show = () => {
-      document.body.classList.remove("sc-chrome-hidden");
-      if (typeof chromeState.topBarWake === "function") chromeState.topBarWake();
-      clearTimeout(timer);
-      if (!pinned) timer = setTimeout(hide, 4e3);
-    };
-    ["mousemove", "keydown", "click", "touchstart", "wheel"].forEach((ev) => document.addEventListener(ev, show, { passive: true }));
-    chromeState.chromeWake = show;
-    chromeState.pinChromeVisible = () => {
-      pinned = true;
-      clearTimeout(timer);
-      show();
-    };
-    chromeState.unpinChromeVisible = () => {
-      pinned = false;
-      clearTimeout(timer);
-      hide();
-    };
-    timer = setTimeout(hide, 4e3);
-  }
-  var _CHAT_MODES = isTv ? ["sidebar", "overlay", "subtitles", "hidden"] : ["sidebar", "overlay", "subtitles", "hidden", "chatonly"];
-  var _CHAT_MODE_ICONS = { sidebar: "▐", overlay: "▣", hidden: "⊠", subtitles: "💬", chatonly: "☰" };
-  var _CHAT_MODE_LABELS = { sidebar: "Sidebar", overlay: "Overlay", hidden: "Hidden", subtitles: "Subtitles", chatonly: "Chat Only" };
-  var _chatOnlyTimer = null;
-  var _inChatOnly = false;
-  function _coStopMedia() {
-    try {
-      const vid = document.querySelector("#videowrap video");
-      if (vid) {
-        vid.muted = true;
-        if (!vid.paused) vid.pause();
+    let t = CARD_MS.header;
+    for (const text of card.lines) {
+      _later(t, () => addLine(text));
+      t += CARD_MS.line;
+    }
+    if (card.stars !== null || card.says) {
+      t += CARD_MS.pause;
+      _later(t, () => linesEl.classList.add("sc-tp-card-gone"));
+      t += CARD_MS.clear;
+      const verdict = el.querySelector(".sc-tp-card-verdict");
+      _later(t, () => verdict.classList.add("sc-tp-card-on"));
+      const stars = el.querySelectorAll(".sc-tp-card-stars svg");
+      stars.forEach((s, k) => _later(t + CARD_MS.starStart + k * CARD_MS.star, () => s.classList.add("sc-tp-card-in")));
+      t += CARD_MS.starStart + stars.length * CARD_MS.star + CARD_MS.says;
+      const says = el.querySelector(".sc-tp-card-says");
+      _later(t, () => says.classList.add("sc-tp-card-on"));
+    }
+    if (awards.length) {
+      t += CARD_MS.verdictHold;
+      const head = el.querySelector(".sc-tp-card-h");
+      const verdict = el.querySelector(".sc-tp-card-verdict");
+      _later(t, () => {
+        head.classList.add("sc-tp-card-swap");
+        verdict.classList.remove("sc-tp-card-on");
+        linesEl.classList.add("sc-tp-card-gone");
+      });
+      t += CARD_MS.swap;
+      _later(t, () => {
+        head.innerHTML = "Drive-In Academy<br>Award Nominations";
+        el.classList.add("sc-tp-card-awards");
+        track.textContent = "";
+        track.style.setProperty("transform", "none", "important");
+        linesEl.classList.remove("sc-tp-card-scrolling", "sc-tp-card-gone");
+        head.classList.remove("sc-tp-card-swap");
+      });
+      t += CARD_MS.header;
+      for (const text of awards) {
+        _later(t, () => addLine(text));
+        t += Math.min(CARD_MS.awardLineMax, Math.max(CARD_MS.line, text.length * CARD_MS.awardCharMs));
       }
-    } catch (e) {
+      t += CARD_MS.awardHold - CARD_MS.hold;
     }
-    try {
-      const p = window.PLAYER && window.PLAYER.player;
-      if (p) {
-        if (typeof p.pauseVideo === "function") p.pauseVideo();
-        else if (typeof p.pause === "function") {
-          try {
-            p.pause();
-          } catch (e) {
-          }
-        }
-        if (typeof p.mute === "function") p.mute();
-        else if (typeof p.muted === "function") p.muted(true);
-      }
-    } catch (e) {
-    }
+    t += CARD_MS.hold;
+    _later(t, () => hideDriveInCard(false));
   }
-  onSocket("changeMedia", () => {
-    if (_inChatOnly) _coStopMedia();
-  });
-  onSocket("mediaUpdate", () => {
-    if (_inChatOnly) _coStopMedia();
-  });
-  function enterChatOnly() {
-    _inChatOnly = true;
-    _coStopMedia();
-    clearInterval(_chatOnlyTimer);
-    _chatOnlyTimer = setInterval(_coStopMedia, 5e3);
-  }
-  function exitChatOnly() {
-    if (!_inChatOnly) return;
-    _inChatOnly = false;
-    clearInterval(_chatOnlyTimer);
-    _chatOnlyTimer = null;
-    try {
-      const vid = document.querySelector("#videowrap video");
-      if (vid) vid.muted = false;
-    } catch (e) {
-    }
-    try {
-      const p = window.PLAYER && window.PLAYER.player;
-      if (p) {
-        if (typeof p.unMute === "function") p.unMute();
-        else if (typeof p.muted === "function") p.muted(false);
-        if (typeof p.playVideo === "function") p.playVideo();
-        else if (typeof p.play === "function") {
-          try {
-            p.play();
-          } catch (e) {
-          }
-        }
-      }
-    } catch (e) {
-    }
-  }
-  function applyChatMode(mode) {
-    _CHAT_MODES.forEach((m) => document.body.classList.toggle("sc-chat-" + m, m === mode));
-    try {
-      localStorage.setItem("sc_chat_mode", mode);
-    } catch (e) {
-    }
-    if (mode === "chatonly") enterChatOnly();
-    else exitChatOnly();
-    if (mode === "subtitles") refreshSubtitles();
-    const btn = document.getElementById("sc-chatmode-btn");
-    if (btn) {
-      btn.textContent = _CHAT_MODE_ICONS[mode] || "▐";
-      const label = _CHAT_MODE_LABELS[mode] || mode;
-      btn.title = "Chat: " + label + " (press C)";
-      btn.dataset.tvLabel = "Chat: " + label;
-    }
-    applyChatFontSize(getChatFontSize());
-    pinChatToBottom({ force: true });
-  }
-  function cycleChatMode() {
-    let cur = "sidebar";
-    try {
-      cur = localStorage.getItem("sc_chat_mode") || "sidebar";
-    } catch (e) {
-    }
-    applyChatMode(_CHAT_MODES[(_CHAT_MODES.indexOf(cur) + 1) % _CHAT_MODES.length]);
-  }
-  function initChatModes() {
-    let saved = "sidebar";
-    try {
-      saved = localStorage.getItem("sc_chat_mode") || "sidebar";
-    } catch (e) {
-    }
-    if (!_CHAT_MODES.includes(saved)) saved = "sidebar";
-    if (!document.getElementById("sc-chatmode-btn")) {
-      const btn = document.createElement("button");
-      btn.id = "sc-chatmode-btn";
-      btn.type = "button";
-      btn.className = "sc-dock-btn";
-      btn.title = "Cycle chat layout (press C)";
-      btn.addEventListener("click", cycleChatMode);
-      document.body.appendChild(btn);
-    }
-    if (!document.getElementById("sc-chatonly-banner")) {
-      const banner = document.createElement("div");
-      banner.id = "sc-chatonly-banner";
-      banner.textContent = "Paused · Muted";
-      document.body.appendChild(banner);
-    }
-    applyChatMode(saved);
-    document.addEventListener("keydown", (e) => {
-      if (e.key !== "c" && e.key !== "C") return;
-      const t = e.target;
-      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
-      cycleChatMode();
-    });
-  }
-  function initNewMessagePill() {
-    initStickBottom();
-  }
-  function initMentionToast() {
-    const buf2 = document.getElementById("messagebuffer");
-    if (!buf2) return;
-    const myName = () => {
-      try {
-        return window.CLIENT && CLIENT.name ? String(CLIENT.name) : "";
-      } catch (e) {
-        return "";
+  function hideDriveInCard(instant) {
+    _cardTimers.forEach(clearTimeout);
+    _cardTimers = [];
+    if (!_cardEl) return;
+    const el = _cardEl;
+    const done = () => {
+      el.remove();
+      if (_cardEl === el) {
+        _cardEl = null;
+        const cb = _onHidden;
+        _onHidden = null;
+        if (cb) cb();
       }
     };
-    let toast = null, toastTimer = null;
-    const show = (name, text) => {
-      if (!toast) {
-        toast = document.createElement("div");
-        toast.id = "sc-mention-toast";
-        toast.addEventListener("click", () => toast.classList.remove("sc-show"));
-        document.body.appendChild(toast);
-      }
-      toast.innerHTML = `<span class="sc-mt-name"></span><span class="sc-mt-text"></span>`;
-      toast.querySelector(".sc-mt-name").textContent = name + ":";
-      toast.querySelector(".sc-mt-text").textContent = " " + text;
-      toast.classList.add("sc-show");
-      clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => toast.classList.remove("sc-show"), 6e3);
-    };
-    new MutationObserver((muts) => {
-      const me = myName().toLowerCase();
-      muts.forEach((m) => m.addedNodes.forEach((node) => {
-        var _a, _b, _c;
-        if (node.nodeType !== 1) return;
-        const isMention = ((_a = node.classList) == null ? void 0 : _a.contains("nick-highlight")) || me && node.textContent && node.textContent.toLowerCase().includes("@" + me);
-        if (!isMention) return;
-        const name = ((_c = (_b = node.querySelector(".username")) == null ? void 0 : _b.textContent) == null ? void 0 : _c.replace(/[:\s]+$/, "").trim()) || "Mention";
-        const clone = node.cloneNode(true);
-        clone.querySelectorAll(".timestamp, .username").forEach((el) => el.remove());
-        const text = clone.textContent.replace(/^[\s:]+/, "").trim().slice(0, 180);
-        show(name, text);
-      }));
-    }).observe(buf2, { childList: true });
-  }
-  function initChatFont() {
-    applyChatFontSize(getChatFontSize());
-  }
-  function initLeftZone() {
-    let hideTimer = null;
-    const THRESH = 120;
-    const scheduleHide = (ms) => {
-      clearTimeout(hideTimer);
-      hideTimer = setTimeout(() => document.body.classList.remove("sc-leftzone"), ms);
-    };
-    const reveal = (autoHideMs) => {
-      clearTimeout(hideTimer);
-      document.body.classList.add("sc-leftzone");
-      if (autoHideMs) scheduleHide(autoHideMs);
-    };
-    chromeState.leftZoneReveal = reveal;
-    if (!document.getElementById("sc-cluster-grip")) {
-      const grip = document.createElement("div");
-      grip.id = "sc-cluster-grip";
-      grip.title = "Controls";
-      grip.addEventListener("mouseenter", reveal);
-      grip.addEventListener("click", reveal);
-      document.body.appendChild(grip);
+    if (instant) {
+      done();
+      return;
     }
-    document.addEventListener("mousemove", (e) => {
-      if (e.clientX <= THRESH) reveal();
-      else if (document.body.classList.contains("sc-leftzone")) scheduleHide(550);
-    }, { passive: true });
-    document.addEventListener("touchstart", (e) => {
-      const x = e.touches[0] ? e.touches[0].clientX : 1e9;
-      if (x <= THRESH) {
-        reveal(3500);
-      }
-    }, { passive: true });
-  }
-  var VSPLIT_MIN = 25;
-  var VSPLIT_MAX = 75;
-  function initVertControlBand() {
-    if (document.getElementById("sc-vert-ctrl-band")) return;
-    const band = document.createElement("div");
-    band.id = "sc-vert-ctrl-band";
-    document.body.appendChild(band);
-    const saved = getSetting("vertSplit");
-    const initial = Math.min(VSPLIT_MAX, Math.max(VSPLIT_MIN, saved));
-    document.body.style.setProperty("--sc-split", String(initial));
-    let dragging = false;
-    band.addEventListener("pointerdown", (e) => {
-      dragging = true;
-      band.classList.add("sc-dragging");
-      band.setPointerCapture(e.pointerId);
-    });
-    band.addEventListener("pointermove", (e) => {
-      if (!dragging) return;
-      const pct = Math.min(VSPLIT_MAX, Math.max(VSPLIT_MIN, e.clientY / window.innerHeight * 100));
-      document.body.style.setProperty("--sc-split", String(pct));
-    });
-    const endDrag = (e) => {
-      if (!dragging) return;
-      dragging = false;
-      band.classList.remove("sc-dragging");
-      const pct = Math.min(VSPLIT_MAX, Math.max(VSPLIT_MIN, e.clientY / window.innerHeight * 100));
-      localStorage.setItem("sc_vert_split", String(pct));
-    };
-    band.addEventListener("pointerup", endDrag);
-    band.addEventListener("pointercancel", endDrag);
-  }
-  function initRightZone() {
-    let hideTimer = null;
-    const THRESH = 100;
-    const scheduleHide = (ms) => {
-      clearTimeout(hideTimer);
-      hideTimer = setTimeout(() => document.body.classList.remove("sc-rightzone"), ms);
-    };
-    const reveal = (ms) => {
-      clearTimeout(hideTimer);
-      document.body.classList.add("sc-rightzone");
-      if (ms) scheduleHide(ms);
-    };
-    chromeState.rightZoneReveal = reveal;
-    if (!document.getElementById("sc-vert-ctrl-grip")) {
-      const grip = document.createElement("div");
-      grip.id = "sc-vert-ctrl-grip";
-      grip.title = "Controls";
-      grip.addEventListener("click", () => reveal(3500));
-      document.body.appendChild(grip);
-    }
-    document.addEventListener("touchstart", (e) => {
-      var _a;
-      if (!document.body.classList.contains("sc-vertical")) return;
-      const x = (_a = e.touches[0]) == null ? void 0 : _a.clientX;
-      if (x != null && window.innerWidth - x <= THRESH) reveal(3500);
-    }, { passive: true });
-  }
-  function initVideoTapReveal() {
-    const REVEAL_MS = 4e3;
-    let scrubReleaseTimer = null;
-    const tap = document.createElement("div");
-    tap.id = "sc-video-tap";
-    tap.addEventListener("click", () => {
-      if (chromeState.topBarWake) chromeState.topBarWake();
-      if (chromeState.leftZoneReveal) chromeState.leftZoneReveal(REVEAL_MS);
-      if (chromeState.rightZoneReveal) chromeState.rightZoneReveal(REVEAL_MS);
-      holdScrubber(true);
-      clearTimeout(scrubReleaseTimer);
-      scrubReleaseTimer = setTimeout(() => holdScrubber(false), REVEAL_MS);
-    });
-    document.body.appendChild(tap);
+    el.classList.add("sc-tp-card-out");
+    _cardTimers.push(setTimeout(done, CARD_MS.fade));
   }
 
-  // src/chrome/buttons.js
-  function getMediaUpdateListeners() {
-    var _a, _b;
-    const key = "$mediaUpdate";
-    if ((_a = socket._callbacks) == null ? void 0 : _a[key]) return { store: "_callbacks", key };
-    if ((_b = socket._events) == null ? void 0 : _b.mediaUpdate) return { store: "_events", key: "mediaUpdate" };
-    return null;
+  // src/cards/triviapopup.js
+  var TP_POLL_MS = 3e3;
+  var TP_GAP_TIERS = {
+    frequent: [45 * 1e3, 90 * 1e3],
+    occasional: [3 * 60 * 1e3, 6 * 60 * 1e3],
+    rare: [8 * 60 * 1e3, 15 * 60 * 1e3]
+  };
+  function _tpGapRange() {
+    return TP_GAP_TIERS[triviaPopupFrequency()] || TP_GAP_TIERS.occasional;
   }
-  function initDesyncButton() {
-    const btn = document.createElement("button");
-    btn.id = "sc-desync-btn";
-    btn.className = "sc-dock-btn";
-    btn.textContent = "⟳";
-    btn.title = "Free watch — click to watch freely, click again to re-sync";
-    btn.dataset.tvLabel = "Free Watch";
-    document.body.appendChild(btn);
-    let desynced = false;
-    let savedListeners = null;
-    function trackLiveRoomPosition(data) {
-      if (data && typeof data.currentTime === "number") {
-        mediaState.desyncLiveSeconds = data.currentTime;
-        mediaState.desyncLiveAt = Date.now();
-      }
-      if (data && typeof data.paused === "boolean") mediaState.desyncLivePaused = data.paused;
+  var TP_RETRY_MS = 20 * 1e3;
+  var TP_VISIBLE_MS = 20 * 1e3;
+  var TP_EXIT_ANIM_MS = 300;
+  var TP_MAX_FACT_LEN = 280;
+  var TP_PERSON_TRIVIA_CAP = 3;
+  function _escHtml4(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  var _tpLastImdbId = void 0;
+  var _tpQueue = [];
+  var _tpExhausted = false;
+  var _tpPopTimer = null;
+  var _tpBubbleEl = null;
+  var _tpDismissTimer = null;
+  var _tpTimeline = null;
+  var _tpDriveIn = null;
+  var _tpLastPopAt = 0;
+  var _tpCuratedRecheckAt = 0;
+  var LS_TRIVIA_SEEN = "sc_trivia_popup_seen";
+  var TRIVIA_SEEN_TTL_MS = 3 * 60 * 60 * 1e3;
+  function _tpLoadSeenTexts(id) {
+    let raw;
+    try {
+      raw = JSON.parse(localStorage.getItem(LS_TRIVIA_SEEN));
+    } catch (e) {
+      return [];
     }
-    const freezeSync = () => {
-      var _a;
-      const loc = getMediaUpdateListeners();
-      if (!loc) {
-        console.warn("[CyTube SC] Could not find mediaUpdate listeners to freeze");
+    if (!raw || raw.id !== id) return [];
+    if (!raw.savedAt || Date.now() - raw.savedAt > TRIVIA_SEEN_TTL_MS) return [];
+    return Array.isArray(raw.texts) ? raw.texts : [];
+  }
+  function _tpMarkSeen(id, text) {
+    if (!id) return;
+    const texts = _tpLoadSeenTexts(id);
+    if (!texts.includes(text)) texts.push(text);
+    try {
+      localStorage.setItem(LS_TRIVIA_SEEN, JSON.stringify({ id, texts, savedAt: Date.now() }));
+    } catch (e) {
+    }
+  }
+  var _tpMuted = false;
+  var TP_RESUME_MS = 1500;
+  function _tpKnownForFact(person, knownFor) {
+    if (!knownFor) return null;
+    const titleYear = knownFor.year ? `${knownFor.title} (${knownFor.year})` : knownFor.title;
+    if (person.role === "director") return `${person.name} is also known for ${titleYear}.`;
+    const charPart = person.character ? ` (${person.character})` : "";
+    return `${person.name}${charPart} also starred in ${titleYear}.`;
+  }
+  async function _tpBuildCastCrewItems(people, excludeTconst, excludeSeriesTconst) {
+    const items = [];
+    await Promise.all(people.map(async (person) => {
+      const [trivia, knownFor] = await Promise.all([
+        fetchPersonTrivia(person.nconst),
+        fetchPersonKnownFor(person.nconst, excludeTconst, excludeSeriesTconst)
+      ]);
+      const byline = `${person.name} — ${person.role === "director" ? "Director" : person.character || "Cast"}`;
+      trivia.filter((t) => t.length <= TP_MAX_FACT_LEN).slice(0, TP_PERSON_TRIVIA_CAP).forEach((t) => items.push({ text: t, byline }));
+      const knownForFact = _tpKnownForFact(person, knownFor);
+      if (knownForFact) items.push({ text: knownForFact, byline: null });
+    }));
+    return items;
+  }
+  function _tpShuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+  function _tpResetForNewMovie(id) {
+    clearTimeout(_tpPopTimer);
+    _tpPopTimer = null;
+    _tpDismissBubble(true);
+    hideDriveInCard(true);
+    _tpDriveIn = null;
+    _tpQueue = [];
+    _tpExhausted = false;
+    _tpTimeline = null;
+    _tpLastPopAt = Date.now();
+    _tpCuratedRecheckAt = Date.now() + CURATED_RECHECK_MS;
+    if (!id) return;
+    if (isTv) {
+      fetchDriveInCard(id).then((card) => {
+        if (id !== _tpLastImdbId) return;
+        _tpDriveIn = card;
+      });
+    }
+    fetchCuratedTrivia(id).then((curated) => {
+      if (id !== _tpLastImdbId) return;
+      if (curated) {
+        _tpTimeline = curated.facts;
         return;
       }
-      if (loc.store === "_callbacks") {
-        savedListeners = socket._callbacks[loc.key].slice();
-        socket._callbacks[loc.key] = [];
-      } else {
-        savedListeners = socket._events[loc.key];
-        delete socket._events[loc.key];
-      }
-      console.log("[CyTube SC] Sync frozen — removed", (_a = savedListeners == null ? void 0 : savedListeners.length) != null ? _a : 1, "mediaUpdate listener(s)");
-    };
-    const thawSync = () => {
-      if (!savedListeners) return;
-      const loc = getMediaUpdateListeners();
-      if ((loc == null ? void 0 : loc.store) === "_callbacks") {
-        socket._callbacks[loc.key] = savedListeners;
-      } else {
-        socket._events = socket._events || {};
-        socket._events["mediaUpdate"] = savedListeners;
-      }
-      savedListeners = null;
-      console.log("[CyTube SC] Sync restored");
-      if (typeof socket !== "undefined" && socket) {
-        socket.emit("playerReady");
-      }
-    };
-    function turnOn() {
-      freezeSync();
-      mediaState.desyncLiveSeconds = null;
-      mediaState.desyncLivePaused = false;
-      try {
-        socket.on("mediaUpdate", trackLiveRoomPosition);
-      } catch (e) {
-      }
-      btn.classList.add("sc-desync-active");
-      btn.title = "Free watch ON — click to re-sync";
-      const bar = document.querySelector("#videowrap .vjs-control-bar .vjs-progress-control");
-      if (bar && tvNavState.setFocus) tvNavState.setFocus(bar);
-    }
-    function turnOff() {
-      try {
-        socket.off("mediaUpdate", trackLiveRoomPosition);
-      } catch (e) {
-      }
-      thawSync();
-      mediaState.desyncLiveSeconds = null;
-      btn.classList.remove("sc-desync-active");
-      btn.title = "Free watch — click to watch freely";
-    }
-    btn.addEventListener("click", () => {
-      if (typeof socket === "undefined" || !socket) return;
-      desynced = !desynced;
-      if (desynced) turnOn();
-      else turnOff();
+      _tpStartImdbQueue(id);
     });
-    let _lastMediaKey = "";
-    onSocket("changeMedia", (data) => {
-      const key = (data && (data.id || "")) + "|" + (data && (data.title || ""));
-      if (key === _lastMediaKey) return;
-      _lastMediaKey = key;
-      if (desynced) {
-        desynced = false;
-        turnOff();
+  }
+  function _tpStartImdbQueue(id) {
+    fetchImdbTrivia(id).then(async (items) => {
+      if (id !== _tpLastImdbId) return;
+      const seenTexts = _tpLoadSeenTexts(id);
+      const movieItems = (items || []).filter((text) => !seenTexts.includes(text)).map((text) => ({ text, byline: null }));
+      _tpQueue = _tpShuffle(movieItems);
+      _tpScheduleNextPop();
+      if (!triviaPopupEnabled()) return;
+      if (npState.data && npState.data.episode != null) return;
+      const result = await fetchCastAndDirector(id);
+      if (id !== _tpLastImdbId) return;
+      if (!result || !result.people.length) return;
+      if (result.seriesTconst) return;
+      const castCrewItems = await _tpBuildCastCrewItems(result.people, id, result.seriesTconst);
+      if (id !== _tpLastImdbId) return;
+      const seenTextsNow = _tpLoadSeenTexts(id);
+      const freshCastCrewItems = castCrewItems.filter((it) => !seenTextsNow.includes(it.text));
+      if (!freshCastCrewItems.length) return;
+      _tpQueue = _tpShuffle(_tpQueue.concat(freshCastCrewItems));
+      if (_tpExhausted) {
+        _tpExhausted = false;
+        _tpScheduleNextPop();
       }
     });
   }
-  function addFloatingButtons() {
-    if (document.getElementById("fs-toggle-btn")) return;
-    const fsBtn = document.createElement("button");
-    fsBtn.id = "fs-toggle-btn";
-    fsBtn.textContent = "⛶";
-    fsBtn.title = "Toggle Fullscreen";
-    fsBtn.addEventListener("click", () => {
-      document.fullscreenElement ? document.exitFullscreen().catch(() => {
-      }) : document.documentElement.requestFullscreen().catch(() => {
-      });
+  function _tpScheduleNextPop() {
+    clearTimeout(_tpPopTimer);
+    if (_tpTimeline || _tpExhausted || !_tpQueue.length) {
+      _tpExhausted = true;
+      return;
+    }
+    if (_tpMuted) return;
+    const [minGap, maxGap] = _tpGapRange();
+    const gap = minGap + Math.random() * (maxGap - minGap);
+    _tpPopTimer = setTimeout(_tpAttemptPop, gap);
+  }
+  function _tpMoviePlaying() {
+    if (isYouTubeMedia()) return false;
+    const v = document.querySelector("#videowrap video");
+    return !!v && !v.paused;
+  }
+  function _tpAttemptPop() {
+    const curId = npState.data && npState.data.imdbId;
+    if (curId !== _tpLastImdbId) return;
+    if (_tpMuted) return;
+    if (_tpTimeline) return;
+    if (!_tpCanPop() || isDriveInCardUp()) {
+      _tpPopTimer = setTimeout(_tpAttemptPop, TP_RETRY_MS);
+      return;
+    }
+    let fact = null;
+    while (_tpQueue.length) {
+      const candidate = _tpQueue.shift();
+      if (candidate.text.length <= TP_MAX_FACT_LEN) {
+        fact = candidate;
+        break;
+      }
+    }
+    if (!fact) {
+      _tpExhausted = true;
+      return;
+    }
+    showTriviaBubble(fact);
+    _tpMarkSeen(_tpLastImdbId, fact.text);
+    _tpLastPopAt = Date.now();
+    _tpScheduleNextPop();
+  }
+  function _tpCanPop() {
+    return triviaPopupEnabled() && !_tpMuted && _tpMoviePlaying() && !isMovieSubtitlesVisible();
+  }
+  var _tpCurrentTime = () => {
+    const v = document.querySelector("#videowrap video");
+    return v ? v.currentTime : NaN;
+  };
+  function _tpDriveInTick() {
+    const curId = npState.data && npState.data.imdbId;
+    if (!_tpDriveIn || curId !== _tpLastImdbId) return;
+    if (!_tpCanPop() || isDriveInCardUp() || _tpBubbleEl) return;
+    const seen = _tpLoadSeenTexts(_tpLastImdbId);
+    const sinceLastPop = (Date.now() - _tpLastPopAt) / 1e3;
+    if (!tpDriveInAction(_tpDriveIn, _tpCurrentTime(), seen, sinceLastPop)) return;
+    showDriveInCard(_tpDriveIn, () => {
+      _tpLastPopAt = Date.now();
     });
-    document.body.appendChild(fsBtn);
-    document.addEventListener("fullscreenchange", () => {
-      fsBtn.style.display = document.fullscreenElement ? "none" : "";
+    _tpMarkSeen(_tpLastImdbId, TP_DRIVEIN_SEEN_KEY);
+  }
+  function _tpTimelineTick() {
+    const curId = npState.data && npState.data.imdbId;
+    if (!_tpTimeline || curId !== _tpLastImdbId) return;
+    if (!_tpCanPop() || isDriveInCardUp()) return;
+    if (_tpBubbleEl) return;
+    const t = _tpCurrentTime();
+    const tier = triviaPopupFrequency() || "occasional";
+    const seen = _tpLoadSeenTexts(_tpLastImdbId);
+    const sinceLastPop = (Date.now() - _tpLastPopAt) / 1e3;
+    const fact = tpDueFact(_tpTimeline, t, tier, seen) || tpCatchUpFact(_tpTimeline, t, tier, seen, sinceLastPop);
+    if (!fact) return;
+    showTriviaBubble(fact);
+    _tpMarkSeen(_tpLastImdbId, fact.text);
+    _tpLastPopAt = Date.now();
+  }
+  function _tpRecheckCurated(id) {
+    _tpCuratedRecheckAt = Date.now() + CURATED_RECHECK_MS;
+    fetchCuratedTrivia(id).then((curated) => {
+      if (!curated || id !== _tpLastImdbId || _tpTimeline) return;
+      clearTimeout(_tpPopTimer);
+      _tpPopTimer = null;
+      _tpQueue = [];
+      _tpExhausted = true;
+      _tpTimeline = curated.facts;
     });
   }
-  function addCastButton() {
-    let onTv = false;
+  function _tpMoviePollTick() {
+    const curId = npState.data && npState.data.imdbId;
+    if (curId !== _tpLastImdbId) {
+      _tpLastImdbId = curId;
+      _tpResetForNewMovie(_tpLastImdbId);
+    }
+    if (!_tpTimeline && _tpLastImdbId && Date.now() >= _tpCuratedRecheckAt) _tpRecheckCurated(_tpLastImdbId);
+    _tpDriveInTick();
+    _tpTimelineTick();
+  }
+  function triviaPopupBoot() {
+    _tpMoviePollTick();
+    setInterval(_tpMoviePollTick, TP_POLL_MS);
+  }
+  var TP_ICON_SVGS = {
+    // Skull + blood drip
+    skull: `<path d="M30 10 C19 10 12 18 12 27 C12 33 15 38 19 41 L19 47 L24 47 L24 43 L27 43 L27 47 L33 47 L33 43 L36 43 L36 47 L41 47 L41 41 C45 38 48 33 48 27 C48 18 41 10 30 10 Z"
+          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <circle cx="22" cy="26" r="5" fill="#000"/>
+     <circle cx="38" cy="26" r="5" fill="#000"/>
+     <polygon points="30,30 27,36 33,36" fill="#000"/>
+     <path d="M39 16 C39 16 43 22 41 27 C40 30 36 30 35 27 C33 23 39 16 39 16 Z"
+          fill="#c81d25" stroke="#000" stroke-width="1.5" stroke-linejoin="round"/>`,
+    // Cracked tombstone
+    tombstone: `<path d="M14 54 V30 C14 16 22 8 30 8 C38 8 46 16 46 30 V54 Z"
+          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <path d="M30 12 L26 26 L34 30 L28 44 L33 54" stroke="#000" stroke-width="2" fill="none"/>
+     <line x1="30" y1="18" x2="30" y2="26" stroke="#000" stroke-width="2"/>
+     <line x1="26" y1="21" x2="34" y2="21" stroke="#000" stroke-width="2"/>`,
+    // Film reel
+    reel: `<circle cx="30" cy="30" r="18" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <circle cx="30" cy="30" r="4" fill="#000"/>
+     <circle cx="30" cy="16" r="4.5" fill="#000"/>
+     <circle cx="30" cy="44" r="4.5" fill="#000"/>
+     <circle cx="18" cy="23" r="4.5" fill="#000"/>
+     <circle cx="18" cy="37" r="4.5" fill="#000"/>
+     <circle cx="42" cy="23" r="4.5" fill="#000"/>
+     <circle cx="42" cy="37" r="4.5" fill="#000"/>`,
+    // --- Sci-fi (toxic-green #39d98a accent) ---
+    // Flying saucer
+    saucer: `<ellipse cx="30" cy="33" rx="22" ry="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <ellipse cx="30" cy="24" rx="11" ry="9" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <circle cx="18" cy="36" r="2.2" fill="#39d98a" stroke="#000" stroke-width="1.2"/>
+     <circle cx="30" cy="38" r="2.2" fill="#39d98a" stroke="#000" stroke-width="1.2"/>
+     <circle cx="42" cy="36" r="2.2" fill="#39d98a" stroke="#000" stroke-width="1.2"/>`,
+    // Bug-eyed alien head
+    alien: `<path d="M30 6 C14 6 6 20 8 32 C10 44 20 54 30 54 C40 54 50 44 52 32 C54 20 46 6 30 6 Z"
+          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <ellipse cx="20" cy="27" rx="7" ry="10" fill="#000" transform="rotate(-15 20 27)"/>
+     <ellipse cx="40" cy="27" rx="7" ry="10" fill="#000" transform="rotate(15 40 27)"/>
+     <circle cx="20" cy="27" r="1.8" fill="#39d98a"/>
+     <circle cx="40" cy="27" r="1.8" fill="#39d98a"/>`,
+    // Rocket ship
+    rocket: `<path d="M30 6 C24 6 20 14 20 24 V44 H40 V24 C40 14 36 6 30 6 Z"
+          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <circle cx="30" cy="20" r="5" fill="#39d98a" stroke="#000" stroke-width="2"/>
+     <polygon points="20,38 10,50 20,50" fill="#d8d8d8" stroke="#000" stroke-width="2" stroke-linejoin="round"/>
+     <polygon points="40,38 50,50 40,50" fill="#d8d8d8" stroke="#000" stroke-width="2" stroke-linejoin="round"/>
+     <path d="M24 44 C24 44 22 54 30 58 C38 54 36 44 36 44 Z"
+          fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round"/>`,
+    // Robot head
+    robot: `<rect x="14" y="16" width="32" height="28" rx="4" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <line x1="30" y1="16" x2="30" y2="6" stroke="#000" stroke-width="2.5"/>
+     <circle cx="30" cy="5" r="3" fill="#39d98a" stroke="#000" stroke-width="1.5"/>
+     <circle cx="30" cy="28" r="7" fill="#000"/>
+     <circle cx="30" cy="28" r="3" fill="#39d98a"/>
+     <rect x="20" y="38" width="20" height="4" fill="#000"/>
+     <circle cx="16" cy="20" r="2" fill="#3a2a1a"/>
+     <circle cx="44" cy="20" r="2" fill="#3a2a1a"/>`,
+    // Radioactive trefoil
+    radioactive: `<circle cx="30" cy="30" r="20" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <path d="M30 30 L23 15 L37 15 Z" fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round" transform="rotate(0 30 30)"/>
+     <path d="M30 30 L23 15 L37 15 Z" fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round" transform="rotate(120 30 30)"/>
+     <path d="M30 30 L23 15 L37 15 Z" fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round" transform="rotate(240 30 30)"/>
+     <circle cx="30" cy="30" r="5" fill="#000"/>`,
+    // --- Action (marquee-gold #e8b923 accent) ---
+    // Explosion burst
+    explosion: `<polygon points="30,4 35,19 48,12 41,25 56,30 41,35 48,48 35,41 30,56 25,41 12,48 19,35 4,30 19,25 12,12 25,19"
+             fill="#e8b923" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <polygon points="30,16 33,24 40,20 36,27 44,30 36,33 40,40 33,36 30,44 27,36 20,40 25,33 16,30 25,27 20,20 27,25"
+             fill="#c81d25" stroke="#000" stroke-width="1.5" stroke-linejoin="round"/>`,
+    // Crosshair scope
+    crosshair: `<circle cx="30" cy="30" r="21" fill="#f4f1ea" stroke="#c81d25" stroke-width="4"/>
+     <rect x="6" y="28" width="15" height="4" fill="#000"/>
+     <rect x="39" y="28" width="15" height="4" fill="#000"/>
+     <rect x="28" y="6" width="4" height="15" fill="#000"/>
+     <rect x="28" y="39" width="4" height="15" fill="#000"/>
+     <circle cx="30" cy="30" r="4" fill="#e8b923" stroke="#000" stroke-width="1.5"/>`,
+    // Brass knuckles
+    knuckles: `<circle cx="14" cy="20" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <circle cx="26" cy="18" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <circle cx="38" cy="18" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <circle cx="50" cy="20" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <rect x="10" y="26" width="44" height="8" rx="3" fill="#3a2a1a" stroke="#000" stroke-width="2.5"/>`,
+    // --- Comedy (marquee-gold #e8b923 accent) ---
+    // Disco ball
+    disco: `<circle cx="30" cy="30" r="20" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <path d="M12 30 H48 M13 20 H47 M13 40 H47 M20 12 V48 M30 10 V50 M40 12 V48"
+          stroke="#000" stroke-width="1.5" fill="none"/>
+     <polyline points="46,10 50,6" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>
+     <polyline points="50,14 55,12" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>
+     <polyline points="44,6 47,2" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>`,
+    // Boombox
+    boombox: `<rect x="6" y="18" width="48" height="30" rx="5" fill="#3a2a1a" stroke="#000" stroke-width="2.5"/>
+     <circle cx="18" cy="33" r="10" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <circle cx="18" cy="33" r="4" fill="#000"/>
+     <circle cx="42" cy="33" r="10" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <circle cx="42" cy="33" r="4" fill="#000"/>
+     <rect x="24" y="10" width="12" height="8" rx="2" fill="#e8b923" stroke="#000" stroke-width="2"/>`,
+    // Aviator sunglasses
+    sunglasses: `<ellipse cx="18" cy="30" rx="12" ry="10" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <ellipse cx="42" cy="30" rx="12" ry="10" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <rect x="27" y="27" width="6" height="4" fill="#000"/>
+     <line x1="6" y1="27" x2="0" y2="21" stroke="#000" stroke-width="3" stroke-linecap="round"/>
+     <line x1="54" y1="27" x2="60" y2="21" stroke="#000" stroke-width="3" stroke-linecap="round"/>
+     <polyline points="12,26 18,23" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>`,
+    // --- Curated-fact topics (named by the generator, not random-picked by genre) ---
+    // Drive-in window speaker -- Joe Bob / Drive-In Totals
+    joebob: `<path d="M22 14 V8 H38 V14" fill="none" stroke="#000" stroke-width="2.5"/>
+     <rect x="14" y="14" width="32" height="34" rx="5" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <circle cx="30" cy="31" r="10" fill="#3a2a1a" stroke="#000" stroke-width="2"/>
+     <path d="M22 31 H38 M24 26 H36 M24 36 H36" stroke="#000" stroke-width="1.5"/>
+     <rect x="24" y="48" width="12" height="5" fill="#c81d25" stroke="#000" stroke-width="1.5"/>`,
+    // Banknote -- budget / box office
+    money: `<rect x="8" y="16" width="44" height="28" rx="3" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <rect x="12" y="20" width="36" height="20" rx="2" fill="none" stroke="#000" stroke-width="1"/>
+     <circle cx="30" cy="30" r="9" fill="#e8b923" stroke="#000" stroke-width="2"/>
+     <text x="30" y="35" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-size="14" font-weight="900" fill="#000">$</text>`,
+    // Two-reel movie camera -- production / behind the scenes
+    camera: `<circle cx="20" cy="18" r="9" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <circle cx="38" cy="18" r="9" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <circle cx="20" cy="18" r="2.5" fill="#000"/>
+     <circle cx="38" cy="18" r="2.5" fill="#000"/>
+     <rect x="10" y="28" width="34" height="20" rx="3" fill="#3a2a1a" stroke="#000" stroke-width="2.5"/>
+     <polygon points="44,32 54,26 54,50 44,44" fill="#d8d8d8" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <circle cx="20" cy="38" r="3" fill="#c81d25"/>`,
+    // Walk-of-fame star -- cast
+    star: `<polygon points="30,6 36,22 53,22 39,32 44,49 30,39 16,49 21,32 7,22 24,22"
+             fill="#e8b923" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <circle cx="30" cy="28" r="4" fill="#c81d25" stroke="#000" stroke-width="1.5"/>`,
+    // Chain links -- ties to other movies
+    link: `<rect x="6" y="22" width="28" height="16" rx="8" fill="none" stroke="#000" stroke-width="7"/>
+     <rect x="6" y="22" width="28" height="16" rx="8" fill="none" stroke="#d8d8d8" stroke-width="3.5"/>
+     <rect x="26" y="22" width="28" height="16" rx="8" fill="none" stroke="#000" stroke-width="7"/>
+     <rect x="26" y="22" width="28" height="16" rx="8" fill="none" stroke="#e8b923" stroke-width="3.5"/>`,
+    // Ribbon microphone -- interview quotes
+    mic: `<rect x="20" y="6" width="20" height="28" rx="10" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <path d="M24 14 H36 M24 20 H36 M24 26 H36" stroke="#000" stroke-width="1.5"/>
+     <path d="M14 26 C14 38 22 42 30 42 C38 42 46 38 46 26" fill="none" stroke="#000" stroke-width="2.5"/>
+     <line x1="30" y1="42" x2="30" y2="52" stroke="#000" stroke-width="3"/>
+     <rect x="20" y="51" width="20" height="4" rx="1" fill="#c81d25" stroke="#000" stroke-width="1.5"/>`,
+    // "CUT" stamp -- censorship / banned / alternate versions
+    censor: `<g transform="rotate(-12 30 30)">
+       <rect x="7" y="17" width="46" height="26" rx="3" fill="#f4f1ea" stroke="#c81d25" stroke-width="3"/>
+       <text x="30" y="36" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-size="15" font-weight="900" fill="#c81d25">CUT</text>
+     </g>`,
+    // Trophy -- awards
+    trophy: `<path d="M18 12 H10 C10 22 14 24 18 24 M42 12 H50 C50 22 46 24 42 24" fill="none" stroke="#000" stroke-width="2.5"/>
+     <path d="M18 8 H42 V22 C42 30 36 36 30 36 C24 36 18 30 18 22 Z" fill="#e8b923" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <rect x="27" y="36" width="6" height="8" fill="#e8b923" stroke="#000" stroke-width="2"/>
+     <rect x="18" y="44" width="24" height="8" rx="1" fill="#3a2a1a" stroke="#000" stroke-width="2.5"/>`
+  };
+  var TP_ICON_KEYS = Object.keys(TP_ICON_SVGS);
+  function tpPickIconKey(iconKey) {
+    if (iconKey && TP_ICON_KEYS.includes(iconKey)) return iconKey;
+    return TP_ICON_KEYS[Math.floor(Math.random() * TP_ICON_KEYS.length)];
+  }
+  function _tpRandomPosition(boxWidthPx, boxHeightPx) {
+    const wrap = document.getElementById("videowrap");
+    const rect = wrap ? wrap.getBoundingClientRect() : { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight, width: window.innerWidth, height: window.innerHeight };
+    const marginPx = 14;
+    const halfW = boxWidthPx / 2;
+    let leftMinPx = rect.left + marginPx + halfW;
+    let leftMaxPx = rect.left + rect.width - marginPx - halfW;
+    if (leftMaxPx < leftMinPx) {
+      const mid = rect.left + rect.width / 2;
+      leftMinPx = leftMaxPx = mid;
+    }
+    let topMinPx, topMaxPx;
+    if (inSubtitlesMode()) {
+      topMinPx = rect.top + marginPx;
+      topMaxPx = Math.min(rect.bottom - marginPx - boxHeightPx, rect.top + rect.height / 2);
+    } else {
+      const bottomThirdTopPx = rect.top + rect.height * (2 / 3);
+      topMinPx = Math.max(rect.top + marginPx, bottomThirdTopPx);
+      topMaxPx = rect.bottom - marginPx - boxHeightPx;
+    }
+    if (topMaxPx < topMinPx) topMinPx = topMaxPx = Math.max(rect.top + marginPx, rect.bottom - marginPx - boxHeightPx);
+    return {
+      leftPx: leftMinPx + Math.random() * (leftMaxPx - leftMinPx),
+      topPx: topMinPx + Math.random() * (topMaxPx - topMinPx)
+    };
+  }
+  var _tpAudioCtx = null;
+  function _tpGetAudioCtx() {
+    if (!_tpAudioCtx) {
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      _tpAudioCtx = new Ctor();
+    }
+    if (_tpAudioCtx.state === "suspended") _tpAudioCtx.resume();
+    return _tpAudioCtx;
+  }
+  function _tpNoiseBurst(ac, { start, dur, freq, q, peak }) {
+    const size = Math.max(1, Math.floor(ac.sampleRate * dur));
+    const buffer = ac.createBuffer(1, size, ac.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < size; i++) data[i] = Math.random() * 2 - 1;
+    const src = ac.createBufferSource();
+    src.buffer = buffer;
+    const bp = ac.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = freq;
+    bp.Q.value = q;
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(peak, start + 3e-3);
+    gain.gain.exponentialRampToValueAtTime(1e-4, start + dur);
+    src.connect(bp).connect(gain).connect(ac.destination);
+    src.start(start);
+    src.stop(start + dur + 0.01);
+  }
+  function _tpBubbleTone(ac, { start, dur, freqStart, freqPeak, freqEnd, lpStart, lpEnd, q, peak }) {
+    const osc = ac.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freqStart, start);
+    osc.frequency.exponentialRampToValueAtTime(freqPeak, start + dur * 0.4);
+    osc.frequency.exponentialRampToValueAtTime(freqEnd, start + dur);
+    const lp = ac.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.Q.value = q;
+    lp.frequency.setValueAtTime(lpStart, start);
+    lp.frequency.exponentialRampToValueAtTime(lpEnd, start + dur);
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(peak, start + 6e-3);
+    gain.gain.exponentialRampToValueAtTime(1e-4, start + dur);
+    osc.connect(lp).connect(gain).connect(ac.destination);
+    osc.start(start);
+    osc.stop(start + dur + 0.02);
+  }
+  function _tpPlayPopSound() {
     try {
-      onTv = !!(window.CytubeNative && CytubeNative.isTv && CytubeNative.isTv());
+      const ac = _tpGetAudioCtx();
+      const t = ac.currentTime;
+      _tpNoiseBurst(ac, { start: t, dur: 0.02, freq: 1800, q: 2.5, peak: 0.55 });
+      _tpBubbleTone(ac, { start: t, dur: 0.13, freqStart: 220, freqPeak: 600, freqEnd: 380, lpStart: 2600, lpEnd: 600, q: 8, peak: 0.3 });
     } catch (e) {
     }
-    if (onTv) return;
-    if (document.getElementById("sc-cast-btn")) return;
-    const btn = document.createElement("button");
-    btn.id = "sc-cast-btn";
-    btn.className = "sc-dock-btn";
-    btn.type = "button";
-    btn.title = "Cast to TV";
-    btn.dataset.tvLabel = "Cast";
-    btn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11zm20-7H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>';
-    btn.addEventListener("click", function() {
-      try {
-        if (window.CytubeNative && CytubeNative.startCasting) CytubeNative.startCasting();
-      } catch (e) {
-      }
-    });
-    document.body.appendChild(btn);
+  }
+  function _tpAddHeadshot(svg, url) {
+    if (!svg) return;
+    const NS = "http://www.w3.org/2000/svg";
+    const clip = document.createElementNS(NS, "clipPath");
+    clip.setAttribute("id", "sc-tp-headshot-clip");
+    const disc = document.createElementNS(NS, "circle");
+    disc.setAttribute("cx", "30");
+    disc.setAttribute("cy", "30");
+    disc.setAttribute("r", "25.5");
+    clip.appendChild(disc);
+    const img = document.createElementNS(NS, "image");
+    img.setAttribute("href", url);
+    img.setAttribute("x", "4.5");
+    img.setAttribute("y", "4.5");
+    img.setAttribute("width", "51");
+    img.setAttribute("height", "51");
+    img.setAttribute("preserveAspectRatio", "xMidYMid slice");
+    img.setAttribute("clip-path", "url(#sc-tp-headshot-clip)");
+    img.addEventListener("error", () => img.remove());
+    svg.insertBefore(clip, svg.firstChild);
+    svg.appendChild(img);
+    const ring = svg.querySelector("circle[stroke]");
+    if (ring) svg.appendChild(ring);
+  }
+  function showTriviaBubble(fact) {
+    _tpDismissBubble(true);
+    _tpPlayPopSound();
+    _tpBubbleEl = document.createElement("div");
+    _tpBubbleEl.id = "sc-tp-bubble";
+    const icon = TP_ICON_SVGS[tpPickIconKey(fact.icon)];
+    const bylineHtml = fact.byline ? `<div id="sc-tp-byline">${_escHtml4(fact.byline)}</div>` : "";
+    _tpBubbleEl.innerHTML = `
+        <svg id="sc-tp-tail" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="30" cy="30" r="27" fill="#000"/>
+            <circle cx="30" cy="30" r="27" fill="none" stroke="#c81d25" stroke-width="3"/>
+            ${icon}
+        </svg>
+        <div id="sc-tp-text">${_escHtml4(fact.text)}${bylineHtml}</div>`;
+    if (tpSafeImageUrl(fact.image)) _tpAddHeadshot(_tpBubbleEl.querySelector("#sc-tp-tail"), fact.image);
+    document.body.appendChild(_tpBubbleEl);
+    const pos = _tpRandomPosition(_tpBubbleEl.offsetWidth, _tpBubbleEl.offsetHeight);
+    _tpBubbleEl.style.setProperty("left", pos.leftPx + "px", "important");
+    _tpBubbleEl.style.setProperty("top", pos.topPx + "px", "important");
+    requestAnimationFrame(() => _tpBubbleEl && _tpBubbleEl.classList.add("sc-tp-in"));
+    _tpBubbleEl.addEventListener("click", () => _tpDismissBubble(false));
+    _tpBubbleEl.addEventListener("mouseenter", () => clearTimeout(_tpDismissTimer));
+    _tpBubbleEl.addEventListener("mouseleave", _tpArmDismissTimer);
+    _tpArmDismissTimer();
+  }
+  function _tpArmDismissTimer() {
+    clearTimeout(_tpDismissTimer);
+    _tpDismissTimer = setTimeout(() => _tpDismissBubble(false), TP_VISIBLE_MS);
+  }
+  function _tpDismissBubble(instant) {
+    clearTimeout(_tpDismissTimer);
+    _tpDismissTimer = null;
+    if (!_tpBubbleEl) return;
+    const el = _tpBubbleEl;
+    _tpBubbleEl = null;
+    if (instant) {
+      el.remove();
+      return;
+    }
+    el.classList.add("sc-tp-out");
+    setTimeout(() => el.remove(), TP_EXIT_ANIM_MS);
+  }
+  var TP_BTN_ID = "sc-trivia-popup-btn";
+  function _tpApplyMute() {
+    if (_tpMuted) {
+      clearTimeout(_tpPopTimer);
+      _tpPopTimer = null;
+      _tpDismissBubble(true);
+      hideDriveInCard(false);
+    } else if (!_tpTimeline && !_tpExhausted && _tpQueue.length) {
+      clearTimeout(_tpPopTimer);
+      _tpPopTimer = setTimeout(_tpAttemptPop, TP_RESUME_MS);
+    }
+    _tpSyncButton();
+  }
+  function _tpToggleMute() {
+    _tpMuted = !_tpMuted;
+    _tpApplyMute();
+  }
+  function _tpSyncButton() {
+    const btn = document.getElementById(TP_BTN_ID);
+    if (!btn) return;
+    btn.innerHTML = `<span class="sc-tp-dot">${_tpMuted ? "○" : "●"}</span>Pop-ups`;
+    btn.title = _tpMuted ? "Pop-up trivia muted for this session — tap to resume" : "Mute pop-up trivia bubbles for this session";
+    btn.setAttribute("aria-pressed", _tpMuted ? "true" : "false");
+  }
+  function renderTriviaPopupButton() {
+    const shouldShow = triviaPopupEnabled() && !!(npState.data && npState.data.imdbId);
+    let btn = document.getElementById(TP_BTN_ID);
+    if (!shouldShow) {
+      if (btn) btn.remove();
+      return;
+    }
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.id = TP_BTN_ID;
+      btn.type = "button";
+      btn.dataset.noTvCaption = "1";
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        _tpToggleMute();
+      });
+      const header = document.getElementById("videowrap-header");
+      const anchor = document.getElementById("sc-up-next-btn") || document.getElementById("sc-poster-toggle");
+      if (header && anchor && anchor.parentNode === header) header.insertBefore(btn, anchor);
+      else (header || document.body).appendChild(btn);
+    }
+    _tpSyncButton();
   }
 
-  // src/chrome/dock.js
-  var DOCK_ORDER = ["sc-chatmode-btn", "sc-settings-btn", "sc-subtitles-btn", "sc-desync-btn", "sc-cast-btn"];
-  function layoutDock() {
-    let slot = 0;
-    for (const id of DOCK_ORDER) {
+  // src/titleinject.js
+  var NP_AUTO_HIDE_MS = isTv ? 1e4 : 8e3;
+  var NP_AUTO_MIN_SECONDS = 45 * 60;
+  function _npShouldAutoAnnounce(isYt) {
+    return !isYt && getCurrentMediaSeconds() >= NP_AUTO_MIN_SECONDS;
+  }
+  function isYouTubeMedia() {
+    try {
+      const p = window.PLAYER || window.player;
+      if (p && p.type === "yt") return true;
+      if (p && p.mediaType === "yt") return true;
+    } catch (e) {
+    }
+    if (document.querySelector('#ytapiplayer iframe[src*="youtube.com"]')) return true;
+    if (document.querySelector('#ytapiplayer[src*="youtube.com"]')) return true;
+    return false;
+  }
+  function _domYtVideoId() {
+    const el = document.querySelector('#ytapiplayer iframe[src*="youtube.com"]');
+    if (!el) return "";
+    const src = el.getAttribute("src") || "";
+    const m = src.match(/[?&]v=([\w-]{11})/) || src.match(/\/embed\/([\w-]{11})/);
+    return m ? m[1] : "";
+  }
+  function fetchYtOembed(videoId) {
+    if (!videoId) return Promise.resolve(null);
+    const watchUrl = "https://www.youtube.com/watch?v=" + encodeURIComponent(videoId);
+    const url = "https://www.youtube.com/oembed?url=" + encodeURIComponent(watchUrl) + "&format=json";
+    return nativeHttpGet(url).then((res) => {
+      if (!res || res.status !== 200) return null;
+      try {
+        return JSON.parse(res.body);
+      } catch (e) {
+        return null;
+      }
+    }).catch(() => null);
+  }
+  function applyCleanTitleDom(titleEl, movieData) {
+    const { cleanTitle, cleanYear, season, episode, episodeName } = movieData;
+    if (!cleanTitle || !titleEl) return;
+    const epTag = episodeTag(season, episode);
+    const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : "") + (epTag ? ` · ${epTag}` : "") + (episodeName ? ` — ${episodeName}` : "");
+    let span = titleEl.querySelector(":scope > #sc-title-text") || document.getElementById("sc-title-text");
+    if (!span) {
+      span = document.createElement("span");
+      span.id = "sc-title-text";
+      span.style.cursor = "pointer";
+      span.title = "Movie info";
+      span.dataset.noTvCaption = "1";
+      span.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
+      });
+      const textNode = [...titleEl.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
+      if (textNode) textNode.parentNode.replaceChild(span, textNode);
+      else titleEl.insertBefore(span, titleEl.firstChild);
+    }
+    span.textContent = newText;
+  }
+  function injectMovieLinks(titleEl) {
+    const rawTitle = titleEl.textContent.trim().replace(/^currently\s+playing[:\s]*/i, "").replace(/^now\s+playing[:\s]*/i, "").trim();
+    if (!rawTitle || rawTitle.length < 2) return;
+    if (rawTitle === movieState.lastMovieTitle) {
+      if (npState.data && !titleEl.querySelector("#sc-title-text")) {
+        applyCleanTitleDom(titleEl, npState.data);
+      }
+      renderTriviaPopupButton();
+      return;
+    }
+    movieState.lastMovieTitle = rawTitle;
+    ["sc-movie-stats"].forEach((id) => {
       const el = document.getElementById(id);
-      if (!el || el.classList.contains("sc-hidden")) continue;
-      el.style.setProperty("--sc-dock-slot", String(slot));
-      slot++;
+      if (el) el.remove();
+    });
+    npState.data = null;
+    updateSubtitleButton(null);
+    renderTriviaPopupButton();
+    const isYt = isYouTubeMedia();
+    let ytSeconds = 0;
+    if (isYt) {
+      ytSeconds = getCurrentMediaSeconds();
+      if (ytSeconds < 3600) {
+        const videoId = mediaState.currentYtVideoId || _domYtVideoId();
+        if (videoId) {
+          fetchYtOembed(videoId).then((info) => {
+            if (!info || !info.title) return;
+            if (movieState.lastMovieTitle !== rawTitle) return;
+            const movieData = {
+              cleanTitle: info.title,
+              cleanYear: null,
+              poster: info.thumbnail_url || null,
+              backdrop: info.thumbnail_url || null,
+              overview: info.author_name ? `Uploaded by ${info.author_name}` : null,
+              rating: null,
+              runtime: null,
+              genres: [],
+              parentalGuide: null,
+              killCount: null,
+              imdbId: null,
+              links: {},
+              season: null,
+              episode: null,
+              episodeName: null
+            };
+            npState.data = movieData;
+            applyCleanTitleDom(titleEl, movieData);
+            renderTriviaPopupButton();
+          });
+        }
+        return;
+      }
     }
-    document.body.style.setProperty("--sc-dock-count", String(slot));
+    const { title, year, season, episode } = isYt ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
+    if (!title || title.length < 2) return;
+    lookupMovie(title, year, season, episode).then((movieData) => {
+      const { killCount, parentalGuide, cleanTitle, cleanYear } = movieData;
+      if (isYt) {
+        if (!cleanTitle) return;
+        if (movieData.runtime && ytSeconds) {
+          const diff = Math.abs(movieData.runtime - ytSeconds / 60);
+          if (diff > 30) return;
+        }
+      }
+      npState.data = movieData;
+      updateSubtitleButton(movieData.imdbId);
+      renderTriviaPopupButton();
+      if (_npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt)) showNowPlayingCard(movieData, { autoHide: true, autoHideMs: NP_AUTO_HIDE_MS });
+      applyCleanTitleDom(titleEl, movieData);
+      const statParts = [];
+      if (killCount !== null) statParts.push(`💀 ${killCount} on-screen kills`);
+      if (parentalGuide && parentalGuide.length) {
+        const PG_SEV_DOT = { Severe: "🔴", Moderate: "🟡", Mild: "🟢", None: "" };
+        const cssDots = needsEmojiFallback();
+        parentalGuide.forEach(({ category, severity }) => {
+          const dot = PG_SEV_DOT[severity] || "";
+          if (!dot) return;
+          if (cssDots) {
+            const sev = document.createElement("span");
+            sev.className = `sc-sev-dot sc-sev-${severity.toLowerCase()}`;
+            statParts.push([sev, ` ${category}`]);
+          } else {
+            statParts.push(`${dot} ${category}`);
+          }
+        });
+      }
+      const lastAired = getLastAired(cleanTitle || title, cleanYear || year);
+      if (lastAired) statParts.push(`📅 Last aired ${lastAired.dateStr}`);
+      const old = document.getElementById("sc-movie-stats");
+      if (old) old.remove();
+      if (statParts.length) {
+        const cardWillAutoShow = _npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt);
+        const revealDelay = cardWillAutoShow ? NP_AUTO_HIDE_MS : 0;
+        setTimeout(() => {
+          if (movieState.lastMovieTitle !== rawTitle) return;
+          const statsEl = document.createElement("div");
+          statsEl.id = "sc-movie-stats";
+          if (statParts.every((p) => typeof p === "string")) {
+            statsEl.textContent = statParts.join("  ·  ");
+          } else {
+            statParts.forEach((p, i) => {
+              if (i) statsEl.append("  ·  ");
+              statsEl.append(...[].concat(p));
+            });
+          }
+          document.body.appendChild(statsEl);
+          if (typeof chromeState.pinChromeVisible === "function") chromeState.pinChromeVisible();
+          setTimeout(() => {
+            if (statsEl.parentNode) statsEl.remove();
+            if (typeof chromeState.unpinChromeVisible === "function") chromeState.unpinChromeVisible();
+          }, 12e3);
+        }, revealDelay);
+      }
+    });
+  }
+  var _PLAYING_RE = /^\s*(currently|now)\s+playing\s*:?\s*/i;
+  function stripPlayingPrefix(el) {
+    el.querySelectorAll("strong, b, span, .label").forEach((c) => {
+      if (c.childElementCount === 0 && /^\s*(currently|now)\s+playing\s*:?\s*$/i.test(c.textContent)) {
+        c.style.display = "none";
+      }
+    });
+    el.childNodes.forEach((n) => {
+      if (n.nodeType === 3 && _PLAYING_RE.test(n.textContent)) {
+        n.textContent = n.textContent.replace(_PLAYING_RE, "");
+      }
+    });
+  }
+  function triggerTitleInject() {
+    for (const el of [
+      document.getElementById("currenttitle"),
+      document.querySelector("#videowrap-header .pull-left"),
+      document.querySelector("#videowrap-header span"),
+      document.querySelector(".video-title")
+    ]) {
+      if (el && el.textContent.trim()) {
+        stripPlayingPrefix(el);
+        injectMovieLinks(el);
+        return;
+      }
+    }
+  }
+  function watchMovieTitle() {
+    triggerTitleInject();
+    let tries = 0;
+    const poll = setInterval(() => {
+      triggerTitleInject();
+      if (++tries >= 14) clearInterval(poll);
+    }, 1500);
   }
 
-  // src/settings.js
-  init_native();
-
-  // src/chat/keyboard.js
-  function isEditable(el) {
-    return !!el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT");
-  }
-  function labelFor(el) {
-    if (!el) return "Text field";
-    if (el.id === "sc-chat-textarea") return "Chat message";
-    if (el.type === "password") return "Password";
-    if (el.id === "sc-input-tmdb") return "TMDB API key";
-    if (el.id === "username" || el.name === "username") return "Username";
-    return "Text field";
-  }
-  function reportFocusedField() {
-    const el = document.activeElement;
-    if (!isEditable(el)) return;
+  // src/player/drm.js
+  var drmState = { checkTimer: null };
+  function openExternalUrl(url) {
     try {
-      if (window.CytubeNative && CytubeNative.setKeyboardFieldLabel) {
-        CytubeNative.setKeyboardFieldLabel(labelFor(el), el.type === "password");
+      if (window.CytubeNative && typeof CytubeNative.openExternal === "function") {
+        CytubeNative.openExternal(url);
+      } else {
+        window.open(url, "_blank");
       }
     } catch (e) {
     }
   }
-  function applyPhoneInput(text, commit) {
-    const el = document.activeElement;
-    if (!isEditable(el)) return;
-    el.value = text;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    if (commit) {
-      ["keydown", "keyup"].forEach((type) => {
-        el.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", bubbles: true }));
-      });
-    }
+  function hideDrmOverlay() {
+    const o = document.getElementById("sc-drm-overlay");
+    if (o) o.remove();
   }
-  function initPhoneKeyboard(isTvDevice, recheckSoftKeyboard) {
-    if (!isTvDevice) return;
-    document.addEventListener("focusin", reportFocusedField);
-    window.__scPhoneKeyboard = applyPhoneInput;
-    setInterval(() => {
-      try {
-        recheckSoftKeyboard();
-      } catch (e) {
-      }
-    }, 1e3);
+  function showDrmOverlay(videoId, title) {
+    hideDrmOverlay();
+    const wrap = document.getElementById("videowrap") || document.body;
+    if (getComputedStyle(wrap).position === "static") wrap.style.position = "relative";
+    const url = "https://cytu.be/r/420Grindhouse";
+    const safeTitle = (title || "This title").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]);
+    const o = document.createElement("div");
+    o.id = "sc-drm-overlay";
+    o.innerHTML = '<div id="sc-drm-box"><div id="sc-drm-icon">🔒</div><div id="sc-drm-title">' + safeTitle + ' can’t play in the app</div><div id="sc-drm-msg">It’s a DRM-protected <b>YouTube Movies</b> title and the in-app player can’t decrypt it. Open <b>Grindhouse</b> in your browser — it plays there, with the room and chat still in sync.</div><div id="sc-drm-actions"><button id="sc-drm-open" class="sc-drm-btn">Open Grindhouse in Browser</button></div></div>';
+    wrap.appendChild(o);
+    const btn = document.getElementById("sc-drm-open");
+    if (btn) btn.addEventListener("click", () => openExternalUrl(url));
+  }
+  function checkYtDrm(tries) {
+    const p = window.PLAYER;
+    if (!p || p.mediaType !== "yt") {
+      hideDrmOverlay();
+      return;
+    }
+    let vd = null;
+    try {
+      vd = p.yt && p.yt.getVideoData ? p.yt.getVideoData() : null;
+    } catch (e) {
+    }
+    if (vd && vd.errorCode) {
+      showDrmOverlay(vd.video_id, vd.title);
+      return;
+    }
+    if ((tries || 0) < 10) {
+      drmState.checkTimer = setTimeout(() => checkYtDrm((tries || 0) + 1), 1e3);
+    }
   }
 
   // node_modules/qrcode-generator/dist/qrcode.mjs
@@ -6080,6 +6185,92 @@
     }
   }
 
+  // src/simkl/helpers.js
+  var LS_SIMKL_TOKEN = "sc_simkl_token";
+  var LS_SIMKL_PROMPTED = "sc_simkl_prompted";
+  var SIMKL_THRESHOLD_MIN = 50;
+  var SIMKL_THRESHOLD_MAX = 100;
+  var SIMKL_THRESHOLD_DEFAULT = 90;
+  var SIMKL_MIN_DURATION_SEC = 10 * 60;
+  var SIMKL_PROMPT_TTL_MS = 12 * 60 * 60 * 1e3;
+  var SIMKL_REFRESH_WINDOW_MS = 24 * 60 * 60 * 1e3;
+  var SIMKL_PANEL_INSET = { right: 16, bottom: 56 };
+  var SIMKL_APP_NAME = "spuds-grindhouse";
+  var SIMKL_API = "https://api.simkl.com";
+  function simklClampThreshold(raw) {
+    const n = parseInt(raw, 10);
+    const v = Number.isFinite(n) ? n : SIMKL_THRESHOLD_DEFAULT;
+    return Math.min(SIMKL_THRESHOLD_MAX, Math.max(SIMKL_THRESHOLD_MIN, v));
+  }
+  function simklEsc(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function simklPastThreshold(currentTime, duration, thresholdPct) {
+    return Number.isFinite(duration) && duration > 0 && Number.isFinite(currentTime) && currentTime >= 0 && currentTime / duration >= thresholdPct / 100;
+  }
+  function simklIsHotkey(e) {
+    return !!e && e.altKey === true && e.shiftKey === true && !e.ctrlKey && !e.metaKey && e.code === "KeyS";
+  }
+  function simklShouldPrompt(s) {
+    if (!s.enabled || s.isYouTube || s.isEpisode || !s.imdbId) return false;
+    if (!Number.isFinite(s.duration) || s.duration < SIMKL_MIN_DURATION_SEC) return false;
+    if (!simklPastThreshold(s.currentTime, s.duration, s.thresholdPct)) return false;
+    const p = s.prompted;
+    if (p && p.imdbId === s.imdbId && s.now - p.ts < SIMKL_PROMPT_TTL_MS) return false;
+    return true;
+  }
+  function simklUsableToken(token, clientId) {
+    return token && token.access && clientId && token.clientId === clientId ? token : null;
+  }
+  function simklTokenNeedsRefresh(token, nowMs) {
+    return !!token && Number.isFinite(token.expiresAt) && nowMs >= token.expiresAt - SIMKL_REFRESH_WINDOW_MS;
+  }
+  function simklTokenFromResponse(json, clientId, nowMs, prevRefresh) {
+    const createdMs = Number.isFinite(json.created_at) ? json.created_at * 1e3 : nowMs;
+    return { access: json.access_token, refresh: json.refresh_token || prevRefresh, expiresAt: createdMs + json.expires_in * 1e3, clientId };
+  }
+  function simklBuildHistoryPayload(snap, nowIso, rating) {
+    const movie = { ids: { imdb: snap.imdbId }, watched_at: nowIso };
+    if (Number.isInteger(rating) && rating >= 1 && rating <= 10) movie.rating = rating;
+    return { movies: [movie] };
+  }
+  function simklInterpretSyncResponse(json) {
+    const nf = json && json.not_found && json.not_found.movies;
+    if (Array.isArray(nf) && nf.length) return "not_found";
+    const added = json && json.added;
+    if (added && typeof added === "object") return added.movies > 0 ? "added" : "exists";
+    return "unknown";
+  }
+  function simklAuthQuery(clientId, appName, appVersion) {
+    return "client_id=" + encodeURIComponent(clientId) + "&app-name=" + encodeURIComponent(appName) + "&app-version=" + encodeURIComponent(appVersion);
+  }
+  function simklItemUrl(imdbId, clientId, appVersion) {
+    return SIMKL_API + "/redirect?to=simkl&imdb=" + encodeURIComponent(imdbId) + "&" + simklAuthQuery(clientId, SIMKL_APP_NAME, appVersion);
+  }
+  function simklVerificationLink(dev) {
+    const isHttps = (u) => /^https:\/\//.test(u);
+    const url = isHttps(dev.verification_uri_complete) ? dev.verification_uri_complete : isHttps(dev.verification_uri) ? dev.verification_uri : "https://simkl.com/pin";
+    const shown = (isHttps(dev.verification_uri) ? dev.verification_uri : "https://simkl.com/pin").replace(/^https?:\/\//, "");
+    return { url, shown };
+  }
+  function simklFormBody(obj) {
+    return Object.keys(obj).filter((k) => obj[k] !== void 0 && obj[k] !== null).map((k) => encodeURIComponent(k) + "=" + encodeURIComponent(obj[k])).join("&");
+  }
+  function simklTickLifetime(remainingMs, dtMs, paused) {
+    return paused ? remainingMs : Math.max(0, remainingMs - dtMs);
+  }
+  function simklPanelPosition(rect, viewport) {
+    const right = rect ? viewport.width - rect.right : 0;
+    const bottom = rect ? viewport.height - rect.bottom : 0;
+    return {
+      right: Math.max(0, Math.round(right)) + SIMKL_PANEL_INSET.right,
+      bottom: Math.max(0, Math.round(bottom)) + SIMKL_PANEL_INSET.bottom
+    };
+  }
+
+  // src/simkl/client.js
+  init_native();
+
   // src/update.js
   init_native();
   var LS_UPDATE_CACHE = "sc_update_cache";
@@ -6199,995 +6390,2266 @@
     }, 4e3);
   }
 
-  // src/subtitles/opensubtitles.js
-  init_native();
-  var API_BASE = "https://api.opensubtitles.com/api/v1";
-  var USER_AGENT = "GrindhouseTV v1.0";
-  function authHeaders(key) {
-    return { "Api-Key": key, "User-Agent": USER_AGENT, "Content-Type": "application/json" };
+  // src/simkl/client.js
+  var _transport = { get: nativeHttpGet, post: nativeHttpPost };
+  var _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  function simklAppVersion() {
+    return _appVersion() || "0";
   }
-  async function validateOpensubtitlesKey(key) {
-    if (!key) return "invalid";
+  async function simklRequest(method, path, opts = {}) {
+    const { body, form, token, clientId } = opts;
+    const version = simklAppVersion();
+    const headers = { "User-Agent": SIMKL_APP_NAME + "/" + version };
+    if (body) headers["Content-Type"] = form ? "application/x-www-form-urlencoded" : "application/json";
+    if (token && token.access) headers["Authorization"] = "Bearer " + token.access;
+    const url = SIMKL_API + path + (path.includes("?") ? "&" : "?") + simklAuthQuery(clientId || simklClientId(), SIMKL_APP_NAME, version);
+    const res = method === "POST" ? await _transport.post(url, headers, body ? form ? simklFormBody(body) : JSON.stringify(body) : "") : await _transport.get(url, headers);
+    let json = null;
     try {
-      const r = await nativeHttpPost(`${API_BASE}/download`, authHeaders(key), JSON.stringify({ file_id: 0 }));
-      if (r.status === 503) return "invalid";
-      if (r.status >= 400 && r.status < 500) return "valid";
-      return "error";
+      json = JSON.parse(res.body);
     } catch (e) {
-      return "error";
     }
+    return { status: res.status, json };
   }
-  async function searchSubtitles(imdbId) {
-    const key = getKey(LS_OPENSUBTITLES);
-    if (!key || !imdbId) return [];
-    const numericId = String(imdbId).replace(/^tt/i, "");
+  function simklLoadToken() {
     try {
-      const r = await nativeHttpGet(
-        `${API_BASE}/subtitles?imdb_id=${encodeURIComponent(numericId)}&languages=en`,
-        authHeaders(key)
-      );
-      if (r.status !== 200) return [];
-      const data = JSON.parse(r.body);
-      return (data.data || []).map((entry) => {
-        const a = entry.attributes || {};
-        const file = (a.files || [])[0];
-        if (!file || !file.file_id) return null;
-        return {
-          fileId: file.file_id,
-          release: a.release || "Unknown release",
-          uploader: a.uploader && a.uploader.name || "Unknown",
-          downloadCount: a.download_count || 0,
-          fromTrusted: !!a.from_trusted,
-          hearingImpaired: !!a.hearing_impaired,
-          machineTranslated: !!(a.machine_translated || a.ai_translated)
-        };
-      }).filter(Boolean).sort((a, b) => b.downloadCount - a.downloadCount).slice(0, 8);
-    } catch (e) {
-      return [];
-    }
-  }
-  async function downloadSubtitle(fileId) {
-    const key = getKey(LS_OPENSUBTITLES);
-    if (!key || !fileId) return null;
-    try {
-      const r = await nativeHttpPost(`${API_BASE}/download`, authHeaders(key), JSON.stringify({ file_id: fileId }));
-      if (r.status !== 200) return null;
-      const data = JSON.parse(r.body);
-      return data.link || null;
+      return JSON.parse(localStorage.getItem(LS_SIMKL_TOKEN));
     } catch (e) {
       return null;
     }
   }
-  async function fetchSrtText(link) {
-    if (!link) return null;
+  function simklSaveToken(t) {
     try {
-      const r = await nativeHttpGet(link);
-      return r.status === 200 ? r.body : null;
+      localStorage.setItem(LS_SIMKL_TOKEN, JSON.stringify(t));
+    } catch (e) {
+    }
+  }
+  function simklClearToken() {
+    try {
+      localStorage.removeItem(LS_SIMKL_TOKEN);
+    } catch (e) {
+    }
+  }
+  function simklLoadPrompted() {
+    try {
+      return JSON.parse(localStorage.getItem(LS_SIMKL_PROMPTED));
     } catch (e) {
       return null;
     }
   }
-  function srtTimeToSeconds(t) {
-    const m = String(t).match(/(\d+):(\d\d):(\d\d)[,.](\d+)/);
-    if (!m) return 0;
-    return +m[1] * 3600 + +m[2] * 60 + +m[3] + +m[4] / 1e3;
-  }
-  var _ALLOWED_TAGS = ["i", "b", "u"];
-  function escapeSubtitleText(raw) {
-    const escaped = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    return escaped.replace(/&lt;(\/?)(\w+)&gt;/g, (m, close, tag) => _ALLOWED_TAGS.includes(tag.toLowerCase()) ? `<${close}${tag.toLowerCase()}>` : m);
-  }
-  function parseSrt(text) {
-    if (!text) return [];
-    const noBom = text.charCodeAt(0) === 65279 ? text.slice(1) : text;
-    const clean = noBom.replace(/\r\n/g, "\n");
-    const blocks = clean.split(/\n\n+/);
-    const cues = [];
-    for (const block of blocks) {
-      const lines = block.split("\n").filter((l) => l.trim());
-      if (!lines.length) continue;
-      const timeLineIdx = lines.findIndex((l) => l.includes("-->"));
-      if (timeLineIdx === -1) continue;
-      const [startStr, endStr] = lines[timeLineIdx].split("-->").map((s) => s.trim());
-      const start = srtTimeToSeconds(startStr);
-      const end = srtTimeToSeconds(endStr);
-      if (end <= start) continue;
-      const textLines = lines.slice(timeLineIdx + 1);
-      if (!textLines.length) continue;
-      cues.push({ start, end, text: escapeSubtitleText(textLines.join("\n")) });
-    }
-    return cues;
-  }
-
-  // src/titleinject.js
-  init_native();
-
-  // src/subtitles/overlay.js
-  var REFRESH_MS = 500;
-  var _cues = [];
-  var _timer = null;
-  var _lastCueIndex = -1;
-  var _offset = 0;
-  function ensureContainer2() {
-    let el = document.getElementById("sc-movie-subtitles-overlay");
-    if (!el) {
-      el = document.createElement("div");
-      el.id = "sc-movie-subtitles-overlay";
-      document.body.appendChild(el);
-    }
-    return el;
-  }
-  function findActiveCueIndex(cues, seconds, offset = 0) {
-    const adjusted = seconds - offset;
-    for (let i = 0; i < cues.length; i++) {
-      if (adjusted >= cues[i].start && adjusted <= cues[i].end) return i;
-    }
-    return -1;
-  }
-  function tick() {
-    const idx = findActiveCueIndex(_cues, getCurrentPlaybackSeconds(), _offset);
-    if (idx === _lastCueIndex) return;
-    _lastCueIndex = idx;
-    ensureContainer2().innerHTML = idx >= 0 ? _cues[idx].text.replace(/\n/g, "<br>") : "";
-  }
-  function showMovieSubtitles(cues) {
-    _cues = cues || [];
-    _lastCueIndex = -1;
-    ensureContainer2().classList.add("sc-movie-subtitles-visible");
-    if (!_timer) _timer = setInterval(tick, REFRESH_MS);
-    tick();
-  }
-  function resetSubtitleOffset() {
-    _offset = 0;
-  }
-  function getSubtitleOffset() {
-    return _offset;
-  }
-  function setSubtitleOffset(seconds) {
-    _offset = seconds;
-    _lastCueIndex = -1;
-    if (isMovieSubtitlesVisible()) tick();
-  }
-  function hideMovieSubtitles() {
-    if (_timer) {
-      clearInterval(_timer);
-      _timer = null;
-    }
-    const el = document.getElementById("sc-movie-subtitles-overlay");
-    if (el) {
-      el.classList.remove("sc-movie-subtitles-visible");
-      el.innerHTML = "";
-    }
-  }
-  function isMovieSubtitlesVisible() {
-    const el = document.getElementById("sc-movie-subtitles-overlay");
-    return !!(el && el.classList.contains("sc-movie-subtitles-visible"));
-  }
-
-  // src/subtitles/ui.js
-  var SUBTITLE_CACHE_MAX_ENTRIES = 15;
-  var _subtitleCache = {};
-  function loadSubtitleCache() {
+  function simklMarkPrompted(imdbId, outcome) {
     try {
-      const raw = localStorage.getItem(LS_SUBTITLE_CACHE);
-      if (raw) _subtitleCache = JSON.parse(raw);
+      localStorage.setItem(LS_SIMKL_PROMPTED, JSON.stringify({ imdbId, ts: Date.now(), outcome }));
     } catch (e) {
-      _subtitleCache = {};
     }
   }
-  loadSubtitleCache();
-  function persistSubtitleCache() {
+  async function simklStartDeviceAuth() {
+    let res;
     try {
-      const keys = Object.keys(_subtitleCache);
-      if (keys.length > SUBTITLE_CACHE_MAX_ENTRIES) {
-        const oldestFirst = keys.sort((a, b) => (_subtitleCache[a].ts || 0) - (_subtitleCache[b].ts || 0));
-        for (const k of oldestFirst.slice(0, keys.length - SUBTITLE_CACHE_MAX_ENTRIES)) delete _subtitleCache[k];
+      res = await simklRequest("POST", "/oauth2/device", { form: true, body: { client_id: simklClientId(), scope: "media:read media:write" } });
+    } catch (e) {
+      const err = new Error("device-code request failed: " + e.message);
+      err.kind = "network";
+      throw err;
+    }
+    if (res.status !== 200 || !res.json || !res.json.device_code || !res.json.user_code) {
+      const err = new Error("device-code HTTP " + res.status);
+      err.kind = "rejected";
+      throw err;
+    }
+    return res.json;
+  }
+  async function simklPollDeviceToken(dev, handle, sleep = _sleep) {
+    let intervalMs = Math.max(1, dev.interval || 5) * 1e3;
+    const deadline = Date.now() + dev.expires_in * 1e3;
+    while (!handle.cancelled && Date.now() < deadline) {
+      await sleep(intervalMs);
+      if (handle.cancelled) break;
+      let res;
+      try {
+        res = await simklRequest("POST", "/oauth2/token", {
+          form: true,
+          body: { grant_type: "urn:ietf:params:oauth:grant-type:device_code", client_id: simklClientId(), device_code: dev.device_code }
+        });
+      } catch (e) {
+        continue;
       }
-      localStorage.setItem(LS_SUBTITLE_CACHE, JSON.stringify(_subtitleCache));
+      const json = res.json;
+      if (res.status === 200 && json && json.access_token) {
+        if (typeof json.scope === "string" && !json.scope.split(/\s+/).includes("media:write")) return "scope";
+        simklSaveToken(simklTokenFromResponse(json, simklClientId(), Date.now()));
+        return "ok";
+      }
+      const err = json && json.error;
+      if (res.status === 400 && err === "authorization_pending") continue;
+      if (res.status === 400 && err === "slow_down") {
+        intervalMs += 5e3;
+        continue;
+      }
+      if (res.status === 400 && err === "expired_token") return "expired";
+      return "error";
+    }
+    return handle.cancelled ? "cancelled" : "expired";
+  }
+  async function simklRefreshToken(token) {
+    try {
+      const res = await simklRequest("POST", "/oauth2/token", {
+        form: true,
+        body: { grant_type: "refresh_token", client_id: simklClientId(), refresh_token: token.refresh }
+      });
+      if (res.status === 200 && res.json && res.json.access_token) {
+        const fresh = simklTokenFromResponse(res.json, simklClientId(), Date.now(), token.refresh);
+        simklSaveToken(fresh);
+        return fresh;
+      }
+      if (res.status === 400 || res.status === 401 || res.status === 403) simklClearToken();
     } catch (e) {
     }
+    return null;
   }
-  var _imdbId = null;
-  var _cues2 = null;
-  var _lastResults = [];
-  var _loading = false;
-  function escapeHtml(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  async function simklEnsureToken(out) {
+    const token = simklUsableToken(simklLoadToken(), simklClientId());
+    if (!token) return null;
+    if (simklTokenNeedsRefresh(token, Date.now())) {
+      if (out) out.refreshed = true;
+      const fresh = await simklRefreshToken(token);
+      if (fresh) return fresh;
+      if (!simklLoadToken()) return null;
+      if (Date.now() >= token.expiresAt) return null;
+    }
+    return token;
   }
-  function ensureButton() {
-    let btn = document.getElementById("sc-subtitles-btn");
-    if (!btn) {
-      btn = document.createElement("button");
-      btn.id = "sc-subtitles-btn";
-      btn.className = "sc-dock-btn";
-      btn.type = "button";
-      btn.title = "Download subtitles for this movie";
-      btn.dataset.tvLabel = "Subtitles";
-      btn.addEventListener("click", onButtonClick);
-      document.body.appendChild(btn);
+  var simklHasUsableToken = () => !!simklUsableToken(simklLoadToken(), simklClientId());
+  var simklNoTokenResult = () => ({ result: simklHasUsableToken() ? "error" : "auth" });
+  async function simklSubmit(snap, rating, sleep = _sleep) {
+    const ensured = {};
+    let token = await simklEnsureToken(ensured);
+    if (!token) return simklNoTokenResult();
+    if (ensured.refreshed) await sleep(1100);
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    const post = () => simklRequest("POST", "/sync/history", { body: simklBuildHistoryPayload(snap, nowIso, rating), token });
+    try {
+      let res = await post();
+      if (res.status === 401) {
+        token = await simklRefreshToken(token);
+        if (!token) return simklNoTokenResult();
+        await sleep(1100);
+        res = await post();
+      }
+      if (res.status === 429) {
+        await sleep(1200);
+        res = await post();
+      }
+      if (res.status !== 200 && res.status !== 201) return { result: "error" };
+      const verdict = simklInterpretSyncResponse(res.json);
+      if (verdict === "added" || verdict === "exists" || verdict === "not_found") return { result: verdict };
+      return { result: "error" };
+    } catch (e) {
+      return { result: "error" };
+    }
+  }
+  async function simklFetchUsername(token) {
+    try {
+      const res = await simklRequest("GET", "/users/settings", { token });
+      const name = res.status === 200 && res.json && res.json.user && res.json.user.name;
+      return typeof name === "string" && name ? name : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  async function simklConnectAndVerify(clientId, ui, handle, sleep = _sleep) {
+    if (!clientId) {
+      ui.setStatus("Enter your Client ID first", "bad");
+      return;
+    }
+    setKey(LS_SIMKL_CLIENT_ID, clientId);
+    ui.showCode(null);
+    ui.setStatus("Checking sign-in…", "pending");
+    const token = await simklEnsureToken();
+    if (token) {
+      const name = await simklFetchUsername(token);
+      if (name) {
+        ui.setStatus("✓ Connected as " + name, "ok");
+        return;
+      }
+    }
+    let dev;
+    try {
+      dev = await simklStartDeviceAuth();
+    } catch (e) {
+      if (e.kind === "network") ui.setStatus("⚠ Couldn’t reach Simkl", "bad");
+      else ui.setStatus("✗ Client ID rejected by Simkl — check it at simkl.com/settings/developer", "bad");
+      return;
+    }
+    ui.showCode(dev);
+    const expiresAt = Date.now() + dev.expires_in * 1e3;
+    const tick2 = () => {
+      const secs = Math.max(0, Math.round((expiresAt - Date.now()) / 1e3));
+      ui.setStatus("Waiting for approval… " + Math.floor(secs / 60) + ":" + String(secs % 60).padStart(2, "0"), "pending");
+    };
+    tick2();
+    const iv = setInterval(tick2, 1e3);
+    let r;
+    try {
+      const wrappedSleep = (ms) => {
+        if (!ui.isOpen()) {
+          handle.cancelled = true;
+          return Promise.resolve();
+        }
+        return sleep(ms);
+      };
+      r = await simklPollDeviceToken(dev, handle, wrappedSleep);
+    } finally {
+      clearInterval(iv);
+    }
+    ui.showCode(null);
+    if (r === "cancelled") ui.setStatus("Cancelled", "");
+    else if (r === "expired") ui.setStatus("✗ Code expired — press Test again", "bad");
+    else if (r === "scope") ui.setStatus("✗ Simkl granted read-only access — press Test again and approve all permissions", "bad");
+    else if (r === "error") ui.setStatus("✗ Sign-in failed — check the Client ID", "bad");
+    else if (r === "ok") {
+      const name = await simklFetchUsername(simklLoadToken());
+      ui.setStatus(name ? "✓ Connected as " + name : "✓ Connected", "ok");
+    }
+  }
+
+  // src/cards/simkl.js
+  var SIMKL_POLL_MS = 3e3;
+  var SIMKL_LIFE_TICK_MS = 1e3;
+  var SIMKL_PANEL_LIFETIME_MS = 60 * 1e3;
+  var SIMKL_SUCCESS_MS = 6 * 1e3;
+  var SIMKL_EXIT_ANIM_MS = 300;
+  var _panelEl = null;
+  var _ctx = null;
+  var _lifeTimer = null;
+  var _threshold = () => simklClampThreshold(simklThresholdRaw());
+  function _snapshot() {
+    const d = npState.data;
+    return {
+      imdbId: d && d.imdbId || "",
+      title: d && d.cleanTitle || movieState.lastMovieTitle || "this movie",
+      year: d && d.cleanYear || "",
+      poster: d && d.poster || ""
+    };
+  }
+  function _host() {
+    const fs = document.fullscreenElement;
+    return fs && fs.tagName !== "VIDEO" ? fs : document.body;
+  }
+  function _reposition() {
+    if (!_panelEl) return;
+    const host = _host();
+    if (_panelEl.parentNode !== host) host.appendChild(_panelEl);
+    const v = document.querySelector("#videowrap video");
+    const wrap = document.getElementById("videowrap");
+    let r = v && v.getBoundingClientRect() || null;
+    if (!r || r.width <= 0 || r.height <= 0) r = wrap && wrap.getBoundingClientRect() || null;
+    if (r && (r.width <= 0 || r.height <= 0)) r = null;
+    const pos = simklPanelPosition(r, { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight });
+    _panelEl.style.setProperty("right", pos.right + "px", "important");
+    _panelEl.style.setProperty("bottom", pos.bottom + "px", "important");
+  }
+  function _stars(rating) {
+    let out = "";
+    for (let i = 1; i <= 10; i++) {
+      out += `<button type="button" class="sc-simkl-star${i <= rating ? " on" : ""}" data-r="${i}" aria-label="Rate ${i} out of 10">★</button>`;
+    }
+    return out;
+  }
+  function _paintLife() {
+    const bar = _panelEl && _panelEl.querySelector(".sc-simkl-life-bar");
+    if (bar && _ctx) bar.style.setProperty("width", Math.max(0, Math.min(100, _ctx.remaining / _ctx.lifeTotal * 100)) + "%", "important");
+  }
+  function _signInHtml(dev) {
+    const link = simklVerificationLink(dev);
+    return isTv ? `<div class="sc-simkl-help">Scan with your phone, or go to <b>${simklEsc(link.shown)}</b> and enter:</div>
+           <canvas class="sc-simkl-qr"></canvas>` : `<div class="sc-simkl-help">Open <a href="#" class="sc-simkl-link" data-act="signin">${simklEsc(link.shown)}</a> and enter:</div>`;
+  }
+  function _render() {
+    const c = _ctx, el = _panelEl;
+    if (!c || !el) return;
+    const focusedStar = isTv && document.activeElement && el.contains(document.activeElement) && document.activeElement.dataset.r;
+    const s = c.snap;
+    const title = `${simklEsc(s.title)}${s.year ? ` <span class="sc-simkl-year">(${simklEsc(s.year)})</span>` : ""}`;
+    const poster = s.poster ? `<img class="sc-simkl-poster" src="${simklEsc(s.poster)}" alt="" />` : '<div class="sc-simkl-poster sc-simkl-noposter">🎬</div>';
+    let body = "";
+    switch (c.view) {
+      case "prompt":
+        body = `
+                <div class="sc-simkl-q">${c.manual ? "Log this movie on Simkl?" : "You reached the end. Log it on Simkl?"}</div>
+                <div class="sc-simkl-stars" role="group" aria-label="Optional rating">${_stars(c.rating)}</div>
+                <div class="sc-simkl-rating-label">${c.rating ? c.rating + " / 10" : "Optional rating"}</div>
+                <div class="sc-simkl-actions">
+                    <button type="button" class="sc-simkl-btn sc-simkl-primary" data-act="scrobble" data-default>Log to Simkl</button>
+                    <button type="button" class="sc-simkl-btn" data-act="skip">Not now</button>
+                </div>
+                ${simklLoadToken() ? '<a href="#" class="sc-simkl-link" data-act="disconnect">Disconnect Simkl</a>' : ""}`;
+        break;
+      case "submitting":
+        body = '<div class="sc-simkl-q">Logging to Simkl…</div>';
+        break;
+      case "success":
+        body = `
+                <div class="sc-simkl-q sc-simkl-ok">${c.already ? "Already on your Simkl history ✓" : "Logged ✓"}</div>
+                ${isTv ? "" : '<a href="#" class="sc-simkl-link" data-act="view">View on Simkl ↗</a>'}
+                <div class="sc-simkl-actions"><button type="button" class="sc-simkl-btn" data-act="skip" data-default>Close</button></div>`;
+        break;
+      case "notfound":
+        body = `
+                <div class="sc-simkl-q sc-simkl-bad">Simkl couldn't match this movie.</div>
+                <div class="sc-simkl-actions"><button type="button" class="sc-simkl-btn" data-act="skip" data-default>Close</button></div>`;
+        break;
+      case "error":
+        body = `
+                <div class="sc-simkl-q sc-simkl-bad">${simklEsc(c.message || "Something went wrong.")}</div>
+                <div class="sc-simkl-actions">
+                    <button type="button" class="sc-simkl-btn sc-simkl-primary" data-act="retry" data-default>Retry</button>
+                    <button type="button" class="sc-simkl-btn" data-act="skip">Close</button>
+                </div>`;
+        break;
+      case "connect":
+        body = c.dev ? `
+                <div class="sc-simkl-q">Connect your Simkl account</div>
+                ${_signInHtml(c.dev)}
+                <div class="sc-simkl-code">${simklEsc(c.dev.user_code)}</div>
+                <div class="sc-simkl-help">Waiting for approval… <span class="sc-simkl-expiry"></span></div>
+                <div class="sc-simkl-actions"><button type="button" class="sc-simkl-btn" data-act="cancelconnect" data-default>Cancel</button></div>` : '<div class="sc-simkl-q">Contacting Simkl…</div>';
+        break;
+      case "needsconfig":
+        body = `
+                <div class="sc-simkl-q">Simkl isn't set up yet</div>
+                <div class="sc-simkl-help">Add your Simkl Client ID in Settings → Account to log movies.</div>
+                <div class="sc-simkl-actions">
+                    <button type="button" class="sc-simkl-btn sc-simkl-primary" data-act="settings" data-default>Open Settings</button>
+                    <button type="button" class="sc-simkl-btn" data-act="skip">Dismiss</button>
+                </div>`;
+        break;
+      case "nomatch":
+        body = `
+                <div class="sc-simkl-q">No movie matched yet</div>
+                <div class="sc-simkl-help">Nothing to log yet — wait for the Now Playing card to identify the movie (YouTube videos can't be logged).</div>
+                <div class="sc-simkl-actions"><button type="button" class="sc-simkl-btn" data-act="skip" data-default>Close</button></div>`;
+        break;
+    }
+    el.innerHTML = `
+        <div class="sc-simkl-row">
+            ${poster}
+            <div class="sc-simkl-main">
+                <div class="sc-simkl-title">${title}</div>
+                ${body}
+            </div>
+        </div>
+        <div class="sc-simkl-life"><div class="sc-simkl-life-bar"></div></div>`;
+    const qr = el.querySelector(".sc-simkl-qr");
+    if (qr && c.dev) {
+      try {
+        renderQrToCanvas(qr, simklVerificationLink(c.dev).url, 4);
+      } catch (e) {
+        qr.remove();
+      }
+    }
+    _paintLife();
+    _reposition();
+    if (isTv && c.holdsFocus) {
+      const target = focusedStar && el.querySelector(`[data-r="${focusedStar}"]`) || el.querySelector("[data-default]");
+      if (target && tvNavState.setFocus) tvNavState.setFocus(target);
+    }
+  }
+  function _setView(view, opts = {}) {
+    const c = _ctx;
+    if (!c) return;
+    c.view = view;
+    c.message = opts.message || "";
+    if (opts.life) {
+      c.remaining = opts.life;
+      c.lifeTotal = opts.life;
+    }
+    _render();
+  }
+  function _lifeTick() {
+    const c = _ctx;
+    if (!c || !_panelEl) return;
+    const paused = c.touched && c.view !== "success" || c.view === "submitting" || c.view === "connect";
+    c.remaining = simklTickLifetime(c.remaining, SIMKL_LIFE_TICK_MS, paused);
+    _reposition();
+    _paintLife();
+    const exp = _panelEl.querySelector(".sc-simkl-expiry");
+    if (exp && c.devExpiresAt) {
+      const secs = Math.max(0, Math.round((c.devExpiresAt - Date.now()) / 1e3));
+      exp.textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+    }
+    if (c.remaining <= 0) _close();
+  }
+  function _close(opts = {}) {
+    const el = _panelEl, c = _ctx;
+    if (c && c.poll) c.poll.cancelled = true;
+    clearInterval(_lifeTimer);
+    _lifeTimer = null;
+    _ctx = null;
+    _panelEl = null;
+    if (el) {
+      el.classList.remove("sc-simkl-in");
+      el.classList.add("sc-simkl-out");
+      setTimeout(() => el.remove(), SIMKL_EXIT_ANIM_MS + 50);
+    }
+    if (isTv && c && c.holdsFocus && !opts.keepFocus) {
+      const prev = c.prevFocus;
+      setTimeout(() => {
+        if (!tvNavState.setFocus) return;
+        if (prev && prev.isConnected && prev.getClientRects().length) tvNavState.setFocus(prev);
+        else if (tvNavState.clearFocus) tvNavState.clearFocus();
+      }, 0);
+    }
+  }
+  function simklDismiss() {
+    if (!_ctx || _ctx.view === "submitting") return !!_ctx;
+    _onAction("skip");
+    return true;
+  }
+  async function _beginConnect() {
+    const c = _ctx;
+    if (!c) return;
+    _setView("connect");
+    let dev;
+    try {
+      dev = await simklStartDeviceAuth();
+    } catch (e) {
+      if (_ctx !== c) return;
+      const message2 = e && e.kind === "network" ? "Couldn't reach Simkl — check your connection." : "Simkl rejected the Client ID — check it in Settings.";
+      _setView("error", { message: message2, life: SIMKL_PANEL_LIFETIME_MS });
+      return;
+    }
+    if (_ctx !== c) return;
+    c.dev = dev;
+    c.devExpiresAt = Date.now() + dev.expires_in * 1e3;
+    c.poll = { cancelled: false };
+    _setView("connect");
+    const r = await simklPollDeviceToken(dev, c.poll);
+    if (_ctx !== c || r === "cancelled") return;
+    c.dev = null;
+    c.devExpiresAt = 0;
+    c.poll = null;
+    if (r === "ok") {
+      _beginSubmit();
+      return;
+    }
+    const message = r === "expired" ? "The code expired — try again." : r === "scope" ? "Simkl granted read-only access — try again and approve all permissions." : "Simkl sign-in failed — check the Client ID in Settings.";
+    _setView("error", { message, life: SIMKL_PANEL_LIFETIME_MS });
+  }
+  async function _beginSubmit() {
+    const c = _ctx;
+    if (!c) return;
+    if (!simklHasUsableToken()) {
+      _beginConnect();
+      return;
+    }
+    _setView("submitting");
+    const out = await simklSubmit(c.snap, c.rating);
+    if (_ctx !== c) return;
+    if (out.result === "added" || out.result === "exists") {
+      simklMarkPrompted(c.snap.imdbId, "scrobbled");
+      c.already = out.result === "exists";
+      _setView("success", { life: SIMKL_SUCCESS_MS });
+    } else if (out.result === "not_found") {
+      _setView("notfound", { life: SIMKL_PANEL_LIFETIME_MS });
+    } else if (out.result === "auth") {
+      _beginConnect();
+    } else {
+      _setView("error", { message: "Couldn't reach Simkl — try again.", life: SIMKL_PANEL_LIFETIME_MS });
+    }
+  }
+  function _onAction(act) {
+    const c = _ctx;
+    if (!c) return;
+    if (act === "skip") {
+      if (!c.manual) simklMarkPrompted(c.snap.imdbId, "skipped");
+      _close();
+      return;
+    }
+    if (act === "settings") {
+      _close({ keepFocus: true });
+      const b = document.getElementById("sc-settings-btn");
+      if (b) b.click();
+      return;
+    }
+    if (act === "disconnect") {
+      simklClearToken();
+      _render();
+      return;
+    }
+    if (act === "view") {
+      openExternalUrl(simklItemUrl(c.snap.imdbId, simklClientId(), simklAppVersion()));
+      return;
+    }
+    if (act === "signin") {
+      if (c.dev) openExternalUrl(simklVerificationLink(c.dev).url);
+      return;
+    }
+    if (act === "cancelconnect") {
+      if (c.poll) c.poll.cancelled = true;
+      c.dev = null;
+      c.devExpiresAt = 0;
+      _setView("prompt");
+      return;
+    }
+    if (act === "scrobble" || act === "retry") {
+      _beginSubmit();
+    }
+  }
+  function _show(snap, opts = {}) {
+    const manual = !!opts.manual;
+    const configured = !!simklClientId();
+    const pastPoint = simklPastThreshold(getCurrentPlaybackSeconds(), getCurrentMediaSeconds(), _threshold());
+    if (snap.imdbId && (!manual || pastPoint)) {
+      simklMarkPrompted(snap.imdbId, configured ? "shown" : "needsconfig");
+    }
+    const el = document.createElement("div");
+    el.id = "sc-simkl-panel";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-label", "Log this movie on Simkl");
+    _panelEl = el;
+    _ctx = {
+      snap,
+      manual,
+      rating: 0,
+      view: !configured ? "needsconfig" : manual && !snap.imdbId ? "nomatch" : "prompt",
+      message: "",
+      remaining: SIMKL_PANEL_LIFETIME_MS,
+      lifeTotal: SIMKL_PANEL_LIFETIME_MS,
+      touched: false,
+      dev: null,
+      devExpiresAt: 0,
+      poll: null,
+      already: false,
+      holdsFocus: false,
+      prevFocus: null
+    };
+    el.addEventListener("click", (e) => {
+      if (!_ctx) return;
+      _ctx.touched = true;
+      const star = e.target.closest("[data-r]");
+      if (star) {
+        const n = parseInt(star.dataset.r, 10);
+        _ctx.rating = _ctx.rating === n ? 0 : n;
+        _render();
+        return;
+      }
+      const a = e.target.closest("[data-act]");
+      if (a) {
+        e.preventDefault();
+        _onAction(a.dataset.act);
+      }
+    });
+    el.addEventListener("focusin", () => {
+      if (_ctx && _ctx.holdsFocus && _ctx.focusSettled) _ctx.touched = true;
+    });
+    _host().appendChild(el);
+    if (isTv && tvNavState.setFocus) {
+      _ctx.prevFocus = tvNavState.getFocus ? tvNavState.getFocus() : null;
+      _ctx.holdsFocus = true;
+    }
+    _render();
+    if (_ctx) _ctx.focusSettled = true;
+    requestAnimationFrame(() => el.classList.add("sc-simkl-in"));
+    _lifeTimer = setInterval(_lifeTick, SIMKL_LIFE_TICK_MS);
+  }
+  function _tick() {
+    if (_panelEl || !simklEnabled()) return;
+    const d = npState.data;
+    if (!d || !d.imdbId) return;
+    if (tvNavState.overlayOpen && tvNavState.overlayOpen()) return;
+    const p = simklLoadPrompted();
+    const configured = !!simklClientId();
+    const eligible = simklShouldPrompt({
+      enabled: true,
+      isYouTube: isYouTubeMedia(),
+      isEpisode: d.episode != null,
+      imdbId: d.imdbId,
+      duration: getCurrentMediaSeconds(),
+      currentTime: getCurrentPlaybackSeconds(),
+      thresholdPct: _threshold(),
+      prompted: p && p.outcome === "needsconfig" && configured ? null : p,
+      now: Date.now()
+    });
+    if (eligible) _show(_snapshot());
+  }
+  function _manualTrigger() {
+    if (_panelEl) {
+      _close();
+      return;
+    }
+    _show(_snapshot(), { manual: true });
+  }
+  function simklBoot() {
+    setInterval(_tick, SIMKL_POLL_MS);
+    document.addEventListener("keydown", (e) => {
+      if (simklIsHotkey(e) && !e.repeat && simklEnabled()) {
+        e.preventDefault();
+        _manualTrigger();
+        return;
+      }
+      if (e.key !== "Escape" || !_ctx) return;
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      simklDismiss();
+    }, true);
+  }
+
+  // src/tvnav/geometry.js
+  function pickDirectional(dir, curRect, rects) {
+    const cx = curRect.left + curRect.width / 2, cy = curRect.top + curRect.height / 2;
+    let best = -1, bestScore = Infinity, cone = -1, coneScore = Infinity;
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i];
+      if (!r) continue;
+      const dx = r.left + r.width / 2 - cx, dy = r.top + r.height / 2 - cy;
+      let primary, perp;
+      if (dir === "left") {
+        if (dx > -4) continue;
+        primary = -dx;
+        perp = Math.abs(dy);
+      } else if (dir === "right") {
+        if (dx < 4) continue;
+        primary = dx;
+        perp = Math.abs(dy);
+      } else if (dir === "up") {
+        if (dy > -4) continue;
+        primary = -dy;
+        perp = Math.abs(dx);
+      } else {
+        if (dy < 4) continue;
+        primary = dy;
+        perp = Math.abs(dx);
+      }
+      const score = primary + perp * 2;
+      if (primary >= perp && score < coneScore) {
+        coneScore = score;
+        cone = i;
+      }
+      if (score < bestScore) {
+        bestScore = score;
+        best = i;
+      }
+    }
+    return cone !== -1 ? cone : best;
+  }
+
+  // src/tvnav.js
+  var tvNavState = { setFocus: null, getFocus: null, clearFocus: null, overlayOpen: null };
+  function initLoginTvNav() {
+    let isTv2 = false;
+    try {
+      if (window.CytubeNative && CytubeNative.isTv) isTv2 = !!CytubeNative.isTv();
+    } catch (e) {
+    }
+    if (!isTv2) isTv2 = window.screen.width >= 1280 && !("ontouchstart" in window) && navigator.maxTouchPoints === 0;
+    if (!isTv2) return;
+    const style = document.createElement("style");
+    style.textContent = ".sc-tv-focus{outline:3px solid #e0701a !important;outline-offset:2px !important;box-shadow:0 0 0 5px rgba(224,112,26,0.32) !important;border-radius:5px !important;}";
+    (document.head || document.documentElement).appendChild(style);
+    let focusEl = null;
+    const isVisible = (el) => {
+      if (!el || !el.getBoundingClientRect) return false;
+      const r = el.getBoundingClientRect();
+      if (r.width < 3 || r.height < 3) return false;
+      const cs = getComputedStyle(el);
+      return cs.visibility !== "hidden" && cs.display !== "none";
+    };
+    const FOCUS_SEL = "input:not([type=hidden]), button, a[href], select, textarea, [tabindex]";
+    const candidates = () => [...document.querySelectorAll(FOCUS_SEL)].filter(isVisible).filter((e) => !e.disabled);
+    function setFocus(el) {
+      if (!el) return;
+      if (focusEl && focusEl !== el) focusEl.classList.remove("sc-tv-focus");
+      focusEl = el;
+      el.classList.add("sc-tv-focus");
+      try {
+        el.focus({ preventScroll: true });
+      } catch (e) {
+      }
+      try {
+        el.scrollIntoView({ block: "nearest" });
+      } catch (e) {
+      }
+    }
+    function move(dir) {
+      const list = candidates();
+      if (!list.length) return;
+      if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) {
+        setFocus(list[0]);
+        return;
+      }
+      const cur = focusEl.getBoundingClientRect();
+      const cx = cur.left + cur.width / 2, cy = cur.top + cur.height / 2;
+      let best = null, bestScore = Infinity;
+      for (const el of list) {
+        if (el === focusEl) continue;
+        const r = el.getBoundingClientRect();
+        const dx = r.left + r.width / 2 - cx, dy = r.top + r.height / 2 - cy;
+        let primary, perp;
+        if (dir === "left") {
+          if (dx > -4) continue;
+          primary = -dx;
+          perp = Math.abs(dy);
+        } else if (dir === "right") {
+          if (dx < 4) continue;
+          primary = dx;
+          perp = Math.abs(dy);
+        } else if (dir === "up") {
+          if (dy > -4) continue;
+          primary = -dy;
+          perp = Math.abs(dx);
+        } else {
+          if (dy < 4) continue;
+          primary = dy;
+          perp = Math.abs(dx);
+        }
+        const score = primary + perp * 2;
+        if (score < bestScore) {
+          bestScore = score;
+          best = el;
+        }
+      }
+      if (best) setFocus(best);
+    }
+    function activate() {
+      if (!focusEl) {
+        move("down");
+        return;
+      }
+      const tag = focusEl.tagName, type = (focusEl.type || "").toLowerCase();
+      if (tag === "INPUT" && !/^(checkbox|radio|submit|button|reset)$/.test(type) || tag === "TEXTAREA") {
+        try {
+          focusEl.focus();
+        } catch (e) {
+        }
+      } else {
+        focusEl.click();
+      }
+    }
+    window.__scTvKey = function(dir) {
+      try {
+        if (dir === "back") {
+          if (history.length > 1) history.back();
+          else {
+            try {
+              if (window.CytubeNative && CytubeNative.tvBack) CytubeNative.tvBack();
+            } catch (e) {
+            }
+          }
+          return;
+        }
+        if (dir === "center") activate();
+        else move(dir);
+      } catch (e) {
+      }
+    };
+    const seed = () => {
+      const l = candidates();
+      if (l.length) setFocus(l.find((e) => e.tagName === "INPUT" && /^(text|password|email)$/i.test(e.type)) || l[0]);
+    };
+    if (document.readyState === "complete" || document.readyState === "interactive") seed();
+    else window.addEventListener("DOMContentLoaded", seed);
+  }
+  function initTvNav() {
+    if (!isTv) return;
+    let focusEl = null;
+    let overlayFocusStack = [];
+    let ringIdleTimer = null;
+    let ringHidden = false;
+    const RING_IDLE_MS = 1e4;
+    function hideRingIdle() {
+      document.querySelectorAll(".sc-tv-focus").forEach((e) => e.classList.remove("sc-tv-focus"));
+      ringHidden = true;
+    }
+    function armRingIdle() {
+      clearTimeout(ringIdleTimer);
+      ringIdleTimer = setTimeout(hideRingIdle, RING_IDLE_MS);
+    }
+    const isVisible = (el) => {
+      if (!el || !el.getBoundingClientRect) return false;
+      const r = el.getBoundingClientRect();
+      if (r.width < 3 || r.height < 3) return false;
+      if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return false;
+      const cs = getComputedStyle(el);
+      return cs.visibility !== "hidden" && cs.display !== "none";
+    };
+    const OVERLAY_IDS = ["sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card", "sc-upnext-card", "sc-lineup-screen", "sc-subtitles-picker", "sc-subtitles-manage", "sc-simkl-panel"];
+    const isOverlayOpen = (id, o) => !!(o && isVisible(o) && // Simkl card: counts from creation (it takes focus before its fade-in class lands) until
+    // its fade-out starts.
+    (id !== "sc-simkl-panel" || !o.classList.contains("sc-simkl-out")) && (id !== "sc-np-card" || o.classList.contains("sc-np-visible")) && (id !== "sc-upnext-card" || o.classList.contains("sc-upnext-visible")) && (id !== "sc-trivia-card" || o.classList.contains("sc-show")) && (id !== "sc-lineup-screen" || o.classList.contains("sc-lineup-visible")));
+    const openOverlay = () => {
+      for (const id of OVERLAY_IDS) {
+        const o = document.getElementById(id);
+        if (isOverlayOpen(id, o)) return o;
+      }
+      return null;
+    };
+    const countOpenOverlays = () => {
+      let n = 0;
+      for (const id of OVERLAY_IDS) {
+        if (isOverlayOpen(id, document.getElementById(id))) n++;
+      }
+      return n;
+    };
+    const isDesynced = () => {
+      const b = document.getElementById("sc-desync-btn");
+      return !!(b && b.classList.contains("sc-desync-active"));
+    };
+    const openVjsMenu = () => {
+      const m = document.querySelector("#videowrap .vjs-menu.vjs-lock-showing");
+      return m && [...m.querySelectorAll(".vjs-menu-item")].some(isVisible) ? m : null;
+    };
+    function controlBarTargets() {
+      try {
+        const bar = document.querySelector("#videowrap .vjs-control-bar");
+        if (!bar || !isVisible(bar)) return [];
+        const allowSeek = isDesynced();
+        return [...bar.querySelectorAll("button.vjs-control, button.vjs-menu-button, .vjs-progress-control")].filter((c) => {
+          if (!isVisible(c)) return false;
+          if (c.classList.contains("vjs-progress-control") && !allowSeek) return false;
+          if (c.disabled || c.classList.contains("vjs-disabled")) return false;
+          return true;
+        });
+      } catch (e) {
+        return [];
+      }
+    }
+    const MAIN_IDS = [
+      "sc-drm-open",
+      "sc-title-text",
+      "sc-chatmode-btn",
+      "sc-emote-proxy",
+      "sc-desync-btn",
+      "sc-settings-btn",
+      "sc-usercount-connected",
+      "sc-usercount-online",
+      "sc-poll-btn",
+      "sc-trivia-popup-btn",
+      "sc-poster-toggle",
+      "sc-up-next-btn",
+      "sc-subtitles-btn",
+      "sc-newmsg-pill",
+      "messagebuffer",
+      "sc-chat-textarea"
+    ];
+    const CHAT_HEADER_IDS = ["sc-usercount-connected", "sc-usercount-online", "sc-poll-btn"];
+    const FOCUS_SEL = "button, a[href], input:not([type=hidden]), textarea, select, [tabindex]";
+    const makeFocusable = (el) => {
+      if (!el.hasAttribute("tabindex") && !/^(BUTTON|A|INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) el.tabIndex = -1;
+    };
+    function candidates() {
+      const menu = openVjsMenu();
+      if (menu) {
+        const list = [...menu.querySelectorAll(".vjs-menu-item")].filter(isVisible);
+        if (list.length) return { scope: menu, list };
+      }
+      const ov = openOverlay();
+      if (ov) {
+        let list = [...ov.querySelectorAll(FOCUS_SEL)].filter(isVisible).filter((e) => !e.disabled);
+        if (!list.length) list = [ov];
+        return { scope: ov, list };
+      }
+      const main = MAIN_IDS.map((id) => document.getElementById(id)).filter((el) => el && isVisible(el) && // The new-message pill is opacity-hidden (still sized) until shown — only
+      // make it a focus target while it's actually visible.
+      (el.id !== "sc-newmsg-pill" || el.classList.contains("sc-show")));
+      return { scope: document, list: main.concat(controlBarTargets()) };
+    }
+    function clearFocus() {
+      document.querySelectorAll(".sc-tv-focus").forEach((e) => e.classList.remove("sc-tv-focus"));
+      try {
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      } catch (e) {
+      }
+      holdScrubber(false);
+      focusEl = null;
+      ringHidden = false;
+    }
+    function restoreFocusAfterOverlayClose() {
+      const restore = overlayFocusStack.pop() || null;
+      clearFocus();
+      if (restore && isVisible(restore)) setFocus(restore);
+    }
+    function setFocus(el) {
+      if (!el) return;
+      makeFocusable(el);
+      if (el.hasAttribute && el.hasAttribute("title")) el.removeAttribute("title");
+      if (focusEl && focusEl.id === "sc-chat-textarea" && el.id !== "sc-chat-textarea") wakeVideoControls();
+      holdScrubber(!!(el.closest && el.closest("#videowrap-header, .video-js")));
+      document.querySelectorAll(".sc-tv-focus").forEach((e) => {
+        if (e !== el) e.classList.remove("sc-tv-focus");
+      });
+      focusEl = el;
+      ringHidden = false;
+      el.classList.add("sc-tv-focus");
+      try {
+        el.focus({ preventScroll: true });
+      } catch (e) {
+      }
+      try {
+        el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      } catch (e) {
+      }
+    }
+    tvNavState.setFocus = setFocus;
+    tvNavState.getFocus = () => focusEl;
+    tvNavState.clearFocus = clearFocus;
+    tvNavState.overlayOpen = () => !!openOverlay();
+    const SEEK_RAMP = [10, 10, 10, 10, 30, 30, 30, 60, 60, 120];
+    function seekStepSeconds(repeatCount) {
+      const i = Math.max(0, Math.min(SEEK_RAMP.length - 1, repeatCount | 0));
+      return SEEK_RAMP[i];
+    }
+    function clampForwardToLive(current, next, delta) {
+      if (delta <= 0) return next;
+      const live = getDesyncLiveSeconds();
+      return live != null ? Math.max(current, Math.min(next, live)) : next;
+    }
+    function seekBy(dirSign, repeatCount) {
+      const delta = dirSign * seekStepSeconds(repeatCount);
+      try {
+        const p = window.PLAYER && window.PLAYER.player;
+        if (p && typeof p.currentTime === "function") {
+          const current = p.currentTime() || 0;
+          const next = Math.max(0, current + delta);
+          p.currentTime(clampForwardToLive(current, next, delta));
+          wakeVideoControls();
+          return;
+        }
+      } catch (e) {
+      }
+      const v = document.querySelector("#videowrap video");
+      if (v) {
+        try {
+          const current = v.currentTime;
+          v.currentTime = clampForwardToLive(current, Math.max(0, current + delta), delta);
+          wakeVideoControls();
+        } catch (e) {
+        }
+      }
+    }
+    function jumpToLive() {
+      const live = getDesyncLiveSeconds();
+      if (live == null) return;
+      try {
+        const p = window.PLAYER && window.PLAYER.player;
+        if (p && typeof p.currentTime === "function") {
+          p.currentTime(Math.max(0, live));
+          wakeVideoControls();
+          return;
+        }
+      } catch (e) {
+      }
+      const v = document.querySelector("#videowrap video");
+      if (v) {
+        try {
+          v.currentTime = Math.max(0, live);
+          wakeVideoControls();
+        } catch (e) {
+        }
+      }
+    }
+    function move(dir, repeatCount) {
+      if (focusEl && focusEl.classList && focusEl.classList.contains("vjs-progress-control") && (dir === "left" || dir === "right")) {
+        if (isDesynced()) seekBy(dir === "right" ? 1 : -1, repeatCount || 0);
+        return;
+      }
+      if (focusEl && focusEl.classList && focusEl.classList.contains("vjs-progress-control") && dir === "down") {
+        const next = document.getElementById("sc-settings-btn");
+        if (next && isVisible(next)) {
+          setFocus(next);
+          return;
+        }
+      }
+      if (focusEl && (dir === "left" || dir === "right") && !openVjsMenu()) {
+        const barEls = controlBarTargets();
+        if (barEls.includes(focusEl)) {
+          const sorted = barEls.slice().sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+          const i = sorted.indexOf(focusEl);
+          const ni = dir === "right" ? i + 1 : i - 1;
+          if (ni >= 0 && ni < sorted.length) {
+            setFocus(sorted[ni]);
+            return;
+          }
+        }
+      }
+      if (focusEl && focusEl.type === "range" && (dir === "left" || dir === "right")) {
+        const step = parseFloat(focusEl.step) || 1;
+        const min = focusEl.min !== "" ? parseFloat(focusEl.min) : -Infinity;
+        const max = focusEl.max !== "" ? parseFloat(focusEl.max) : Infinity;
+        let v = (parseFloat(focusEl.value) || 0) + (dir === "right" ? step : -step);
+        focusEl.value = Math.max(min, Math.min(max, v));
+        focusEl.dispatchEvent(new Event("input", { bubbles: true }));
+        return;
+      }
+      const lineupScreen = document.getElementById("sc-lineup-screen");
+      if (lineupScreen && lineupScreen.classList.contains("sc-lineup-visible")) {
+        const rail = focusEl && focusEl.closest(".sc-lineup-rail");
+        if (rail && (dir === "left" || dir === "right")) {
+          const items = [...rail.querySelectorAll(".sc-lineup-item")];
+          const i = items.indexOf(focusEl);
+          const ni = dir === "right" ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
+          setFocus(items[ni]);
+          return;
+        }
+        if (rail && (dir === "up" || dir === "down")) {
+          const items = [...rail.querySelectorAll(".sc-lineup-item")];
+          const myIndex = items.indexOf(focusEl);
+          const target = stepLineupSection(dir === "down" ? 1 : -1, myIndex);
+          if (target) {
+            setFocus(target);
+            return;
+          }
+          const activeTab = document.querySelector(".sc-lineup-daytab-active");
+          if (activeTab) {
+            setFocus(activeTab);
+            return;
+          }
+        }
+        const onDayRow = focusEl && (focusEl.classList.contains("sc-lineup-daytab") || focusEl.id === "sc-lineup-close");
+        if (onDayRow && dir === "down") {
+          const body = document.getElementById("sc-lineup-body");
+          const firstItem = body && body.querySelector(".sc-lineup-item");
+          if (firstItem) {
+            setFocus(firstItem);
+            return;
+          }
+        }
+        if (dir === "right" && focusEl && focusEl.classList.contains("sc-lineup-daytab")) {
+          const tabs = [...document.querySelectorAll(".sc-lineup-daytab")];
+          if (focusEl === tabs[tabs.length - 1]) {
+            const close = document.getElementById("sc-lineup-close");
+            if (close) {
+              setFocus(close);
+              return;
+            }
+          }
+        }
+        if (dir === "left" && focusEl && focusEl.id === "sc-lineup-close") {
+          const tabs = [...document.querySelectorAll(".sc-lineup-daytab")];
+          const lastTab = tabs[tabs.length - 1];
+          if (lastTab) {
+            setFocus(lastTab);
+            return;
+          }
+        }
+      }
+      {
+        const buf2 = document.getElementById("messagebuffer");
+        const onHeaderBtn = focusEl && CHAT_HEADER_IDS.includes(focusEl.id);
+        const onLog = focusEl && focusEl.id === "messagebuffer";
+        const onTextarea = focusEl && focusEl.id === "sc-chat-textarea";
+        if (onHeaderBtn && (dir === "left" || dir === "right")) {
+          const i = CHAT_HEADER_IDS.indexOf(focusEl.id);
+          const step = dir === "right" ? 1 : -1;
+          for (let ni = i + step; ni >= 0 && ni < CHAT_HEADER_IDS.length; ni += step) {
+            const el = document.getElementById(CHAT_HEADER_IDS[ni]);
+            if (el && isVisible(el)) {
+              setFocus(el);
+              return;
+            }
+          }
+        }
+        if (onHeaderBtn && dir === "down" && buf2 && isVisible(buf2)) {
+          setFocus(buf2);
+          return;
+        }
+        if (onTextarea && dir === "up" && buf2 && isVisible(buf2)) {
+          setFocus(buf2);
+          return;
+        }
+        if (onLog && buf2 && (dir === "up" || dir === "down")) {
+          const scrollable = buf2.scrollHeight > buf2.clientHeight;
+          const atTop = buf2.scrollTop <= 0;
+          const atBottom2 = buf2.scrollTop + buf2.clientHeight >= buf2.scrollHeight - 1;
+          if (dir === "down") {
+            if (scrollable && !atBottom2) {
+              buf2.scrollTop += 140;
+              return;
+            }
+            const ta = document.getElementById("sc-chat-textarea");
+            if (ta && isVisible(ta)) {
+              setFocus(ta);
+              return;
+            }
+          } else {
+            if (scrollable && !atTop) {
+              buf2.scrollTop -= 140;
+              return;
+            }
+            const firstHeader = CHAT_HEADER_IDS.map((id) => document.getElementById(id)).find((e) => e && isVisible(e));
+            if (firstHeader) {
+              setFocus(firstHeader);
+              return;
+            }
+          }
+        }
+      }
+      const { scope, list } = candidates();
+      if (!list.length) return;
+      if (!focusEl || !list.includes(focusEl) || !isVisible(focusEl)) {
+        setFocus(list[0]);
+        return;
+      }
+      if (scope && scope.id === "sc-settings-overlay") {
+        const isTabEl = (el) => !!(el.classList && el.classList.contains("sc-settings-tab"));
+        const isActionsEl = (el) => !!(el.closest && el.closest("#sc-settings-actions"));
+        const isPaneEl = (el) => !isTabEl(el) && !isActionsEl(el);
+        if (isTabEl(focusEl) && dir === "down") {
+          const target = list.find(isPaneEl);
+          if (target) {
+            setFocus(target);
+            return;
+          }
+        } else if (isActionsEl(focusEl) && dir === "up") {
+          const paneEls = list.filter(isPaneEl);
+          const target = paneEls[paneEls.length - 1];
+          if (target) {
+            setFocus(target);
+            return;
+          }
+        } else if (isPaneEl(focusEl) && (dir === "up" || dir === "down")) {
+          const paneEls = list.filter(isPaneEl);
+          const i = paneEls.indexOf(focusEl);
+          const ni = dir === "down" ? i + 1 : i - 1;
+          if (ni >= 0 && ni < paneEls.length) {
+            setFocus(paneEls[ni]);
+            return;
+          }
+          if (dir === "up") {
+            const activeTab = list.find((el) => isTabEl(el) && el.classList.contains("sc-settings-tab-active"));
+            if (activeTab) {
+              setFocus(activeTab);
+              return;
+            }
+          } else {
+            const firstAction = list.find(isActionsEl);
+            if (firstAction) {
+              setFocus(firstAction);
+              return;
+            }
+          }
+        }
+      }
+      const cur = focusEl.getBoundingClientRect();
+      const idx = pickDirectional(dir, cur, list.map((el) => el === focusEl ? null : el.getBoundingClientRect()));
+      if (idx !== -1) {
+        setFocus(list[idx]);
+        return;
+      }
+      if (dir === "up" || dir === "down") {
+        const sc = scope.querySelector && scope.querySelector("#sc-trivia-list, #sc-settings-modal, #sc-upnext-body, #messagebuffer") || document.getElementById("messagebuffer");
+        if (sc && sc.scrollHeight > sc.clientHeight) sc.scrollTop += dir === "down" ? 140 : -140;
+      }
+    }
+    function activate() {
+      if (!focusEl) {
+        move("right");
+        return;
+      }
+      if (focusEl.classList && focusEl.classList.contains("vjs-progress-control")) {
+        if (isDesynced()) jumpToLive();
+        return;
+      }
+      if (focusEl.tagName === "TEXTAREA" || focusEl.tagName === "INPUT") {
+        if (focusEl.type === "checkbox" || focusEl.type === "range") focusEl.click();
+        else {
+          try {
+            focusEl.focus();
+          } catch (e) {
+          }
+        }
+        return;
+      }
+      const ownerWrap = focusEl.classList && focusEl.classList.contains("vjs-menu-item") && focusEl.closest(".vjs-menu-button");
+      const ownerBtn = ownerWrap && ownerWrap.querySelector("button.vjs-menu-button");
+      const opener = focusEl;
+      const depthBefore = countOpenOverlays();
+      focusEl.click();
+      const depthAfter = countOpenOverlays();
+      if (depthAfter > depthBefore) {
+        overlayFocusStack.push(opener);
+      } else if (depthAfter < depthBefore) {
+        restoreFocusAfterOverlayClose();
+        return;
+      }
+      if (ownerBtn && isVisible(ownerBtn) && !openVjsMenu()) {
+        clearFocus();
+        setFocus(ownerBtn);
+      }
+    }
+    function closeTop() {
+      const menu = openVjsMenu();
+      if (menu) {
+        const wrap = menu.closest(".vjs-menu-button");
+        const btn = wrap && wrap.querySelector("button.vjs-menu-button");
+        if (btn) {
+          try {
+            btn.click();
+          } catch (e) {
+            try {
+              menu.classList.remove("vjs-lock-showing");
+            } catch (e2) {
+            }
+          }
+        } else {
+          try {
+            menu.classList.remove("vjs-lock-showing");
+          } catch (e) {
+          }
+        }
+        clearFocus();
+        if (btn && isVisible(btn)) setFocus(btn);
+        return true;
+      }
+      const settings = document.getElementById("sc-settings-overlay");
+      if (settings && isVisible(settings)) {
+        const c = document.getElementById("sc-settings-cancel");
+        if (c) c.click();
+        else settings.remove();
+        restoreFocusAfterOverlayClose();
+        return true;
+      }
+      const modal = document.getElementById("sc-modal-overlay");
+      if (modal && isVisible(modal)) {
+        (document.getElementById("sc-btn-cancel") || { click() {
+          modal.remove();
+        } }).click();
+        restoreFocusAfterOverlayClose();
+        return true;
+      }
+      const trivia = document.getElementById("sc-trivia-card");
+      if (trivia && trivia.classList.contains("sc-show")) {
+        hideTriviaCard();
+        restoreFocusAfterOverlayClose();
+        return true;
+      }
+      const np = document.getElementById("sc-np-card");
+      if (np && np.classList.contains("sc-np-visible")) {
+        hideNowPlayingCard();
+        restoreFocusAfterOverlayClose();
+        return true;
+      }
+      const upNext = document.getElementById("sc-upnext-card");
+      if (upNext && upNext.classList.contains("sc-upnext-visible")) {
+        hideUpNextCard();
+        restoreFocusAfterOverlayClose();
+        return true;
+      }
+      if (simklDismiss()) return true;
+      const lineup = document.getElementById("sc-lineup-screen");
+      if (lineup && lineup.classList.contains("sc-lineup-visible")) {
+        hideLineupScreen();
+        restoreFocusAfterOverlayClose();
+        return true;
+      }
+      for (const id of ["sc-users-panel", "sc-poll-panel"]) {
+        const p = document.getElementById(id);
+        if (p && isVisible(p)) {
+          p.style.display = "none";
+          restoreFocusAfterOverlayClose();
+          return true;
+        }
+      }
+      const subsPicker = document.getElementById("sc-subtitles-picker");
+      if (subsPicker && isVisible(subsPicker)) {
+        const c = document.getElementById("sc-subtitles-picker-close");
+        if (c) c.click();
+        else subsPicker.remove();
+        restoreFocusAfterOverlayClose();
+        return true;
+      }
+      const subsManage = document.getElementById("sc-subtitles-manage");
+      if (subsManage && isVisible(subsManage)) {
+        const c = document.getElementById("sc-subtitles-manage-close");
+        if (c) c.click();
+        else subsManage.remove();
+        restoreFocusAfterOverlayClose();
+        return true;
+      }
+      return false;
+    }
+    function revealChrome() {
+      if (typeof chromeState.leftZoneReveal === "function") chromeState.leftZoneReveal(4e3);
+      else document.body.classList.add("sc-leftzone");
+      if (typeof chromeState.chromeWake === "function") chromeState.chromeWake();
+      else document.body.classList.remove("sc-chrome-hidden");
+      if (typeof chromeState.topBarWake === "function") chromeState.topBarWake();
+    }
+    window.__scTvKey = function(dir, repeatCount) {
+      try {
+        armRingIdle();
+        if (ringHidden && dir !== "back") {
+          ringHidden = false;
+          if (focusEl && focusEl.isConnected) {
+            focusEl.classList.add("sc-tv-focus");
+            try {
+              focusEl.focus({ preventScroll: true });
+            } catch (e) {
+            }
+          }
+          revealChrome();
+          return;
+        }
+        if (dir === "back") {
+          ringHidden = false;
+          if (!closeTop()) {
+            try {
+              if (window.CytubeNative && CytubeNative.tvBack) CytubeNative.tvBack();
+            } catch (e) {
+            }
+          }
+          return;
+        }
+        revealChrome();
+        if (dir === "center") activate();
+        else move(dir, repeatCount || 0);
+      } catch (e) {
+      }
+    };
+    armRingIdle();
+  }
+
+  // src/lineup/screen.js
+  var _lastData = null;
+  var _activeDay = null;
+  var _activeSectionIndex = 0;
+  function ensureScreenDom() {
+    ensureThemeFontsLoaded();
+    let screen2 = document.getElementById("sc-lineup-screen");
+    if (screen2) return screen2;
+    screen2 = document.createElement("div");
+    screen2.id = "sc-lineup-screen";
+    screen2.innerHTML = `
+        <button id="sc-lineup-close" type="button">✕</button>
+        <div id="sc-lineup-header"></div>
+        <div id="sc-lineup-subtitle">Titles/times may be subject to change.</div>
+        <nav id="sc-lineup-daytabs"></nav>
+        <div id="sc-lineup-body"></div>
+        <svg width="0" height="0" style="position:absolute">
+            <filter id="sc-ticket-grain">
+                <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" result="noise"/>
+                <feColorMatrix in="noise" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.08 0"/>
+            </filter>
+        </svg>`;
+    screen2.querySelector("#sc-lineup-close").addEventListener("click", hideLineupScreen);
+    document.body.appendChild(screen2);
+    return screen2;
+  }
+  function renderLoading(screen2) {
+    screen2.querySelector("#sc-lineup-daytabs").innerHTML = "";
+    screen2.querySelector("#sc-lineup-body").innerHTML = '<div id="sc-lineup-loading">Fetching tonight’s lineup…</div>';
+  }
+  function fallbackTitleFontSize(text) {
+    if (text.length > 55) return 10;
+    if (text.length > 38) return 12;
+    return 14;
+  }
+  function itemButton(item) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sc-lineup-item" + (item.isNowPlaying ? " sc-lineup-item-current" : "") + (item.played ? " sc-lineup-item-played" : "") + (item.clickable === false ? " sc-lineup-item-static" : "");
+    const titleText = `${item.cleanTitle}${item.cleanYear ? ` (${item.cleanYear})` : ""}`;
+    const etaText = item.isNowPlaying ? "NOW PLAYING" : item.etaLabel || "";
+    btn.innerHTML = `
+        <div class="sc-lineup-poster" style="${item.poster ? `background-image:url(${item.poster})` : ""}">
+            ${!item.poster ? `<div class="sc-lineup-poster-fallback" style="font-size:${fallbackTitleFontSize(titleText)}px">${titleText}</div>` : ""}
+            ${etaText ? `<div class="sc-lineup-eta">${etaText}</div>` : ""}
+        </div>`;
+    if (item.clickable !== false) {
+      btn.addEventListener("click", () => showNowPlayingCard(item, { autoHide: false, showProgress: item.isNowPlaying }));
     }
     return btn;
   }
-  function updateSubtitleButton(imdbId) {
-    if (imdbId !== _imdbId) {
-      _imdbId = imdbId;
-      _cues2 = null;
-      _lastResults = [];
-      closeSubtitlesPicker();
-      closeManageModal();
-      hideMovieSubtitles();
-      const cached = imdbId && _subtitleCache[imdbId];
-      if (cached) {
-        _cues2 = cached.cues;
-        setSubtitleOffset(cached.offset || 0);
-      }
+  function sectionEl(section) {
+    const el = document.createElement("div");
+    el.className = "sc-lineup-section";
+    const theme = getSectionTheme(section.slug);
+    el.style.setProperty("--sc-lineup-wash", theme.wash);
+    if (section.name) {
+      const name = document.createElement("div");
+      name.className = "sc-lineup-section-name";
+      name.style.setProperty("color", theme.color, "important");
+      if (theme.font) name.style.setProperty("font-family", `${theme.font}, cursive`, "important");
+      name.textContent = section.name;
+      el.appendChild(name);
     }
-    const show = !!(imdbId && hasKey(LS_OPENSUBTITLES));
-    const btn = show ? ensureButton() : document.getElementById("sc-subtitles-btn");
-    if (btn) btn.classList.toggle("sc-hidden", !show);
-    layoutDock();
+    const rail = document.createElement("div");
+    rail.className = "sc-lineup-rail";
+    section.items.forEach((item) => rail.appendChild(itemButton(item)));
+    el.appendChild(rail);
+    return el;
   }
-  async function onButtonClick() {
-    if (_loading) return;
-    if (_cues2) {
-      openManageModal();
+  function renderDayTabs(screen2, days) {
+    const tabs = screen2.querySelector("#sc-lineup-daytabs");
+    tabs.innerHTML = "";
+    days.forEach((d) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "sc-lineup-daytab" + (d.day === _activeDay ? " sc-lineup-daytab-active" : "");
+      btn.innerHTML = `<span class="sc-lineup-daytab-label">${d.day}</span>`;
+      btn.addEventListener("click", () => showDay(screen2, d.day));
+      tabs.appendChild(btn);
+    });
+  }
+  function renderBody(screen2, days) {
+    const body = screen2.querySelector("#sc-lineup-body");
+    body.innerHTML = "";
+    const day = days.find((d) => d.day === _activeDay) || days[0];
+    if (!day || !day.sections.length) {
+      body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
       return;
     }
-    _loading = true;
-    const btn = document.getElementById("sc-subtitles-btn");
-    btn.disabled = true;
-    btn.title = "Searching…";
-    _lastResults = await searchSubtitles(_imdbId);
-    btn.disabled = false;
-    btn.title = "Download subtitles for this movie";
-    _loading = false;
-    openSubtitlesPicker();
+    if (isTv) {
+      if (_activeSectionIndex >= day.sections.length) _activeSectionIndex = 0;
+      body.appendChild(sectionEl(day.sections[_activeSectionIndex]));
+    } else {
+      day.sections.forEach((section) => body.appendChild(sectionEl(section)));
+    }
   }
-  function resultBadges(r) {
-    const badges = [];
-    if (r.fromTrusted) badges.push('<span class="sc-subtitles-badge sc-subtitles-badge-trusted">✓ Trusted</span>');
-    if (r.hearingImpaired) badges.push('<span class="sc-subtitles-badge">SDH</span>');
-    if (r.machineTranslated) badges.push('<span class="sc-subtitles-badge sc-subtitles-badge-warn">Machine-translated</span>');
-    return badges.join("");
+  function showDay(screen2, day) {
+    _activeDay = day;
+    _activeSectionIndex = 0;
+    const tabs = [...screen2.querySelectorAll(".sc-lineup-daytab")];
+    tabs.forEach((t) => t.classList.toggle("sc-lineup-daytab-active", t.textContent === day));
+    renderBody(screen2, _lastData.days);
   }
-  function openSubtitlesPicker() {
-    closeManageModal();
-    closeSubtitlesPicker();
-    const results = _lastResults;
-    const panel = document.createElement("div");
-    panel.id = "sc-subtitles-picker";
-    panel.innerHTML = `
-        <div id="sc-subtitles-picker-box">
-            <div id="sc-subtitles-picker-head">
-                <span>Choose Subtitles</span>
-                <button id="sc-subtitles-picker-close" type="button">✕</button>
-            </div>
-            <div id="sc-subtitles-picker-body">
-                ${results.length ? results.map((r, i) => `
-                    <button type="button" class="sc-subtitles-result" data-idx="${i}">
-                        <span class="sc-subtitles-result-release">${escapeHtml(r.release)}</span>
-                        <span class="sc-subtitles-result-meta">${escapeHtml(r.uploader)} · ${r.downloadCount.toLocaleString()} downloads</span>
-                        ${resultBadges(r) ? `<span class="sc-subtitles-result-badges">${resultBadges(r)}</span>` : ""}
-                    </button>`).join("") : '<div class="sc-subtitles-empty">No subtitles found for this movie.</div>'}
-            </div>
-            <div id="sc-subtitles-picker-status"></div>
-        </div>`;
-    document.body.appendChild(panel);
-    panel.querySelector("#sc-subtitles-picker-close").addEventListener("click", closeSubtitlesPicker);
-    panel.querySelectorAll(".sc-subtitles-result").forEach((el, i) => {
-      el.addEventListener("click", () => selectResult(results[i]));
-    });
-    const first = panel.querySelector(".sc-subtitles-result") || panel.querySelector("#sc-subtitles-picker-close");
-    if (first && tvNavState.setFocus) tvNavState.setFocus(first);
+  function stepLineupSection(delta, columnIndex) {
+    if (!_lastData || _lastData.fallback) return null;
+    const days = _lastData.days || [];
+    const day = days.find((d) => d.day === _activeDay) || days[0];
+    if (!day) return null;
+    const newIndex = _activeSectionIndex + delta;
+    if (newIndex < 0 || newIndex >= day.sections.length) return null;
+    _activeSectionIndex = newIndex;
+    const screen2 = document.getElementById("sc-lineup-screen");
+    renderBody(screen2, days);
+    const rail = screen2.querySelector(".sc-lineup-rail");
+    if (!rail) return null;
+    const items = [...rail.querySelectorAll(".sc-lineup-item")];
+    return items[Math.min(columnIndex, items.length - 1)] || null;
   }
-  function closeSubtitlesPicker() {
-    const panel = document.getElementById("sc-subtitles-picker");
-    if (panel) panel.remove();
-  }
-  async function selectResult(result) {
-    const status = document.getElementById("sc-subtitles-picker-status");
-    if (status) status.textContent = "Downloading…";
-    const link = await downloadSubtitle(result.fileId);
-    if (!link) {
-      if (status) status.textContent = "Download failed — try another, or check your key/quota.";
+  function renderFallback(screen2, data) {
+    screen2.querySelector("#sc-lineup-daytabs").innerHTML = "";
+    const body = screen2.querySelector("#sc-lineup-body");
+    body.innerHTML = "";
+    const items = data.days && data.days[0] && data.days[0].sections[0] && data.days[0].sections[0].items || [];
+    if (!items.length) {
+      body.innerHTML = '<div id="sc-lineup-loading">No lineup available right now.</div>';
       return;
     }
-    const srt = await fetchSrtText(link);
-    const cues = srt ? parseSrt(srt) : [];
-    if (!cues.length) {
-      if (status) status.textContent = "Couldn't read that subtitle file — try another.";
+    const section = document.createElement("div");
+    section.className = "sc-lineup-section sc-lineup-section-fallback";
+    const rail = document.createElement("div");
+    rail.className = "sc-lineup-rail";
+    items.forEach((item) => rail.appendChild(itemButton(item)));
+    section.appendChild(rail);
+    body.appendChild(section);
+  }
+  function renderItems(screen2, data) {
+    const header = screen2.querySelector("#sc-lineup-header");
+    if (header) header.textContent = data && data.listTitle || "Grindhouse Lineup";
+    _lastData = data;
+    if (!data || data.fallback) {
+      renderFallback(screen2, data || { days: [] });
       return;
     }
-    _cues2 = cues;
-    resetSubtitleOffset();
-    _subtitleCache[_imdbId] = { cues, offset: 0, release: result.release, uploader: result.uploader, ts: Date.now() };
-    persistSubtitleCache();
-    closeSubtitlesPicker();
-    showMovieSubtitles(_cues2);
+    const days = data.days || [];
+    _activeDay = (days.find((d) => d.isToday) || days[0] || {}).day || null;
+    _activeSectionIndex = 0;
+    renderDayTabs(screen2, days);
+    renderBody(screen2, days);
+    if (tvNavState.setFocus) {
+      const activeTab = screen2.querySelector(".sc-lineup-daytab-active");
+      if (activeTab) tvNavState.setFocus(activeTab);
+    }
   }
-  var OFFSET_STEP = 0.5;
-  function renderOffsetReadout(modal) {
-    const seconds = getSubtitleOffset();
-    const el = modal.querySelector("#sc-subtitles-offset-val");
-    if (el) el.textContent = (seconds > 0 ? "+" : "") + seconds.toFixed(1) + "s";
-  }
-  function openManageModal() {
-    closeSubtitlesPicker();
-    closeManageModal();
-    const modal = document.createElement("div");
-    modal.id = "sc-subtitles-manage";
-    modal.innerHTML = `
-        <div id="sc-subtitles-manage-box">
-            <div id="sc-subtitles-manage-head">
-                <span>Subtitles</span>
-                <button id="sc-subtitles-manage-close" type="button">✕</button>
-            </div>
-            <button id="sc-subtitles-manage-toggle" type="button" class="sc-settings-btn-wide"></button>
-            <div class="sc-subtitles-offset-row">
-                <span class="sc-subtitles-offset-label">Sync offset</span>
-                <div class="sc-subtitles-offset-controls">
-                    <button id="sc-subtitles-offset-minus" type="button" class="sc-settings-test">−0.5s</button>
-                    <span id="sc-subtitles-offset-val"></span>
-                    <button id="sc-subtitles-offset-plus" type="button" class="sc-settings-test">+0.5s</button>
-                </div>
-            </div>
-            <button id="sc-subtitles-offset-reset" type="button" class="sc-update-github-link">Reset offset</button>
-            <button id="sc-subtitles-manage-different" type="button" class="sc-settings-btn-wide">Download a different one</button>
-        </div>`;
-    document.body.appendChild(modal);
-    const toggleBtn = modal.querySelector("#sc-subtitles-manage-toggle");
-    const syncToggleLabel = () => {
-      toggleBtn.textContent = isMovieSubtitlesVisible() ? "Hide Subtitles" : "Show Subtitles";
-    };
-    syncToggleLabel();
-    toggleBtn.addEventListener("click", () => {
-      if (isMovieSubtitlesVisible()) hideMovieSubtitles();
-      else showMovieSubtitles(_cues2);
-      syncToggleLabel();
+  function showLineupScreen() {
+    const screen2 = ensureScreenDom();
+    screen2.classList.add("sc-lineup-visible");
+    renderLoading(screen2);
+    getTonightsLineup().then((data) => renderItems(screen2, data)).catch(() => {
+      renderItems(screen2, { fallback: true, days: [] });
     });
-    const applyOffset = (seconds) => {
-      setSubtitleOffset(seconds);
-      renderOffsetReadout(modal);
-      if (_subtitleCache[_imdbId]) {
-        _subtitleCache[_imdbId].offset = seconds;
-        persistSubtitleCache();
-      }
-    };
-    renderOffsetReadout(modal);
-    modal.querySelector("#sc-subtitles-offset-minus").addEventListener("click", () => applyOffset(getSubtitleOffset() - OFFSET_STEP));
-    modal.querySelector("#sc-subtitles-offset-plus").addEventListener("click", () => applyOffset(getSubtitleOffset() + OFFSET_STEP));
-    modal.querySelector("#sc-subtitles-offset-reset").addEventListener("click", () => applyOffset(0));
-    modal.querySelector("#sc-subtitles-manage-close").addEventListener("click", closeManageModal);
-    modal.querySelector("#sc-subtitles-manage-different").addEventListener("click", async (e) => {
-      if (!_lastResults.length) {
-        const btn = e.currentTarget;
-        btn.disabled = true;
-        btn.textContent = "Searching…";
-        _lastResults = await searchSubtitles(_imdbId);
-        btn.disabled = false;
-        btn.textContent = "Download a different one";
-      }
-      openSubtitlesPicker();
-    });
-    if (tvNavState.setFocus) tvNavState.setFocus(toggleBtn);
   }
-  function closeManageModal() {
-    const modal = document.getElementById("sc-subtitles-manage");
-    if (modal) modal.remove();
+  function hideLineupScreen() {
+    const screen2 = document.getElementById("sc-lineup-screen");
+    if (screen2) screen2.classList.remove("sc-lineup-visible");
   }
 
-  // src/titleinject.js
-  var NP_AUTO_HIDE_MS = isTv ? 1e4 : 8e3;
-  var NP_AUTO_MIN_SECONDS = 45 * 60;
-  function _npShouldAutoAnnounce(isYt) {
-    return !isYt && getCurrentMediaSeconds() >= NP_AUTO_MIN_SECONDS;
+  // src/posters.js
+  function initPosterStrip() {
+    if (document.getElementById("sc-poster-toggle")) return;
+    const toggleBtn = document.createElement("button");
+    toggleBtn.id = "sc-poster-toggle";
+    toggleBtn.textContent = "Coming Attractions";
+    toggleBtn.title = "Show tonight's lineup";
+    toggleBtn.dataset.noTvCaption = "1";
+    toggleBtn.addEventListener("click", () => showLineupScreen());
+    const header = document.getElementById("videowrap-header");
+    (header || document.body).appendChild(toggleBtn);
   }
-  function isYouTubeMedia() {
-    try {
-      const p = window.PLAYER || window.player;
-      if (p && p.type === "yt") return true;
-      if (p && p.mediaType === "yt") return true;
-    } catch (e) {
+  function initUpNextButton() {
+    if (document.getElementById("sc-up-next-btn")) return;
+    const btn = document.createElement("button");
+    btn.id = "sc-up-next-btn";
+    btn.textContent = "Up Next";
+    btn.title = "Preview what's playing next";
+    btn.dataset.noTvCaption = "1";
+    btn.addEventListener("click", () => showUpNextCard());
+    const header = document.getElementById("videowrap-header");
+    const posterToggle = document.getElementById("sc-poster-toggle");
+    if (header && posterToggle && posterToggle.parentNode === header) {
+      header.insertBefore(btn, posterToggle);
+    } else {
+      (header || document.body).appendChild(btn);
     }
-    if (document.querySelector('#ytapiplayer iframe[src*="youtube.com"]')) return true;
-    if (document.querySelector('#ytapiplayer[src*="youtube.com"]')) return true;
-    return false;
   }
-  function _domYtVideoId() {
-    const el = document.querySelector('#ytapiplayer iframe[src*="youtube.com"]');
-    if (!el) return "";
-    const src = el.getAttribute("src") || "";
-    const m = src.match(/[?&]v=([\w-]{11})/) || src.match(/\/embed\/([\w-]{11})/);
-    return m ? m[1] : "";
-  }
-  function fetchYtOembed(videoId) {
-    if (!videoId) return Promise.resolve(null);
-    const watchUrl = "https://www.youtube.com/watch?v=" + encodeURIComponent(videoId);
-    const url = "https://www.youtube.com/oembed?url=" + encodeURIComponent(watchUrl) + "&format=json";
-    return nativeHttpGet(url).then((res) => {
-      if (!res || res.status !== 200) return null;
-      try {
-        return JSON.parse(res.body);
-      } catch (e) {
-        return null;
-      }
-    }).catch(() => null);
-  }
-  function applyCleanTitleDom(titleEl, movieData) {
-    const { cleanTitle, cleanYear, season, episode, episodeName } = movieData;
-    if (!cleanTitle || !titleEl) return;
-    const epTag = episodeTag(season, episode);
-    const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : "") + (epTag ? ` · ${epTag}` : "") + (episodeName ? ` — ${episodeName}` : "");
-    let span = titleEl.querySelector(":scope > #sc-title-text") || document.getElementById("sc-title-text");
-    if (!span) {
-      span = document.createElement("span");
-      span.id = "sc-title-text";
-      span.style.cursor = "pointer";
-      span.title = "Movie info";
-      span.dataset.noTvCaption = "1";
-      span.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
-      });
-      const textNode = [...titleEl.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
-      if (textNode) textNode.parentNode.replaceChild(span, textNode);
-      else titleEl.insertBefore(span, titleEl.firstChild);
-    }
-    span.textContent = newText;
-  }
-  function injectMovieLinks(titleEl) {
-    const rawTitle = titleEl.textContent.trim().replace(/^currently\s+playing[:\s]*/i, "").replace(/^now\s+playing[:\s]*/i, "").trim();
-    if (!rawTitle || rawTitle.length < 2) return;
-    if (rawTitle === movieState.lastMovieTitle) {
-      if (npState.data && !titleEl.querySelector("#sc-title-text")) {
-        applyCleanTitleDom(titleEl, npState.data);
-      }
-      renderTriviaPopupButton();
-      return;
-    }
-    movieState.lastMovieTitle = rawTitle;
-    ["sc-movie-stats"].forEach((id) => {
-      const el = document.getElementById(id);
-      if (el) el.remove();
-    });
-    npState.data = null;
-    updateSubtitleButton(null);
-    renderTriviaPopupButton();
-    const isYt = isYouTubeMedia();
-    let ytSeconds = 0;
-    if (isYt) {
-      ytSeconds = getCurrentMediaSeconds();
-      if (ytSeconds < 3600) {
-        const videoId = mediaState.currentYtVideoId || _domYtVideoId();
-        if (videoId) {
-          fetchYtOembed(videoId).then((info) => {
-            if (!info || !info.title) return;
-            if (movieState.lastMovieTitle !== rawTitle) return;
-            const movieData = {
-              cleanTitle: info.title,
-              cleanYear: null,
-              poster: info.thumbnail_url || null,
-              backdrop: info.thumbnail_url || null,
-              overview: info.author_name ? `Uploaded by ${info.author_name}` : null,
-              rating: null,
-              runtime: null,
-              genres: [],
-              parentalGuide: null,
-              killCount: null,
-              imdbId: null,
-              links: {},
-              season: null,
-              episode: null,
-              episodeName: null
-            };
-            npState.data = movieData;
-            applyCleanTitleDom(titleEl, movieData);
-            renderTriviaPopupButton();
-          });
-        }
-        return;
-      }
-    }
-    const { title, year, season, episode } = isYt ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
-    if (!title || title.length < 2) return;
-    lookupMovie(title, year, season, episode).then((movieData) => {
-      const { killCount, parentalGuide, cleanTitle, cleanYear } = movieData;
-      if (isYt) {
-        if (!cleanTitle) return;
-        if (movieData.runtime && ytSeconds) {
-          const diff = Math.abs(movieData.runtime - ytSeconds / 60);
-          if (diff > 30) return;
-        }
-      }
-      npState.data = movieData;
-      updateSubtitleButton(movieData.imdbId);
-      renderTriviaPopupButton();
-      if (_npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt)) showNowPlayingCard(movieData, { autoHide: true, autoHideMs: NP_AUTO_HIDE_MS });
-      applyCleanTitleDom(titleEl, movieData);
-      const statParts = [];
-      if (killCount !== null) statParts.push(`💀 ${killCount} on-screen kills`);
-      if (parentalGuide && parentalGuide.length) {
-        const PG_SEV_DOT = { Severe: "🔴", Moderate: "🟡", Mild: "🟢", None: "" };
-        const cssDots = needsEmojiFallback();
-        parentalGuide.forEach(({ category, severity }) => {
-          const dot = PG_SEV_DOT[severity] || "";
-          if (!dot) return;
-          if (cssDots) {
-            const sev = document.createElement("span");
-            sev.className = `sc-sev-dot sc-sev-${severity.toLowerCase()}`;
-            statParts.push([sev, ` ${category}`]);
-          } else {
-            statParts.push(`${dot} ${category}`);
+  function initPollWatcher() {
+    const tryInit = () => {
+      const pollwrap = document.getElementById("pollwrap");
+      if (!pollwrap) {
+        const bodyObs = new MutationObserver(() => {
+          if (document.getElementById("pollwrap")) {
+            bodyObs.disconnect();
+            tryInit();
           }
         });
-      }
-      const lastAired = getLastAired(cleanTitle || title, cleanYear || year);
-      if (lastAired) statParts.push(`📅 Last aired ${lastAired.dateStr}`);
-      const old = document.getElementById("sc-movie-stats");
-      if (old) old.remove();
-      if (statParts.length) {
-        const cardWillAutoShow = _npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt);
-        const revealDelay = cardWillAutoShow ? NP_AUTO_HIDE_MS : 0;
-        setTimeout(() => {
-          if (movieState.lastMovieTitle !== rawTitle) return;
-          const statsEl = document.createElement("div");
-          statsEl.id = "sc-movie-stats";
-          if (statParts.every((p) => typeof p === "string")) {
-            statsEl.textContent = statParts.join("  ·  ");
-          } else {
-            statParts.forEach((p, i) => {
-              if (i) statsEl.append("  ·  ");
-              statsEl.append(...[].concat(p));
-            });
-          }
-          document.body.appendChild(statsEl);
-          if (typeof chromeState.pinChromeVisible === "function") chromeState.pinChromeVisible();
-          setTimeout(() => {
-            if (statsEl.parentNode) statsEl.remove();
-            if (typeof chromeState.unpinChromeVisible === "function") chromeState.unpinChromeVisible();
-          }, 12e3);
-        }, revealDelay);
-      }
-    });
-  }
-  var _PLAYING_RE = /^\s*(currently|now)\s+playing\s*:?\s*/i;
-  function stripPlayingPrefix(el) {
-    el.querySelectorAll("strong, b, span, .label").forEach((c) => {
-      if (c.childElementCount === 0 && /^\s*(currently|now)\s+playing\s*:?\s*$/i.test(c.textContent)) {
-        c.style.display = "none";
-      }
-    });
-    el.childNodes.forEach((n) => {
-      if (n.nodeType === 3 && _PLAYING_RE.test(n.textContent)) {
-        n.textContent = n.textContent.replace(_PLAYING_RE, "");
-      }
-    });
-  }
-  function triggerTitleInject() {
-    for (const el of [
-      document.getElementById("currenttitle"),
-      document.querySelector("#videowrap-header .pull-left"),
-      document.querySelector("#videowrap-header span"),
-      document.querySelector(".video-title")
-    ]) {
-      if (el && el.textContent.trim()) {
-        stripPlayingPrefix(el);
-        injectMovieLinks(el);
+        bodyObs.observe(document.body, { childList: true, subtree: true });
         return;
       }
-    }
+      _initPollWatcher(pollwrap);
+    };
+    tryInit();
   }
-  function watchMovieTitle() {
-    triggerTitleInject();
-    let tries = 0;
-    const poll = setInterval(() => {
-      triggerTitleInject();
-      if (++tries >= 14) clearInterval(poll);
-    }, 1500);
-  }
-
-  // src/cards/triviapopup.js
-  var TP_POLL_MS = 3e3;
-  var TP_GAP_TIERS = {
-    frequent: [45 * 1e3, 90 * 1e3],
-    occasional: [3 * 60 * 1e3, 6 * 60 * 1e3],
-    rare: [8 * 60 * 1e3, 15 * 60 * 1e3]
-  };
-  function _tpGapRange() {
-    return TP_GAP_TIERS[triviaPopupFrequency()] || TP_GAP_TIERS.occasional;
-  }
-  var TP_RETRY_MS = 20 * 1e3;
-  var TP_VISIBLE_MS = 20 * 1e3;
-  var TP_EXIT_ANIM_MS = 300;
-  var TP_MAX_FACT_LEN = 280;
-  var TP_PERSON_TRIVIA_CAP = 3;
-  function _escHtml3(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-  var _tpLastImdbId = void 0;
-  var _tpQueue = [];
-  var _tpExhausted = false;
-  var _tpPopTimer = null;
-  var _tpBubbleEl = null;
-  var _tpDismissTimer = null;
-  var _tpMuted = false;
-  var TP_RESUME_MS = 1500;
-  function _tpKnownForFact(person, knownFor) {
-    if (!knownFor) return null;
-    const titleYear = knownFor.year ? `${knownFor.title} (${knownFor.year})` : knownFor.title;
-    if (person.role === "director") return `${person.name} is also known for ${titleYear}.`;
-    const charPart = person.character ? ` (${person.character})` : "";
-    return `${person.name}${charPart} also starred in ${titleYear}.`;
-  }
-  async function _tpBuildCastCrewItems(people, excludeTconst, excludeSeriesTconst) {
-    const items = [];
-    await Promise.all(people.map(async (person) => {
-      const [trivia, knownFor] = await Promise.all([
-        fetchPersonTrivia(person.nconst),
-        fetchPersonKnownFor(person.nconst, excludeTconst, excludeSeriesTconst)
-      ]);
-      const byline = `${person.name} — ${person.role === "director" ? "Director" : person.character || "Cast"}`;
-      trivia.filter((t) => t.length <= TP_MAX_FACT_LEN).slice(0, TP_PERSON_TRIVIA_CAP).forEach((t) => items.push({ text: t, byline }));
-      const knownForFact = _tpKnownForFact(person, knownFor);
-      if (knownForFact) items.push({ text: knownForFact, byline: null });
-    }));
-    return items;
-  }
-  function _tpShuffle(arr) {
-    const a = arr.slice();
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [a[i], a[j]] = [a[j], a[i]];
-    }
-    return a;
-  }
-  function _tpResetForNewMovie(id) {
-    clearTimeout(_tpPopTimer);
-    _tpPopTimer = null;
-    _tpDismissBubble(true);
-    _tpQueue = [];
-    _tpExhausted = false;
-    if (!id) return;
-    fetchImdbTrivia(id).then(async (items) => {
-      if (id !== _tpLastImdbId) return;
-      const movieItems = (items || []).map((text) => ({ text, byline: null }));
-      _tpQueue = _tpShuffle(movieItems);
-      _tpScheduleNextPop();
-      if (!triviaPopupEnabled()) return;
-      const result = await fetchCastAndDirector(id);
-      if (id !== _tpLastImdbId) return;
-      if (!result || !result.people.length) return;
-      const castCrewItems = await _tpBuildCastCrewItems(result.people, id, result.seriesTconst);
-      if (id !== _tpLastImdbId) return;
-      if (!castCrewItems.length) return;
-      _tpQueue = _tpShuffle(_tpQueue.concat(castCrewItems));
-      if (_tpExhausted) {
-        _tpExhausted = false;
-        _tpScheduleNextPop();
+  function _initPollWatcher(pollwrap) {
+    const header = document.getElementById("sc-chat-header");
+    if (!header) return;
+    const btn = document.createElement("button");
+    btn.id = "sc-poll-btn";
+    btn.title = "Channel announcement / poll";
+    btn.textContent = "POLL";
+    header.appendChild(btn);
+    const panel = document.createElement("div");
+    panel.id = "sc-poll-panel";
+    panel.style.display = "none";
+    document.body.appendChild(panel);
+    let panelOpen = false;
+    const renderPanel = () => {
+      var _a, _b, _c, _d, _e;
+      const well = pollwrap.querySelector(".well.active") || pollwrap.querySelector(".well");
+      if (!well) {
+        panel.innerHTML = "";
+        return;
+      }
+      const h = ((_b = (_a = well.querySelector("h3")) == null ? void 0 : _a.textContent) == null ? void 0 : _b.trim()) || "";
+      const opts = [...well.querySelectorAll(".option")].map((o) => {
+        const btn2 = o.querySelector("button");
+        const text = o.textContent.replace((btn2 == null ? void 0 : btn2.textContent) || "", "").trim();
+        const links = [...o.querySelectorAll("a")].map(
+          (a) => `<a href="${a.href}" target="_blank" rel="noopener noreferrer">${a.textContent}</a>`
+        );
+        let html = o.innerHTML.replace(/<button[^>]*>.*?<\/button>/i, "").trim();
+        return `<div class="sc-poll-option">${html}</div>`;
+      });
+      const label = ((_d = (_c = well.querySelector(".label")) == null ? void 0 : _c.textContent) == null ? void 0 : _d.trim()) || "";
+      const author = ((_e = well.querySelector(".label")) == null ? void 0 : _e.getAttribute("title")) || "";
+      panel.innerHTML = `
+            <div class="sc-poll-header">${h}</div>
+            <div class="sc-poll-options">${opts.join("")}</div>
+            ${label ? `<div class="sc-poll-meta">${author ? author + " · " : ""}${label}</div>` : ""}
+        `;
+    };
+    const hasPollContent = () => {
+      const activeWell = pollwrap.querySelector(".well.active") || pollwrap.querySelector(".well");
+      return !!(activeWell && activeWell.textContent.trim().length > 10);
+    };
+    const updateBtn = () => {
+      const hasContent = hasPollContent();
+      btn.style.display = hasContent ? "" : "none";
+      if (!hasContent && panelOpen) {
+        panel.style.display = "none";
+        panelOpen = false;
+        btn.classList.remove("sc-poll-btn-active");
+      }
+    };
+    btn.addEventListener("click", () => {
+      panelOpen = !panelOpen;
+      if (panelOpen) {
+        renderPanel();
+        panel.style.display = "block";
+        btn.classList.add("sc-poll-btn-active");
+      } else {
+        panel.style.display = "none";
+        btn.classList.remove("sc-poll-btn-active");
       }
     });
-  }
-  function _tpScheduleNextPop() {
-    clearTimeout(_tpPopTimer);
-    if (_tpExhausted || !_tpQueue.length) {
-      _tpExhausted = true;
-      return;
-    }
-    if (_tpMuted) return;
-    const [minGap, maxGap] = _tpGapRange();
-    const gap = minGap + Math.random() * (maxGap - minGap);
-    _tpPopTimer = setTimeout(_tpAttemptPop, gap);
-  }
-  function _tpMoviePlaying() {
-    if (isYouTubeMedia()) return false;
-    const v = document.querySelector("#videowrap video");
-    return !!v && !v.paused;
-  }
-  function _tpAttemptPop() {
-    const curId = npState.data && npState.data.imdbId;
-    if (curId !== _tpLastImdbId) return;
-    if (_tpMuted) return;
-    if (!triviaPopupEnabled() || !_tpMoviePlaying() || isMovieSubtitlesVisible()) {
-      _tpPopTimer = setTimeout(_tpAttemptPop, TP_RETRY_MS);
-      return;
-    }
-    let fact = null;
-    while (_tpQueue.length) {
-      const candidate = _tpQueue.shift();
-      if (candidate.text.length <= TP_MAX_FACT_LEN) {
-        fact = candidate;
-        break;
+    document.addEventListener("click", (e) => {
+      if (panelOpen && !btn.contains(e.target) && !panel.contains(e.target)) {
+        panel.style.display = "none";
+        panelOpen = false;
+        btn.classList.remove("sc-poll-btn-active");
       }
-    }
-    if (!fact) {
-      _tpExhausted = true;
-      return;
-    }
-    showTriviaBubble(fact);
-    _tpScheduleNextPop();
-  }
-  function _tpMoviePollTick() {
-    const curId = npState.data && npState.data.imdbId;
-    if (curId !== _tpLastImdbId) {
-      _tpLastImdbId = curId;
-      _tpResetForNewMovie(_tpLastImdbId);
-    }
-  }
-  function triviaPopupBoot() {
-    _tpMoviePollTick();
-    setInterval(_tpMoviePollTick, TP_POLL_MS);
-  }
-  var TP_ICONS = [
-    // Skull + blood drip
-    `<path d="M30 10 C19 10 12 18 12 27 C12 33 15 38 19 41 L19 47 L24 47 L24 43 L27 43 L27 47 L33 47 L33 43 L36 43 L36 47 L41 47 L41 41 C45 38 48 33 48 27 C48 18 41 10 30 10 Z"
-          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
-     <circle cx="22" cy="26" r="5" fill="#000"/>
-     <circle cx="38" cy="26" r="5" fill="#000"/>
-     <polygon points="30,30 27,36 33,36" fill="#000"/>
-     <path d="M39 16 C39 16 43 22 41 27 C40 30 36 30 35 27 C33 23 39 16 39 16 Z"
-          fill="#c81d25" stroke="#000" stroke-width="1.5" stroke-linejoin="round"/>`,
-    // Cracked tombstone
-    `<path d="M14 54 V30 C14 16 22 8 30 8 C38 8 46 16 46 30 V54 Z"
-          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
-     <path d="M30 12 L26 26 L34 30 L28 44 L33 54" stroke="#000" stroke-width="2" fill="none"/>
-     <line x1="30" y1="18" x2="30" y2="26" stroke="#000" stroke-width="2"/>
-     <line x1="26" y1="21" x2="34" y2="21" stroke="#000" stroke-width="2"/>`,
-    // Film reel
-    `<circle cx="30" cy="30" r="18" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
-     <circle cx="30" cy="30" r="4" fill="#000"/>
-     <circle cx="30" cy="16" r="4.5" fill="#000"/>
-     <circle cx="30" cy="44" r="4.5" fill="#000"/>
-     <circle cx="18" cy="23" r="4.5" fill="#000"/>
-     <circle cx="18" cy="37" r="4.5" fill="#000"/>
-     <circle cx="42" cy="23" r="4.5" fill="#000"/>
-     <circle cx="42" cy="37" r="4.5" fill="#000"/>`,
-    // --- Sci-fi (toxic-green #39d98a accent) ---
-    // Flying saucer
-    `<ellipse cx="30" cy="33" rx="22" ry="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <ellipse cx="30" cy="24" rx="11" ry="9" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
-     <circle cx="18" cy="36" r="2.2" fill="#39d98a" stroke="#000" stroke-width="1.2"/>
-     <circle cx="30" cy="38" r="2.2" fill="#39d98a" stroke="#000" stroke-width="1.2"/>
-     <circle cx="42" cy="36" r="2.2" fill="#39d98a" stroke="#000" stroke-width="1.2"/>`,
-    // Bug-eyed alien head
-    `<path d="M30 6 C14 6 6 20 8 32 C10 44 20 54 30 54 C40 54 50 44 52 32 C54 20 46 6 30 6 Z"
-          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
-     <ellipse cx="20" cy="27" rx="7" ry="10" fill="#000" transform="rotate(-15 20 27)"/>
-     <ellipse cx="40" cy="27" rx="7" ry="10" fill="#000" transform="rotate(15 40 27)"/>
-     <circle cx="20" cy="27" r="1.8" fill="#39d98a"/>
-     <circle cx="40" cy="27" r="1.8" fill="#39d98a"/>`,
-    // Rocket ship
-    `<path d="M30 6 C24 6 20 14 20 24 V44 H40 V24 C40 14 36 6 30 6 Z"
-          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
-     <circle cx="30" cy="20" r="5" fill="#39d98a" stroke="#000" stroke-width="2"/>
-     <polygon points="20,38 10,50 20,50" fill="#d8d8d8" stroke="#000" stroke-width="2" stroke-linejoin="round"/>
-     <polygon points="40,38 50,50 40,50" fill="#d8d8d8" stroke="#000" stroke-width="2" stroke-linejoin="round"/>
-     <path d="M24 44 C24 44 22 54 30 58 C38 54 36 44 36 44 Z"
-          fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round"/>`,
-    // Robot head
-    `<rect x="14" y="16" width="32" height="28" rx="4" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <line x1="30" y1="16" x2="30" y2="6" stroke="#000" stroke-width="2.5"/>
-     <circle cx="30" cy="5" r="3" fill="#39d98a" stroke="#000" stroke-width="1.5"/>
-     <circle cx="30" cy="28" r="7" fill="#000"/>
-     <circle cx="30" cy="28" r="3" fill="#39d98a"/>
-     <rect x="20" y="38" width="20" height="4" fill="#000"/>
-     <circle cx="16" cy="20" r="2" fill="#3a2a1a"/>
-     <circle cx="44" cy="20" r="2" fill="#3a2a1a"/>`,
-    // Radioactive trefoil
-    `<circle cx="30" cy="30" r="20" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
-     <path d="M30 30 L23 15 L37 15 Z" fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round" transform="rotate(0 30 30)"/>
-     <path d="M30 30 L23 15 L37 15 Z" fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round" transform="rotate(120 30 30)"/>
-     <path d="M30 30 L23 15 L37 15 Z" fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round" transform="rotate(240 30 30)"/>
-     <circle cx="30" cy="30" r="5" fill="#000"/>`,
-    // --- Action (marquee-gold #e8b923 accent) ---
-    // Explosion burst
-    `<polygon points="30,4 35,19 48,12 41,25 56,30 41,35 48,48 35,41 30,56 25,41 12,48 19,35 4,30 19,25 12,12 25,19"
-             fill="#e8b923" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
-     <polygon points="30,16 33,24 40,20 36,27 44,30 36,33 40,40 33,36 30,44 27,36 20,40 25,33 16,30 25,27 20,20 27,25"
-             fill="#c81d25" stroke="#000" stroke-width="1.5" stroke-linejoin="round"/>`,
-    // Crosshair scope
-    `<circle cx="30" cy="30" r="21" fill="#f4f1ea" stroke="#c81d25" stroke-width="4"/>
-     <rect x="6" y="28" width="15" height="4" fill="#000"/>
-     <rect x="39" y="28" width="15" height="4" fill="#000"/>
-     <rect x="28" y="6" width="4" height="15" fill="#000"/>
-     <rect x="28" y="39" width="4" height="15" fill="#000"/>
-     <circle cx="30" cy="30" r="4" fill="#e8b923" stroke="#000" stroke-width="1.5"/>`,
-    // Brass knuckles
-    `<circle cx="14" cy="20" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <circle cx="26" cy="18" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <circle cx="38" cy="18" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <circle cx="50" cy="20" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <rect x="10" y="26" width="44" height="8" rx="3" fill="#3a2a1a" stroke="#000" stroke-width="2.5"/>`,
-    // --- Comedy (marquee-gold #e8b923 accent) ---
-    // Disco ball
-    `<circle cx="30" cy="30" r="20" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <path d="M12 30 H48 M13 20 H47 M13 40 H47 M20 12 V48 M30 10 V50 M40 12 V48"
-          stroke="#000" stroke-width="1.5" fill="none"/>
-     <polyline points="46,10 50,6" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>
-     <polyline points="50,14 55,12" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>
-     <polyline points="44,6 47,2" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>`,
-    // Boombox
-    `<rect x="6" y="18" width="48" height="30" rx="5" fill="#3a2a1a" stroke="#000" stroke-width="2.5"/>
-     <circle cx="18" cy="33" r="10" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
-     <circle cx="18" cy="33" r="4" fill="#000"/>
-     <circle cx="42" cy="33" r="10" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
-     <circle cx="42" cy="33" r="4" fill="#000"/>
-     <rect x="24" y="10" width="12" height="8" rx="2" fill="#e8b923" stroke="#000" stroke-width="2"/>`,
-    // Aviator sunglasses
-    `<ellipse cx="18" cy="30" rx="12" ry="10" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <ellipse cx="42" cy="30" rx="12" ry="10" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <rect x="27" y="27" width="6" height="4" fill="#000"/>
-     <line x1="6" y1="27" x2="0" y2="21" stroke="#000" stroke-width="3" stroke-linecap="round"/>
-     <line x1="54" y1="27" x2="60" y2="21" stroke="#000" stroke-width="3" stroke-linecap="round"/>
-     <polyline points="12,26 18,23" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>`
-  ];
-  function _tpRandomPosition(boxWidthPx, boxHeightPx) {
-    const wrap = document.getElementById("videowrap");
-    const rect = wrap ? wrap.getBoundingClientRect() : { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight, width: window.innerWidth, height: window.innerHeight };
-    const marginPx = 14;
-    const halfW = boxWidthPx / 2;
-    let leftMinPx = rect.left + marginPx + halfW;
-    let leftMaxPx = rect.left + rect.width - marginPx - halfW;
-    if (leftMaxPx < leftMinPx) {
-      const mid = rect.left + rect.width / 2;
-      leftMinPx = leftMaxPx = mid;
-    }
-    let topMinPx, topMaxPx;
-    if (inSubtitlesMode()) {
-      topMinPx = rect.top + marginPx;
-      topMaxPx = Math.min(rect.bottom - marginPx - boxHeightPx, rect.top + rect.height / 2);
-    } else {
-      const bottomThirdTopPx = rect.top + rect.height * (2 / 3);
-      topMinPx = Math.max(rect.top + marginPx, bottomThirdTopPx);
-      topMaxPx = rect.bottom - marginPx - boxHeightPx;
-    }
-    if (topMaxPx < topMinPx) topMinPx = topMaxPx = Math.max(rect.top + marginPx, rect.bottom - marginPx - boxHeightPx);
-    return {
-      leftPx: leftMinPx + Math.random() * (leftMaxPx - leftMinPx),
-      topPx: topMinPx + Math.random() * (topMaxPx - topMinPx)
+    });
+    const reactToPollChange = () => {
+      updateBtn();
+      if (panelOpen) renderPanel();
     };
+    onSocket("newPoll", reactToPollChange);
+    onSocket("updatePoll", reactToPollChange);
+    onSocket("closePoll", reactToPollChange);
+    updateBtn();
   }
-  var _tpAudioCtx = null;
-  function _tpGetAudioCtx() {
-    if (!_tpAudioCtx) {
-      const Ctor = window.AudioContext || window.webkitAudioContext;
-      _tpAudioCtx = new Ctor();
+  function initUserCount() {
+    const header = document.getElementById("sc-chat-header");
+    if (!header) return;
+    const wrap = document.createElement("div");
+    wrap.id = "sc-usercount-btn";
+    header.appendChild(wrap);
+    const connectedBtn = document.createElement("button");
+    connectedBtn.id = "sc-usercount-connected";
+    connectedBtn.className = "sc-usercount-part";
+    connectedBtn.title = "Connected";
+    wrap.appendChild(connectedBtn);
+    const onlineBtn = document.createElement("button");
+    onlineBtn.id = "sc-usercount-online";
+    onlineBtn.className = "sc-usercount-part";
+    onlineBtn.title = "Online";
+    wrap.appendChild(onlineBtn);
+    const panel = document.createElement("div");
+    panel.id = "sc-users-panel";
+    document.body.appendChild(panel);
+    let activeMode = null;
+    let lastTotal = 0;
+    const readItemUsername = (item) => {
+      var _a, _b;
+      const spans = item.querySelectorAll("span");
+      return ((_b = (_a = spans[spans.length - 1]) == null ? void 0 : _a.textContent) == null ? void 0 : _b.trim()) || "";
+    };
+    const getUserItems = () => [...document.querySelectorAll("#userlist .userlist_item")];
+    const sortByName = (a, b) => a.toLowerCase().localeCompare(b.toLowerCase());
+    const getConnectedUsers = () => getUserItems().filter((item) => !item.classList.contains("userlist_afk")).map(readItemUsername).filter(Boolean).sort(sortByName);
+    const getOnlineUsers = () => {
+      const all = getUserItems().map((item) => ({ name: readItemUsername(item), afk: item.classList.contains("userlist_afk") })).filter((u) => u.name);
+      const active = all.filter((u) => !u.afk).sort((a, b) => sortByName(a.name, b.name));
+      const idle = all.filter((u) => u.afk).sort((a, b) => sortByName(a.name, b.name));
+      return [...active, ...idle];
+    };
+    const updateCount = (n) => {
+      const connected = getConnectedUsers().length;
+      const total = typeof n === "number" ? n : (() => {
+        var _a, _b;
+        const cytubCount = document.getElementById("usercount");
+        const raw = (_b = (_a = cytubCount == null ? void 0 : cytubCount.textContent) == null ? void 0 : _a.match(/\d+/)) == null ? void 0 : _b[0];
+        return raw ? parseInt(raw) : connected;
+      })();
+      lastTotal = total;
+      connectedBtn.textContent = `🗨 ${connected}`;
+      onlineBtn.textContent = `👁 ${total}`;
+    };
+    const renderPanel = () => {
+      const users = activeMode === "online" ? getOnlineUsers() : getConnectedUsers().map((name) => ({ name, afk: false }));
+      const headerText = activeMode === "online" ? `${users.length} of ${lastTotal} online` : `${users.length} connected`;
+      panel.innerHTML = `
+            <div class="sc-users-panel-header">${headerText}</div>
+            ${users.map((u) => {
+        const color = usernameToColor(u.name);
+        const emoji = getExternalUserEmoji(u.name);
+        const emojiHtml = emoji ? emojiSlotHtml(emoji, "sc-users-panel-emoji", emoji) : "";
+        const afkClass = u.afk ? " sc-users-panel-afk" : "";
+        return `<div class="sc-users-panel-name${afkClass}" style="color:${color}">${emojiHtml}${u.name}</div>`;
+      }).join("")}
+        `;
+    };
+    const closePanel = () => {
+      panel.style.display = "none";
+      connectedBtn.classList.remove("sc-users-active");
+      onlineBtn.classList.remove("sc-users-active");
+      activeMode = null;
+    };
+    const openPanel = (mode, modeBtn) => {
+      activeMode = mode;
+      renderPanel();
+      panel.style.display = "block";
+      connectedBtn.classList.toggle("sc-users-active", modeBtn === connectedBtn);
+      onlineBtn.classList.toggle("sc-users-active", modeBtn === onlineBtn);
+    };
+    const handleModeClick = (mode, modeBtn) => (e) => {
+      e.stopPropagation();
+      if (activeMode === mode) closePanel();
+      else openPanel(mode, modeBtn);
+    };
+    connectedBtn.addEventListener("click", handleModeClick("connected", connectedBtn));
+    onlineBtn.addEventListener("click", handleModeClick("online", onlineBtn));
+    document.addEventListener("click", (e) => {
+      if (activeMode && !panel.contains(e.target) && !connectedBtn.contains(e.target) && !onlineBtn.contains(e.target)) {
+        closePanel();
+      }
+    });
+    const ul = document.getElementById("userlist");
+    if (ul) {
+      new MutationObserver(() => {
+        updateCount();
+        if (activeMode) renderPanel();
+      }).observe(ul, { childList: true, subtree: true });
     }
-    if (_tpAudioCtx.state === "suspended") _tpAudioCtx.resume();
-    return _tpAudioCtx;
+    onSocket("usercount", (n) => {
+      updateCount(n);
+      if (activeMode === "online") renderPanel();
+    });
+    updateCount();
   }
-  function _tpNoiseBurst(ac, { start, dur, freq, q, peak }) {
-    const size = Math.max(1, Math.floor(ac.sampleRate * dur));
-    const buffer = ac.createBuffer(1, size, ac.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < size; i++) data[i] = Math.random() * 2 - 1;
-    const src = ac.createBufferSource();
-    src.buffer = buffer;
-    const bp = ac.createBiquadFilter();
-    bp.type = "bandpass";
-    bp.frequency.value = freq;
-    bp.Q.value = q;
-    const gain = ac.createGain();
-    gain.gain.setValueAtTime(0, start);
-    gain.gain.linearRampToValueAtTime(peak, start + 3e-3);
-    gain.gain.exponentialRampToValueAtTime(1e-4, start + dur);
-    src.connect(bp).connect(gain).connect(ac.destination);
-    src.start(start);
-    src.stop(start + dur + 0.01);
+
+  // src/chat/fontsize.js
+  function getChatFontSize() {
+    const v = parseInt(getKey(LS_CHAT_FONT), 10);
+    if (Number.isFinite(v) && v >= 10 && v <= 32) return v;
+    return document.body && document.body.classList.contains("sc-tv") ? 18 : 14;
   }
-  function _tpBubbleTone(ac, { start, dur, freqStart, freqPeak, freqEnd, lpStart, lpEnd, q, peak }) {
-    const osc = ac.createOscillator();
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(freqStart, start);
-    osc.frequency.exponentialRampToValueAtTime(freqPeak, start + dur * 0.4);
-    osc.frequency.exponentialRampToValueAtTime(freqEnd, start + dur);
-    const lp = ac.createBiquadFilter();
-    lp.type = "lowpass";
-    lp.Q.value = q;
-    lp.frequency.setValueAtTime(lpStart, start);
-    lp.frequency.exponentialRampToValueAtTime(lpEnd, start + dur);
-    const gain = ac.createGain();
-    gain.gain.setValueAtTime(0, start);
-    gain.gain.linearRampToValueAtTime(peak, start + 6e-3);
-    gain.gain.exponentialRampToValueAtTime(1e-4, start + dur);
-    osc.connect(lp).connect(gain).connect(ac.destination);
-    osc.start(start);
-    osc.stop(start + dur + 0.02);
+  function applyChatFontSize(px) {
+    const buf2 = document.getElementById("messagebuffer");
+    if (buf2) buf2.style.setProperty("font-size", px + "px", "important");
+    const ta = document.getElementById("sc-chat-textarea");
+    if (ta) {
+      const overlay = document.body && document.body.classList.contains("sc-chat-overlay");
+      ta.style.setProperty("font-size", (overlay ? 13 : px) + "px", "important");
+    }
   }
-  function _tpPlayPopSound() {
+
+  // src/chat/modes.js
+  function initAmbientGlow() {
+    if (isTv) return;
+    const el = document.createElement("div");
+    el.id = "sc-ambient";
+    document.body.appendChild(el);
+    const canvas = document.createElement("canvas");
+    canvas.width = 16;
+    canvas.height = 9;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    let disabled = false;
+    const sample = () => {
+      if (disabled) return;
+      const v = document.querySelector("#videowrap video");
+      if (!v || v.paused || v.readyState < 2 || !v.videoWidth) return;
+      try {
+        ctx.drawImage(v, 0, 0, 16, 9);
+        const d = ctx.getImageData(0, 0, 16, 9).data;
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          r += d[i];
+          g += d[i + 1];
+          b += d[i + 2];
+          n++;
+        }
+        r = Math.round(r / n);
+        g = Math.round(g / n);
+        b = Math.round(b / n);
+        const max = Math.max(r, g, b) || 1;
+        const boost = (c) => Math.min(255, Math.round(c * (1 + c / max * 0.35)));
+        r = boost(r);
+        g = boost(g);
+        b = boost(b);
+        document.documentElement.style.setProperty("--sc-ambient-color", `rgba(${r},${g},${b},0.5)`);
+        document.documentElement.style.setProperty("--np-accent", `rgb(${Math.min(255, r + 40)},${Math.min(255, g + 40)},${Math.min(255, b + 40)})`);
+      } catch (e) {
+        disabled = true;
+        document.body.classList.add("sc-ambient-off");
+      }
+    };
+    setInterval(sample, 2500);
+  }
+  function initChromeAutohide() {
+    if (!isTv && !document.body.classList.contains("sc-vertical")) return;
+    let neutralizeAttempts = 0;
+    const tryNeutralize = () => {
+      neutralizeVjsInactivityTimer();
+      if (!(window.PLAYER && window.PLAYER.player) && neutralizeAttempts++ < 20) setTimeout(tryNeutralize, 500);
+    };
+    tryNeutralize();
+    onSocket("changeMedia", neutralizeVjsInactivityTimer);
+    let timer = null;
+    let pinned = false;
+    const hide = () => {
+      if (!pinned) document.body.classList.add("sc-chrome-hidden");
+    };
+    const show = () => {
+      document.body.classList.remove("sc-chrome-hidden");
+      if (typeof chromeState.topBarWake === "function") chromeState.topBarWake();
+      clearTimeout(timer);
+      if (!pinned) timer = setTimeout(hide, 4e3);
+    };
+    ["mousemove", "keydown", "click", "touchstart", "wheel"].forEach((ev) => document.addEventListener(ev, show, { passive: true }));
+    chromeState.chromeWake = show;
+    chromeState.pinChromeVisible = () => {
+      pinned = true;
+      clearTimeout(timer);
+      show();
+    };
+    chromeState.unpinChromeVisible = () => {
+      pinned = false;
+      clearTimeout(timer);
+      hide();
+    };
+    timer = setTimeout(hide, 4e3);
+  }
+  var _CHAT_MODES = isTv ? ["sidebar", "overlay", "subtitles", "hidden"] : ["sidebar", "overlay", "subtitles", "hidden", "chatonly"];
+  var _CHAT_MODE_ICONS = { sidebar: "▐", overlay: "▣", hidden: "⊠", subtitles: "💬", chatonly: "☰" };
+  var _CHAT_MODE_LABELS = { sidebar: "Sidebar", overlay: "Overlay", hidden: "Hidden", subtitles: "Subtitles", chatonly: "Chat Only" };
+  var _chatOnlyTimer = null;
+  var _inChatOnly = false;
+  function _coStopMedia() {
     try {
-      const ac = _tpGetAudioCtx();
-      const t = ac.currentTime;
-      _tpNoiseBurst(ac, { start: t, dur: 0.02, freq: 1800, q: 2.5, peak: 0.55 });
-      _tpBubbleTone(ac, { start: t, dur: 0.13, freqStart: 220, freqPeak: 600, freqEnd: 380, lpStart: 2600, lpEnd: 600, q: 8, peak: 0.3 });
+      const vid = document.querySelector("#videowrap video");
+      if (vid) {
+        vid.muted = true;
+        if (!vid.paused) vid.pause();
+      }
+    } catch (e) {
+    }
+    try {
+      const p = window.PLAYER && window.PLAYER.player;
+      if (p) {
+        if (typeof p.pauseVideo === "function") p.pauseVideo();
+        else if (typeof p.pause === "function") {
+          try {
+            p.pause();
+          } catch (e) {
+          }
+        }
+        if (typeof p.mute === "function") p.mute();
+        else if (typeof p.muted === "function") p.muted(true);
+      }
     } catch (e) {
     }
   }
-  function showTriviaBubble(fact) {
-    _tpDismissBubble(true);
-    _tpPlayPopSound();
-    _tpBubbleEl = document.createElement("div");
-    _tpBubbleEl.id = "sc-tp-bubble";
-    const icon = TP_ICONS[Math.floor(Math.random() * TP_ICONS.length)];
-    const bylineHtml = fact.byline ? `<div id="sc-tp-byline">${_escHtml3(fact.byline)}</div>` : "";
-    _tpBubbleEl.innerHTML = `
-        <svg id="sc-tp-tail" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="30" cy="30" r="27" fill="#000"/>
-            <circle cx="30" cy="30" r="27" fill="none" stroke="#c81d25" stroke-width="3"/>
-            ${icon}
-        </svg>
-        <div id="sc-tp-text">${_escHtml3(fact.text)}${bylineHtml}</div>`;
-    document.body.appendChild(_tpBubbleEl);
-    const pos = _tpRandomPosition(_tpBubbleEl.offsetWidth, _tpBubbleEl.offsetHeight);
-    _tpBubbleEl.style.setProperty("left", pos.leftPx + "px", "important");
-    _tpBubbleEl.style.setProperty("top", pos.topPx + "px", "important");
-    requestAnimationFrame(() => _tpBubbleEl && _tpBubbleEl.classList.add("sc-tp-in"));
-    _tpBubbleEl.addEventListener("click", () => _tpDismissBubble(false));
-    _tpBubbleEl.addEventListener("mouseenter", () => clearTimeout(_tpDismissTimer));
-    _tpBubbleEl.addEventListener("mouseleave", _tpArmDismissTimer);
-    _tpArmDismissTimer();
+  onSocket("changeMedia", () => {
+    if (_inChatOnly) _coStopMedia();
+  });
+  onSocket("mediaUpdate", () => {
+    if (_inChatOnly) _coStopMedia();
+  });
+  function enterChatOnly() {
+    _inChatOnly = true;
+    _coStopMedia();
+    clearInterval(_chatOnlyTimer);
+    _chatOnlyTimer = setInterval(_coStopMedia, 5e3);
   }
-  function _tpArmDismissTimer() {
-    clearTimeout(_tpDismissTimer);
-    _tpDismissTimer = setTimeout(() => _tpDismissBubble(false), TP_VISIBLE_MS);
-  }
-  function _tpDismissBubble(instant) {
-    clearTimeout(_tpDismissTimer);
-    _tpDismissTimer = null;
-    if (!_tpBubbleEl) return;
-    const el = _tpBubbleEl;
-    _tpBubbleEl = null;
-    if (instant) {
-      el.remove();
-      return;
+  function exitChatOnly() {
+    if (!_inChatOnly) return;
+    _inChatOnly = false;
+    clearInterval(_chatOnlyTimer);
+    _chatOnlyTimer = null;
+    try {
+      const vid = document.querySelector("#videowrap video");
+      if (vid) vid.muted = false;
+    } catch (e) {
     }
-    el.classList.add("sc-tp-out");
-    setTimeout(() => el.remove(), TP_EXIT_ANIM_MS);
-  }
-  var TP_BTN_ID = "sc-trivia-popup-btn";
-  function _tpApplyMute() {
-    if (_tpMuted) {
-      clearTimeout(_tpPopTimer);
-      _tpPopTimer = null;
-      _tpDismissBubble(true);
-    } else if (!_tpExhausted && _tpQueue.length) {
-      clearTimeout(_tpPopTimer);
-      _tpPopTimer = setTimeout(_tpAttemptPop, TP_RESUME_MS);
+    try {
+      const p = window.PLAYER && window.PLAYER.player;
+      if (p) {
+        if (typeof p.unMute === "function") p.unMute();
+        else if (typeof p.muted === "function") p.muted(false);
+        if (typeof p.playVideo === "function") p.playVideo();
+        else if (typeof p.play === "function") {
+          try {
+            p.play();
+          } catch (e) {
+          }
+        }
+      }
+    } catch (e) {
     }
-    _tpSyncButton();
   }
-  function _tpToggleMute() {
-    _tpMuted = !_tpMuted;
-    _tpApplyMute();
-  }
-  function _tpSyncButton() {
-    const btn = document.getElementById(TP_BTN_ID);
-    if (!btn) return;
-    btn.innerHTML = `<span class="sc-tp-dot">${_tpMuted ? "○" : "●"}</span>Pop-ups`;
-    btn.title = _tpMuted ? "Pop-up trivia muted for this session — tap to resume" : "Mute pop-up trivia bubbles for this session";
-    btn.setAttribute("aria-pressed", _tpMuted ? "true" : "false");
-  }
-  function renderTriviaPopupButton() {
-    const shouldShow = triviaPopupEnabled() && !!(npState.data && npState.data.imdbId);
-    let btn = document.getElementById(TP_BTN_ID);
-    if (!shouldShow) {
-      if (btn) btn.remove();
-      return;
+  function applyChatMode(mode) {
+    _CHAT_MODES.forEach((m) => document.body.classList.toggle("sc-chat-" + m, m === mode));
+    try {
+      localStorage.setItem("sc_chat_mode", mode);
+    } catch (e) {
     }
-    if (!btn) {
-      btn = document.createElement("button");
-      btn.id = TP_BTN_ID;
+    if (mode === "chatonly") enterChatOnly();
+    else exitChatOnly();
+    if (mode === "subtitles") refreshSubtitles();
+    const btn = document.getElementById("sc-chatmode-btn");
+    if (btn) {
+      btn.textContent = _CHAT_MODE_ICONS[mode] || "▐";
+      const label = _CHAT_MODE_LABELS[mode] || mode;
+      btn.title = "Chat: " + label + " (press C)";
+      btn.dataset.tvLabel = "Chat: " + label;
+    }
+    applyChatFontSize(getChatFontSize());
+    pinChatToBottom({ force: true });
+  }
+  function cycleChatMode() {
+    let cur = "sidebar";
+    try {
+      cur = localStorage.getItem("sc_chat_mode") || "sidebar";
+    } catch (e) {
+    }
+    applyChatMode(_CHAT_MODES[(_CHAT_MODES.indexOf(cur) + 1) % _CHAT_MODES.length]);
+  }
+  function initChatModes() {
+    let saved = "sidebar";
+    try {
+      saved = localStorage.getItem("sc_chat_mode") || "sidebar";
+    } catch (e) {
+    }
+    if (!_CHAT_MODES.includes(saved)) saved = "sidebar";
+    if (!document.getElementById("sc-chatmode-btn")) {
+      const btn = document.createElement("button");
+      btn.id = "sc-chatmode-btn";
       btn.type = "button";
-      btn.dataset.noTvCaption = "1";
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        _tpToggleMute();
-      });
-      const header = document.getElementById("videowrap-header");
-      const anchor = document.getElementById("sc-up-next-btn") || document.getElementById("sc-poster-toggle");
-      if (header && anchor && anchor.parentNode === header) header.insertBefore(btn, anchor);
-      else (header || document.body).appendChild(btn);
+      btn.className = "sc-dock-btn";
+      btn.title = "Cycle chat layout (press C)";
+      btn.addEventListener("click", cycleChatMode);
+      document.body.appendChild(btn);
     }
-    _tpSyncButton();
+    if (!document.getElementById("sc-chatonly-banner")) {
+      const banner = document.createElement("div");
+      banner.id = "sc-chatonly-banner";
+      banner.textContent = "Paused · Muted";
+      document.body.appendChild(banner);
+    }
+    applyChatMode(saved);
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "c" && e.key !== "C") return;
+      const t = e.target;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
+      cycleChatMode();
+    });
+  }
+  function initNewMessagePill() {
+    initStickBottom();
+  }
+  function initMentionToast() {
+    const buf2 = document.getElementById("messagebuffer");
+    if (!buf2) return;
+    const myName = () => {
+      try {
+        return window.CLIENT && CLIENT.name ? String(CLIENT.name) : "";
+      } catch (e) {
+        return "";
+      }
+    };
+    let toast = null, toastTimer = null;
+    const show = (name, text) => {
+      if (!toast) {
+        toast = document.createElement("div");
+        toast.id = "sc-mention-toast";
+        toast.addEventListener("click", () => toast.classList.remove("sc-show"));
+        document.body.appendChild(toast);
+      }
+      toast.innerHTML = `<span class="sc-mt-name"></span><span class="sc-mt-text"></span>`;
+      toast.querySelector(".sc-mt-name").textContent = name + ":";
+      toast.querySelector(".sc-mt-text").textContent = " " + text;
+      toast.classList.add("sc-show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove("sc-show"), 6e3);
+    };
+    new MutationObserver((muts) => {
+      const me = myName().toLowerCase();
+      muts.forEach((m) => m.addedNodes.forEach((node) => {
+        var _a, _b, _c;
+        if (node.nodeType !== 1) return;
+        const isMention = ((_a = node.classList) == null ? void 0 : _a.contains("nick-highlight")) || me && node.textContent && node.textContent.toLowerCase().includes("@" + me);
+        if (!isMention) return;
+        const name = ((_c = (_b = node.querySelector(".username")) == null ? void 0 : _b.textContent) == null ? void 0 : _c.replace(/[:\s]+$/, "").trim()) || "Mention";
+        const clone = node.cloneNode(true);
+        clone.querySelectorAll(".timestamp, .username").forEach((el) => el.remove());
+        const text = clone.textContent.replace(/^[\s:]+/, "").trim().slice(0, 180);
+        show(name, text);
+      }));
+    }).observe(buf2, { childList: true });
+  }
+  function initChatFont() {
+    applyChatFontSize(getChatFontSize());
+  }
+  function initLeftZone() {
+    let hideTimer = null;
+    const THRESH = 120;
+    const scheduleHide = (ms) => {
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => document.body.classList.remove("sc-leftzone"), ms);
+    };
+    const reveal = (autoHideMs) => {
+      clearTimeout(hideTimer);
+      document.body.classList.add("sc-leftzone");
+      if (autoHideMs) scheduleHide(autoHideMs);
+    };
+    chromeState.leftZoneReveal = reveal;
+    if (!document.getElementById("sc-cluster-grip")) {
+      const grip = document.createElement("div");
+      grip.id = "sc-cluster-grip";
+      grip.title = "Controls";
+      grip.addEventListener("mouseenter", reveal);
+      grip.addEventListener("click", reveal);
+      document.body.appendChild(grip);
+    }
+    document.addEventListener("mousemove", (e) => {
+      if (e.clientX <= THRESH) reveal();
+      else if (document.body.classList.contains("sc-leftzone")) scheduleHide(550);
+    }, { passive: true });
+    document.addEventListener("touchstart", (e) => {
+      const x = e.touches[0] ? e.touches[0].clientX : 1e9;
+      if (x <= THRESH) {
+        reveal(3500);
+      }
+    }, { passive: true });
+  }
+  var VSPLIT_MIN = 25;
+  var VSPLIT_MAX = 75;
+  function initVertControlBand() {
+    if (document.getElementById("sc-vert-ctrl-band")) return;
+    const band = document.createElement("div");
+    band.id = "sc-vert-ctrl-band";
+    document.body.appendChild(band);
+    const saved = getSetting("vertSplit");
+    const initial = Math.min(VSPLIT_MAX, Math.max(VSPLIT_MIN, saved));
+    document.body.style.setProperty("--sc-split", String(initial));
+    let dragging = false;
+    band.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      band.classList.add("sc-dragging");
+      band.setPointerCapture(e.pointerId);
+    });
+    band.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      const pct = Math.min(VSPLIT_MAX, Math.max(VSPLIT_MIN, e.clientY / window.innerHeight * 100));
+      document.body.style.setProperty("--sc-split", String(pct));
+    });
+    const endDrag = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      band.classList.remove("sc-dragging");
+      const pct = Math.min(VSPLIT_MAX, Math.max(VSPLIT_MIN, e.clientY / window.innerHeight * 100));
+      localStorage.setItem("sc_vert_split", String(pct));
+    };
+    band.addEventListener("pointerup", endDrag);
+    band.addEventListener("pointercancel", endDrag);
+  }
+  function initRightZone() {
+    let hideTimer = null;
+    const THRESH = 100;
+    const scheduleHide = (ms) => {
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => document.body.classList.remove("sc-rightzone"), ms);
+    };
+    const reveal = (ms) => {
+      clearTimeout(hideTimer);
+      document.body.classList.add("sc-rightzone");
+      if (ms) scheduleHide(ms);
+    };
+    chromeState.rightZoneReveal = reveal;
+    if (!document.getElementById("sc-vert-ctrl-grip")) {
+      const grip = document.createElement("div");
+      grip.id = "sc-vert-ctrl-grip";
+      grip.title = "Controls";
+      grip.addEventListener("click", () => reveal(3500));
+      document.body.appendChild(grip);
+    }
+    document.addEventListener("touchstart", (e) => {
+      var _a;
+      if (!document.body.classList.contains("sc-vertical")) return;
+      const x = (_a = e.touches[0]) == null ? void 0 : _a.clientX;
+      if (x != null && window.innerWidth - x <= THRESH) reveal(3500);
+    }, { passive: true });
+  }
+  function initVideoTapReveal() {
+    const REVEAL_MS = 4e3;
+    let scrubReleaseTimer = null;
+    const tap = document.createElement("div");
+    tap.id = "sc-video-tap";
+    tap.addEventListener("click", () => {
+      if (chromeState.topBarWake) chromeState.topBarWake();
+      if (chromeState.leftZoneReveal) chromeState.leftZoneReveal(REVEAL_MS);
+      if (chromeState.rightZoneReveal) chromeState.rightZoneReveal(REVEAL_MS);
+      holdScrubber(true);
+      clearTimeout(scrubReleaseTimer);
+      scrubReleaseTimer = setTimeout(() => holdScrubber(false), REVEAL_MS);
+    });
+    document.body.appendChild(tap);
+  }
+
+  // src/chrome/buttons.js
+  function getMediaUpdateListeners() {
+    var _a, _b;
+    const key = "$mediaUpdate";
+    if ((_a = socket._callbacks) == null ? void 0 : _a[key]) return { store: "_callbacks", key };
+    if ((_b = socket._events) == null ? void 0 : _b.mediaUpdate) return { store: "_events", key: "mediaUpdate" };
+    return null;
+  }
+  function initDesyncButton() {
+    const btn = document.createElement("button");
+    btn.id = "sc-desync-btn";
+    btn.className = "sc-dock-btn";
+    btn.textContent = "⟳";
+    btn.title = "Free watch — click to watch freely, click again to re-sync";
+    btn.dataset.tvLabel = "Free Watch";
+    document.body.appendChild(btn);
+    let desynced = false;
+    let savedListeners = null;
+    function trackLiveRoomPosition(data) {
+      if (data && typeof data.currentTime === "number") {
+        mediaState.desyncLiveSeconds = data.currentTime;
+        mediaState.desyncLiveAt = Date.now();
+      }
+      if (data && typeof data.paused === "boolean") mediaState.desyncLivePaused = data.paused;
+    }
+    const freezeSync = () => {
+      var _a;
+      const loc = getMediaUpdateListeners();
+      if (!loc) {
+        console.warn("[CyTube SC] Could not find mediaUpdate listeners to freeze");
+        return;
+      }
+      if (loc.store === "_callbacks") {
+        savedListeners = socket._callbacks[loc.key].slice();
+        socket._callbacks[loc.key] = [];
+      } else {
+        savedListeners = socket._events[loc.key];
+        delete socket._events[loc.key];
+      }
+      console.log("[CyTube SC] Sync frozen — removed", (_a = savedListeners == null ? void 0 : savedListeners.length) != null ? _a : 1, "mediaUpdate listener(s)");
+    };
+    const thawSync = () => {
+      if (!savedListeners) return;
+      const loc = getMediaUpdateListeners();
+      if ((loc == null ? void 0 : loc.store) === "_callbacks") {
+        socket._callbacks[loc.key] = savedListeners;
+      } else {
+        socket._events = socket._events || {};
+        socket._events["mediaUpdate"] = savedListeners;
+      }
+      savedListeners = null;
+      console.log("[CyTube SC] Sync restored");
+      if (typeof socket !== "undefined" && socket) {
+        socket.emit("playerReady");
+      }
+    };
+    function turnOn() {
+      freezeSync();
+      mediaState.desyncLiveSeconds = null;
+      mediaState.desyncLivePaused = false;
+      try {
+        socket.on("mediaUpdate", trackLiveRoomPosition);
+      } catch (e) {
+      }
+      btn.classList.add("sc-desync-active");
+      btn.title = "Free watch ON — click to re-sync";
+      const bar = document.querySelector("#videowrap .vjs-control-bar .vjs-progress-control");
+      if (bar && tvNavState.setFocus) tvNavState.setFocus(bar);
+    }
+    function turnOff() {
+      try {
+        socket.off("mediaUpdate", trackLiveRoomPosition);
+      } catch (e) {
+      }
+      thawSync();
+      mediaState.desyncLiveSeconds = null;
+      btn.classList.remove("sc-desync-active");
+      btn.title = "Free watch — click to watch freely";
+    }
+    btn.addEventListener("click", () => {
+      if (typeof socket === "undefined" || !socket) return;
+      desynced = !desynced;
+      if (desynced) turnOn();
+      else turnOff();
+    });
+    let _lastMediaKey = "";
+    onSocket("changeMedia", (data) => {
+      const key = (data && (data.id || "")) + "|" + (data && (data.title || ""));
+      if (key === _lastMediaKey) return;
+      _lastMediaKey = key;
+      if (desynced) {
+        desynced = false;
+        turnOff();
+      }
+    });
+  }
+  function addFloatingButtons() {
+    if (document.getElementById("fs-toggle-btn")) return;
+    const fsBtn = document.createElement("button");
+    fsBtn.id = "fs-toggle-btn";
+    fsBtn.textContent = "⛶";
+    fsBtn.title = "Toggle Fullscreen";
+    fsBtn.addEventListener("click", () => {
+      document.fullscreenElement ? document.exitFullscreen().catch(() => {
+      }) : document.documentElement.requestFullscreen().catch(() => {
+      });
+    });
+    document.body.appendChild(fsBtn);
+    document.addEventListener("fullscreenchange", () => {
+      fsBtn.style.display = document.fullscreenElement ? "none" : "";
+    });
+  }
+  function addCastButton() {
+    let onTv = false;
+    try {
+      onTv = !!(window.CytubeNative && CytubeNative.isTv && CytubeNative.isTv());
+    } catch (e) {
+    }
+    if (onTv) return;
+    if (document.getElementById("sc-cast-btn")) return;
+    const btn = document.createElement("button");
+    btn.id = "sc-cast-btn";
+    btn.className = "sc-dock-btn";
+    btn.type = "button";
+    btn.title = "Cast to TV";
+    btn.dataset.tvLabel = "Cast";
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11zm20-7H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>';
+    btn.addEventListener("click", function() {
+      try {
+        if (window.CytubeNative && CytubeNative.startCasting) CytubeNative.startCasting();
+      } catch (e) {
+      }
+    });
+    document.body.appendChild(btn);
+  }
+
+  // src/settings.js
+  init_native();
+
+  // src/chat/keyboard.js
+  function isEditable(el) {
+    return !!el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT");
+  }
+  function labelFor(el) {
+    if (!el) return "Text field";
+    if (el.id === "sc-chat-textarea") return "Chat message";
+    if (el.type === "password") return "Password";
+    if (el.id === "sc-input-tmdb") return "TMDB API key";
+    if (el.id === "username" || el.name === "username") return "Username";
+    return "Text field";
+  }
+  function reportFocusedField() {
+    const el = document.activeElement;
+    if (!isEditable(el)) return;
+    try {
+      if (window.CytubeNative && CytubeNative.setKeyboardFieldLabel) {
+        CytubeNative.setKeyboardFieldLabel(labelFor(el), el.type === "password");
+      }
+    } catch (e) {
+    }
+  }
+  function applyPhoneInput(text, commit) {
+    const el = document.activeElement;
+    if (!isEditable(el)) return;
+    el.value = text;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    if (commit) {
+      ["keydown", "keyup"].forEach((type) => {
+        el.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", bubbles: true }));
+      });
+    }
+  }
+  function initPhoneKeyboard(isTvDevice, recheckSoftKeyboard) {
+    if (!isTvDevice) return;
+    document.addEventListener("focusin", reportFocusedField);
+    window.__scPhoneKeyboard = applyPhoneInput;
+    setInterval(() => {
+      try {
+        recheckSoftKeyboard();
+      } catch (e) {
+      }
+    }, 1e3);
   }
 
   // src/player/drive.js
@@ -7272,55 +8734,6 @@
       });
     }
     console.log("[CyTube SC] Google Drive metadata helper ready");
-  }
-
-  // src/player/drm.js
-  var drmState = { checkTimer: null };
-  function openExternalUrl(url) {
-    try {
-      if (window.CytubeNative && typeof CytubeNative.openExternal === "function") {
-        CytubeNative.openExternal(url);
-      } else {
-        window.open(url, "_blank");
-      }
-    } catch (e) {
-    }
-  }
-  function hideDrmOverlay() {
-    const o = document.getElementById("sc-drm-overlay");
-    if (o) o.remove();
-  }
-  function showDrmOverlay(videoId, title) {
-    hideDrmOverlay();
-    const wrap = document.getElementById("videowrap") || document.body;
-    if (getComputedStyle(wrap).position === "static") wrap.style.position = "relative";
-    const url = "https://cytu.be/r/420Grindhouse";
-    const safeTitle = (title || "This title").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]);
-    const o = document.createElement("div");
-    o.id = "sc-drm-overlay";
-    o.innerHTML = '<div id="sc-drm-box"><div id="sc-drm-icon">🔒</div><div id="sc-drm-title">' + safeTitle + ' can’t play in the app</div><div id="sc-drm-msg">It’s a DRM-protected <b>YouTube Movies</b> title and the in-app player can’t decrypt it. Open <b>Grindhouse</b> in your browser — it plays there, with the room and chat still in sync.</div><div id="sc-drm-actions"><button id="sc-drm-open" class="sc-drm-btn">Open Grindhouse in Browser</button></div></div>';
-    wrap.appendChild(o);
-    const btn = document.getElementById("sc-drm-open");
-    if (btn) btn.addEventListener("click", () => openExternalUrl(url));
-  }
-  function checkYtDrm(tries) {
-    const p = window.PLAYER;
-    if (!p || p.mediaType !== "yt") {
-      hideDrmOverlay();
-      return;
-    }
-    let vd = null;
-    try {
-      vd = p.yt && p.yt.getVideoData ? p.yt.getVideoData() : null;
-    } catch (e) {
-    }
-    if (vd && vd.errorCode) {
-      showDrmOverlay(vd.video_id, vd.title);
-      return;
-    }
-    if ((tries || 0) < 10) {
-      drmState.checkTimer = setTimeout(() => checkYtDrm((tries || 0) + 1), 1e3);
-    }
   }
 
   // src/player/resync.js
@@ -9116,6 +10529,106 @@
                 line-height: 1.3 !important;
                 margin-top: 6px !important;
             }
+            /* ===== DRIVE-IN TOTALS CARD ===== */
+            /* MonsterVision's on-screen Drive-In Totals: no panel, shadowed
+               text right over the picture. left/top/width and the two font
+               sizes (--sc-tp-head / --sc-tp-line) are set inline by
+               showDriveInCard() (cards/driveincard.js) from the picture's size.
+               TV only -- phones list the same data in the Trivia card. */
+            #sc-tp-card {
+                position: fixed !important;
+                z-index: 15400 !important; /* just under the bubble */
+                pointer-events: none !important;
+                text-align: center !important;
+                font-family: 'Patua One', Georgia, serif !important;
+                font-weight: 400 !important;
+                opacity: 1 !important;
+                transition: opacity 0.8s ease !important;
+            }
+            #sc-tp-card.sc-tp-card-out { opacity: 0 !important; }
+            #sc-tp-card .sc-tp-card-h {
+                color: #a6e27a !important;
+                font-size: var(--sc-tp-head) !important;
+                line-height: 1.02 !important;
+                text-shadow: 2px 2px 0 #10140c, 0 0 10px rgba(0,0,0,0.75) !important;
+                opacity: 0 !important;
+                transition: opacity 0.6s !important;
+            }
+            #sc-tp-card .sc-tp-card-rule {
+                height: 3px !important;
+                width: 0 !important;
+                margin: 8px auto 10px !important;
+                background: #c8352b !important;
+                box-shadow: 1px 1px 0 #000 !important;
+                transition: width 0.6s 0.2s !important;
+            }
+            #sc-tp-card.sc-tp-card-on .sc-tp-card-h { opacity: 1 !important; }
+            /* Academy Award slide: header fades out, swaps text, fades back in
+               smaller (two long lines instead of "Drive-In / Totals"). */
+            #sc-tp-card.sc-tp-card-on .sc-tp-card-h.sc-tp-card-swap { opacity: 0 !important; }
+            #sc-tp-card.sc-tp-card-awards .sc-tp-card-h { font-size: calc(var(--sc-tp-head) * 0.62) !important; }
+            /* Nominees can run long (role + quote): smaller text, same box, so
+               even a 300-char entry fits whole before the track scrolls. */
+            #sc-tp-card.sc-tp-card-awards .sc-tp-card-line { font-size: 0.8em !important; }
+            #sc-tp-card.sc-tp-card-on .sc-tp-card-rule { width: 80% !important; }
+            #sc-tp-card .sc-tp-card-lines {
+                position: relative !important;
+                overflow: hidden !important;
+                font-size: var(--sc-tp-line) !important;
+                height: calc(var(--sc-tp-line) * 10.5) !important;
+                transition: opacity 0.5s !important;
+            }
+            #sc-tp-card .sc-tp-card-lines.sc-tp-card-scrolling {
+                -webkit-mask-image: linear-gradient(transparent 0, #000 14%) !important;
+                mask-image: linear-gradient(transparent 0, #000 14%) !important;
+            }
+            #sc-tp-card .sc-tp-card-lines.sc-tp-card-gone { opacity: 0 !important; }
+            #sc-tp-card .sc-tp-card-track {
+                position: absolute !important;
+                left: 0 !important;
+                right: 0 !important;
+                top: 0 !important;
+                transition: transform 0.45s ease !important;
+            }
+            /* Long counts wrap (balanced), never ellipsized. */
+            #sc-tp-card .sc-tp-card-line {
+                color: #f4e8c6 !important;
+                line-height: 1.22 !important;
+                margin-top: 0.32em !important;
+                text-wrap: balance !important;
+                text-shadow: 2px 2px 0 #000, 0 0 6px rgba(0,0,0,0.85) !important;
+                opacity: 0 !important;
+                transform: translateY(8px) !important;
+                transition: opacity 0.35s, transform 0.35s !important;
+            }
+            #sc-tp-card .sc-tp-card-line.sc-tp-card-in { opacity: 1 !important; transform: none !important; }
+            #sc-tp-card .sc-tp-card-verdict {
+                position: absolute !important;
+                left: 0 !important;
+                right: 0 !important;
+                top: 46% !important;
+                opacity: 0 !important;
+                transition: opacity 0.4s !important;
+            }
+            #sc-tp-card .sc-tp-card-verdict.sc-tp-card-on { opacity: 1 !important; }
+            #sc-tp-card .sc-tp-card-stars { display: flex !important; justify-content: center !important; gap: 4% !important; }
+            #sc-tp-card .sc-tp-card-stars svg {
+                width: 17% !important;
+                height: auto !important;
+                filter: drop-shadow(2px 2px 0 #000) drop-shadow(0 0 6px rgba(0,0,0,0.6)) !important;
+                transform: scale(0) !important;
+                transition: transform 0.35s cubic-bezier(.3,1.6,.5,1) !important;
+            }
+            #sc-tp-card .sc-tp-card-stars svg.sc-tp-card-in { transform: scale(1) !important; }
+            #sc-tp-card .sc-tp-card-says {
+                color: #f4e8c6 !important;
+                font-size: calc(var(--sc-tp-line) * 1.1) !important;
+                margin-top: 10px !important;
+                text-shadow: 2px 2px 0 #000, 0 0 6px rgba(0,0,0,0.85) !important;
+                opacity: 0 !important;
+                transition: opacity 0.5s !important;
+            }
+            #sc-tp-card .sc-tp-card-says.sc-tp-card-on { opacity: 1 !important; }
             .sc-drm-btn:focus { outline: 3px solid #fff !important; outline-offset: 2px !important; }
 
             /* #sc-subtitles-btn's own base visual style lives in base.css (matches
@@ -9958,6 +11471,38 @@
                 color: rgba(255,255,255,0.86) !important; font-size: 14px !important; line-height: 1.5 !important;
                 padding: 12px 0 !important; border-bottom: 1px solid rgba(255,255,255,0.07) !important;
             }
+            /* Trivia card sections: curated Pop-up Video facts, Drive-In Totals (phone), IMDb. */
+            .sc-trivia-section {
+                color: var(--np-accent,#ff5b73) !important; font-size: 11px !important; font-weight: 700 !important;
+                text-transform: uppercase !important; letter-spacing: 0.06em !important;
+                padding: 14px 0 2px !important;
+            }
+            .sc-trivia-time {
+                display: inline-block !important; margin-right: 8px !important; padding: 0 6px !important;
+                border-radius: 4px !important; background: rgba(255,255,255,0.1) !important;
+                color: rgba(255,255,255,0.7) !important; font-size: 11px !important;
+                font-variant-numeric: tabular-nums !important; vertical-align: 1px !important;
+            }
+            .sc-trivia-face {
+                width: 22px !important; height: 22px !important; border-radius: 50% !important;
+                object-fit: cover !important; margin-right: 6px !important; vertical-align: -6px !important;
+                border: 1px solid #c81d25 !important;
+            }
+            .sc-trivia-by { color: rgba(255,255,255,0.55) !important; font-size: 12px !important; }
+            .sc-trivia-src { color: rgba(255,255,255,0.55) !important; font-size: 11px !important; text-decoration: underline !important; }
+            .sc-trivia-drivein ul { margin: 0 !important; padding: 0 0 0 18px !important; }
+            .sc-trivia-drivein li { padding: 2px 0 !important; }
+            .sc-trivia-di-verdict {
+                display: flex !important; flex-wrap: wrap !important; align-items: center !important;
+                gap: 8px !important; margin: 10px 0 2px !important;
+            }
+            .sc-trivia-di-stars { display: inline-flex !important; gap: 2px !important; }
+            .sc-trivia-di-stars svg { width: 18px !important; height: 18px !important; }
+            .sc-trivia-di-says { color: #f5d76e !important; font-weight: 700 !important; }
+            .sc-trivia-di-awards-h {
+                color: rgba(255,255,255,0.7) !important; font-size: 12px !important; font-weight: 700 !important;
+                margin: 12px 0 4px !important;
+            }
             body.sc-tv #sc-trivia-panel { width: min(1100px, 84vw) !important; max-height: 84vh !important; }
             body.sc-tv #sc-trivia-title { font-size: 26px !important; }
             body.sc-tv #sc-trivia-close { width: 44px !important; height: 44px !important; font-size: 20px !important; }
@@ -10798,11 +12343,125 @@
             body.sc-tv #sc-mention-toast { font-size: 21px !important; padding: 16px 26px !important; top: 40px !important; }
 `;
 
+  // src/styles/simkl.css
+  var simkl_default = `            /* Simkl scrobble card (cards/simkl.js). Port of the userscript's style minus its
+               backdrop-filter blur -- blurring live video every frame is expensive on low-end
+               Fire Stick GPUs, so the card uses a near-opaque solid background instead. */
+            #sc-simkl-panel {
+                position: fixed !important;
+                z-index: 15500 !important; /* above video chrome, below settings/review modals */
+                box-sizing: border-box !important;
+                width: 340px !important; max-width: calc(100vw - 32px) !important;
+                padding: 14px 14px 18px !important;
+                background: rgba(14, 14, 18, 0.92) !important;
+                border: 1px solid rgba(255, 255, 255, 0.10) !important;
+                border-radius: 14px !important;
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+                color: #ececf1 !important;
+                font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif !important;
+                font-size: 13px !important; line-height: 1.4 !important;
+                overflow: hidden !important;
+                opacity: 0 !important; transform: translateY(8px) !important;
+                transition: opacity 0.3s ease, transform 0.3s ease !important;
+            }
+            #sc-simkl-panel.sc-simkl-in  { opacity: 1 !important; transform: translateY(0) !important; }
+            #sc-simkl-panel.sc-simkl-out { opacity: 0 !important; transform: translateY(8px) !important; }
+            #sc-simkl-panel * { box-sizing: border-box !important; font-family: inherit !important; }
+
+            #sc-simkl-panel .sc-simkl-row  { display: flex !important; gap: 12px !important; align-items: flex-start !important; }
+            #sc-simkl-panel .sc-simkl-poster {
+                flex: 0 0 auto !important; width: 60px !important; height: 90px !important;
+                object-fit: cover !important; border-radius: 8px !important;
+                background: rgba(255, 255, 255, 0.06) !important;
+            }
+            #sc-simkl-panel .sc-simkl-noposter {
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                font-size: 22px !important; color: rgba(236, 236, 241, 0.5) !important;
+            }
+            #sc-simkl-panel .sc-simkl-main  { flex: 1 1 auto !important; min-width: 0 !important; }
+            #sc-simkl-panel .sc-simkl-title {
+                font-size: 15px !important; font-weight: 600 !important; line-height: 1.25 !important;
+                margin: 0 0 6px !important; color: #f4f4f7 !important;
+                overflow: hidden !important; text-overflow: ellipsis !important; display: -webkit-box !important;
+                -webkit-line-clamp: 2 !important; -webkit-box-orient: vertical !important;
+            }
+            #sc-simkl-panel .sc-simkl-year { font-weight: 400 !important; color: rgba(236, 236, 241, 0.55) !important; }
+            #sc-simkl-panel .sc-simkl-q    { font-size: 13px !important; color: rgba(236, 236, 241, 0.85) !important; margin: 0 0 8px !important; }
+            #sc-simkl-panel .sc-simkl-ok   { color: #7fd99a !important; font-weight: 600 !important; }
+            #sc-simkl-panel .sc-simkl-bad  { color: #ff8a8c !important; }
+            #sc-simkl-panel .sc-simkl-help { font-size: 12px !important; color: rgba(236, 236, 241, 0.62) !important; margin: 0 0 6px !important; }
+
+            #sc-simkl-panel .sc-simkl-stars { display: flex !important; gap: 1px !important; margin: 0 0 2px -2px !important; }
+            #sc-simkl-panel .sc-simkl-star {
+                background: none !important; border: 0 !important; box-shadow: none !important;
+                padding: 0 1px !important; margin: 0 !important; cursor: pointer !important;
+                font-size: 18px !important; line-height: 1 !important; color: rgba(255, 255, 255, 0.24) !important;
+            }
+            #sc-simkl-panel .sc-simkl-star.on { color: #ed2224 !important; }
+            #sc-simkl-panel .sc-simkl-rating-label { font-size: 11px !important; color: rgba(236, 236, 241, 0.5) !important; margin: 0 0 10px !important; }
+
+            #sc-simkl-panel .sc-simkl-actions { display: flex !important; gap: 8px !important; flex-wrap: wrap !important; }
+            #sc-simkl-panel .sc-simkl-btn {
+                appearance: none !important; cursor: pointer !important;
+                padding: 7px 12px !important; margin: 0 !important; border-radius: 8px !important;
+                background: rgba(255, 255, 255, 0.07) !important; color: #ececf1 !important;
+                border: 1px solid rgba(255, 255, 255, 0.16) !important; box-shadow: none !important;
+                font-size: 12.5px !important; font-weight: 500 !important; line-height: 1.2 !important;
+            }
+            #sc-simkl-panel .sc-simkl-primary { background: #ed2224 !important; border-color: #ed2224 !important; color: #fff !important; font-weight: 600 !important; }
+
+            #sc-simkl-panel .sc-simkl-link {
+                display: inline-block !important; margin-top: 8px !important;
+                font-size: 11.5px !important; color: rgba(236, 236, 241, 0.6) !important; text-decoration: underline !important;
+            }
+            #sc-simkl-panel .sc-simkl-help .sc-simkl-link { margin: 0 !important; font-size: inherit !important; color: #ff8a8c !important; }
+
+            #sc-simkl-panel .sc-simkl-code {
+                margin: 4px 0 8px !important; padding: 8px 12px !important; text-align: center !important;
+                font-family: ui-monospace, "Cascadia Mono", Consolas, "Roboto Mono", monospace !important;
+                font-size: 22px !important; font-weight: 600 !important; letter-spacing: 0.18em !important;
+                background: rgba(255, 255, 255, 0.07) !important; border-radius: 8px !important; color: #fff !important;
+            }
+            #sc-simkl-panel .sc-simkl-qr {
+                display: block !important; margin: 6px auto !important; width: 132px !important; height: auto !important;
+                background: #fff !important; padding: 8px !important; border-radius: 8px !important;
+                image-rendering: pixelated !important;
+            }
+
+            #sc-simkl-panel .sc-simkl-life { position: absolute !important; left: 0 !important; right: 0 !important; bottom: 0 !important; height: 3px !important; background: rgba(255, 255, 255, 0.06) !important; }
+            #sc-simkl-panel .sc-simkl-life-bar { height: 100% !important; width: 100% !important; background: rgba(236, 236, 241, 0.35) !important; transition: width 1s linear !important; }
+
+            /* 10-foot sizing: bigger text and star targets for the remote */
+            body.sc-tv #sc-simkl-panel { width: 420px !important; font-size: 16px !important; padding: 18px 18px 22px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-title { font-size: 19px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-q { font-size: 16px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-help { font-size: 14px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-star { font-size: 24px !important; padding: 2px 3px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-rating-label { font-size: 14px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-btn { font-size: 16px !important; padding: 9px 16px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-link { font-size: 14px !important; }
+            body.sc-tv #sc-simkl-panel .sc-simkl-poster { width: 80px !important; height: 120px !important; }
+
+            /* Settings (not the card): the device code + QR shown under the Test button */
+            #sc-simkl-fields.sc-hidden, #sc-simkl-signin.sc-hidden, #sc-simkl-signin-qr.sc-hidden { display: none !important; }
+            #sc-settings-overlay .sc-simkl-set-code {
+                margin: 6px 0 !important; padding: 8px 12px !important; text-align: center !important;
+                font-family: ui-monospace, "Cascadia Mono", Consolas, "Roboto Mono", monospace !important;
+                font-size: 20px !important; font-weight: 600 !important; letter-spacing: 0.18em !important;
+                background: rgba(255, 255, 255, 0.08) !important; border-radius: 6px !important; color: #fff !important;
+            }
+            #sc-settings-overlay .sc-simkl-set-qr {
+                display: block !important; margin: 8px auto !important; width: min(100%, 200px) !important; height: auto !important;
+                background: #fff !important; padding: 10px !important; border-radius: 10px !important;
+                image-rendering: pixelated !important;
+            }
+`;
+
   // src/settings.js
   var TRIVIA_FREQ_STEPS = [
-    { value: "frequent", label: "Frequent — about once a minute" },
-    { value: "occasional", label: "Occasional — every few minutes" },
-    { value: "rare", label: "Rare — every 8–15 minutes" }
+    { value: "frequent", label: "Frequent — about once a minute (all timed facts)" },
+    { value: "occasional", label: "Occasional — every few minutes (the better timed facts)" },
+    { value: "rare", label: "Rare — every 8–15 minutes (only the best timed facts)" }
   ];
   var triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex((s) => s.value === value));
   (function() {
@@ -11159,6 +12818,39 @@
                         </div>
                     </div>
 
+                    <div class="sc-settings-group sc-settings-divider">
+                        <label class="sc-settings-toggle-label">
+                            <span class="sc-toggle-row">
+                                <input type="checkbox" id="sc-input-simkl-enable" ${simklEnabled() ? "checked" : ""} />
+                                <span class="sc-toggle-text">Log finished movies on Simkl</span>
+                            </span>
+                            <span class="sc-settings-note">Near the end of a movie, a small card offers to add it (and an optional 1–10 rating) to your simkl.com watch history. Movies only — not YouTube or TV episodes.</span>
+                        </label>
+                        <div id="sc-simkl-fields" class="${simklEnabled() ? "" : "sc-hidden"}">
+                            <div class="sc-settings-input-row">
+                                <input id="sc-input-simkl-clientid" class="sc-settings-input" type="text"
+                                    placeholder="Paste Simkl Client ID…" value="${simklEsc(simklClientId())}" spellcheck="false" />
+                                <button id="sc-test-simkl" class="sc-settings-test" type="button">Test</button>
+                            </div>
+                            <span id="sc-test-simkl-status" class="sc-settings-test-status"></span>
+                            <div id="sc-simkl-signin" class="sc-hidden">
+                                <div class="sc-settings-note" id="sc-simkl-signin-help"></div>
+                                <div class="sc-simkl-set-code" id="sc-simkl-signin-code"></div>
+                                <canvas id="sc-simkl-signin-qr" class="sc-simkl-set-qr"></canvas>
+                            </div>
+                            <span class="sc-settings-note">Register a free app at simkl.com/settings/developer (choose <b>TV, devices &amp; command line</b>), paste its Client ID, then press Test to sign in. No secret needed.</span>
+                            <a class="sc-settings-link" href="https://simkl.com/settings/developer/" target="_blank" rel="noopener">
+                                Register a free Simkl app ↗
+                            </a>
+                            <label class="sc-settings-label" style="margin-top:8px">
+                                Show the card at
+                                <span class="sc-settings-note" id="sc-simkl-threshold-val">${simklClampThreshold(simklThresholdRaw())}% of the movie</span>
+                            </label>
+                            <input type="range" id="sc-input-simkl-threshold" class="sc-settings-range"
+                                min="${SIMKL_THRESHOLD_MIN}" max="${SIMKL_THRESHOLD_MAX}" step="5" value="${simklClampThreshold(simklThresholdRaw())}" />
+                        </div>
+                    </div>
+
                     <div class="sc-settings-group">
                         <label class="sc-settings-label">CyTube Account
                             <span class="sc-settings-note">Opens the CyTube login page — your settings here are saved first</span>
@@ -11223,7 +12915,7 @@
                                 <input type="checkbox" id="sc-input-triviapopup" ${triviaPopupEnabled() ? "checked" : ""} />
                                 <span class="sc-toggle-text">Pop-up trivia bubbles during movies (Experimental)</span>
                             </span>
-                            <span class="sc-settings-note">Shows a small IMDb trivia fact over the video, VH1 Pop-up Video style, then fades out. Off by default. Cycles without repeats and stops once all trivia for the current movie has been shown.</span>
+                            <span class="sc-settings-note">Shows a small trivia fact over the video, VH1 Pop-up Video style, then fades out. Off by default. Movies with curated Pop-up Video trivia get hand-picked facts timed to the movie — everyone in the channel sees each one at the same moment, and ones you missed by joining late show up in the gaps. Other movies fall back to IMDb trivia at random intervals. ${isTv ? "Movies Joe Bob Briggs reviewed open with his Drive-In Totals card. " : ""}Facts never repeat, and that's remembered for a few hours so an app restart won't re-show them.</span>
                         </label>
                         <label class="sc-settings-label" style="margin-top:8px">
                             Pop-up frequency
@@ -11380,6 +13072,70 @@
           }
         });
       }
+      const simklEnable = document.getElementById("sc-input-simkl-enable");
+      const simklFields = document.getElementById("sc-simkl-fields");
+      if (simklEnable && simklFields) {
+        simklEnable.addEventListener("change", () => {
+          setKey(LS_SIMKL_ENABLED, simklEnable.checked ? "on" : "off");
+          simklFields.classList.toggle("sc-hidden", !simklEnable.checked);
+          if (simklEnable.checked) {
+            const i = document.getElementById("sc-input-simkl-clientid");
+            if (i) {
+              if (tvNavState.setFocus) tvNavState.setFocus(i);
+              else i.focus();
+            }
+          }
+        });
+      }
+      (function wireSimklTest() {
+        const btn = document.getElementById("sc-test-simkl");
+        const input = document.getElementById("sc-input-simkl-clientid");
+        const status = document.getElementById("sc-test-simkl-status");
+        const signin = document.getElementById("sc-simkl-signin");
+        if (!btn || !input || !status || !signin) return;
+        let handle = null;
+        const ui = {
+          setStatus: (text, kind) => {
+            status.className = "sc-settings-test-status" + (kind ? " sc-test-" + kind : "");
+            status.textContent = text;
+          },
+          showCode: (dev) => {
+            signin.classList.toggle("sc-hidden", !dev);
+            if (!dev) return;
+            const link = simklVerificationLink(dev);
+            document.getElementById("sc-simkl-signin-help").textContent = (isTv ? "Scan with your phone, or go to " : "Go to ") + link.shown + " and enter:";
+            document.getElementById("sc-simkl-signin-code").textContent = dev.user_code;
+            const qr = document.getElementById("sc-simkl-signin-qr");
+            try {
+              renderQrToCanvas(qr, link.url, 4);
+              qr.classList.remove("sc-hidden");
+            } catch (e) {
+              qr.classList.add("sc-hidden");
+            }
+          },
+          isOpen: () => overlay.isConnected
+        };
+        btn.addEventListener("click", async () => {
+          if (handle) {
+            handle.cancelled = true;
+            return;
+          }
+          handle = { cancelled: false };
+          btn.textContent = "Cancel";
+          try {
+            await simklConnectAndVerify(input.value.trim(), ui, handle);
+          } finally {
+            handle = null;
+            btn.textContent = "Test";
+          }
+        });
+      })();
+      const simklThreshold = document.getElementById("sc-input-simkl-threshold");
+      const simklThresholdVal = document.getElementById("sc-simkl-threshold-val");
+      if (simklThreshold) simklThreshold.addEventListener("input", () => {
+        if (simklThresholdVal) simklThresholdVal.textContent = simklThreshold.value + "% of the movie";
+        setKey(LS_SIMKL_THRESHOLD, simklThreshold.value);
+      });
       const persistSettings = () => {
         const enabled = tmdbEnable && tmdbEnable.checked;
         const input = document.getElementById("sc-input-tmdb");
@@ -11387,6 +13143,8 @@
         const osEnabled = osEnable && osEnable.checked;
         const osInput = document.getElementById("sc-input-opensubtitles");
         setKey(LS_OPENSUBTITLES, osEnabled && osInput ? osInput.value.trim() : "");
+        const simklInput = document.getElementById("sc-input-simkl-clientid");
+        if (simklInput) setKey(LS_SIMKL_CLIENT_ID, simklInput.value.trim());
         const sc = document.getElementById("sc-input-spellcheck");
         if (sc) setKey(LS_SPELLCHECK, sc.checked ? "on" : "off");
         movieState.movieLinkCache = {};
@@ -11733,6 +13491,7 @@
       initUpdateCheck();
       loadLastAiredSheet();
       triviaPopupBoot();
+      simklBoot();
       initSubtitles();
       if (!localStorage.getItem(LS_ONBOARDED)) {
         setTimeout(openSettingsModal, 1200);
@@ -11740,7 +13499,7 @@
       initPosterStrip();
       initUpNextButton();
       const style = document.createElement("style");
-      style.textContent = base_default + overlays_default;
+      style.textContent = base_default + overlays_default + simkl_default;
       document.head.appendChild(style);
     }
     if (document.readyState === "complete") {

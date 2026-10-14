@@ -449,6 +449,106 @@
                 line-height: 1.3 !important;
                 margin-top: 6px !important;
             }
+            /* ===== DRIVE-IN TOTALS CARD ===== */
+            /* MonsterVision's on-screen Drive-In Totals: no panel, shadowed
+               text right over the picture. left/top/width and the two font
+               sizes (--sc-tp-head / --sc-tp-line) are set inline by
+               showDriveInCard() (cards/driveincard.js) from the picture's size.
+               TV only -- phones list the same data in the Trivia card. */
+            #sc-tp-card {
+                position: fixed !important;
+                z-index: 15400 !important; /* just under the bubble */
+                pointer-events: none !important;
+                text-align: center !important;
+                font-family: 'Patua One', Georgia, serif !important;
+                font-weight: 400 !important;
+                opacity: 1 !important;
+                transition: opacity 0.8s ease !important;
+            }
+            #sc-tp-card.sc-tp-card-out { opacity: 0 !important; }
+            #sc-tp-card .sc-tp-card-h {
+                color: #a6e27a !important;
+                font-size: var(--sc-tp-head) !important;
+                line-height: 1.02 !important;
+                text-shadow: 2px 2px 0 #10140c, 0 0 10px rgba(0,0,0,0.75) !important;
+                opacity: 0 !important;
+                transition: opacity 0.6s !important;
+            }
+            #sc-tp-card .sc-tp-card-rule {
+                height: 3px !important;
+                width: 0 !important;
+                margin: 8px auto 10px !important;
+                background: #c8352b !important;
+                box-shadow: 1px 1px 0 #000 !important;
+                transition: width 0.6s 0.2s !important;
+            }
+            #sc-tp-card.sc-tp-card-on .sc-tp-card-h { opacity: 1 !important; }
+            /* Academy Award slide: header fades out, swaps text, fades back in
+               smaller (two long lines instead of "Drive-In / Totals"). */
+            #sc-tp-card.sc-tp-card-on .sc-tp-card-h.sc-tp-card-swap { opacity: 0 !important; }
+            #sc-tp-card.sc-tp-card-awards .sc-tp-card-h { font-size: calc(var(--sc-tp-head) * 0.62) !important; }
+            /* Nominees can run long (role + quote): smaller text, same box, so
+               even a 300-char entry fits whole before the track scrolls. */
+            #sc-tp-card.sc-tp-card-awards .sc-tp-card-line { font-size: 0.8em !important; }
+            #sc-tp-card.sc-tp-card-on .sc-tp-card-rule { width: 80% !important; }
+            #sc-tp-card .sc-tp-card-lines {
+                position: relative !important;
+                overflow: hidden !important;
+                font-size: var(--sc-tp-line) !important;
+                height: calc(var(--sc-tp-line) * 10.5) !important;
+                transition: opacity 0.5s !important;
+            }
+            #sc-tp-card .sc-tp-card-lines.sc-tp-card-scrolling {
+                -webkit-mask-image: linear-gradient(transparent 0, #000 14%) !important;
+                mask-image: linear-gradient(transparent 0, #000 14%) !important;
+            }
+            #sc-tp-card .sc-tp-card-lines.sc-tp-card-gone { opacity: 0 !important; }
+            #sc-tp-card .sc-tp-card-track {
+                position: absolute !important;
+                left: 0 !important;
+                right: 0 !important;
+                top: 0 !important;
+                transition: transform 0.45s ease !important;
+            }
+            /* Long counts wrap (balanced), never ellipsized. */
+            #sc-tp-card .sc-tp-card-line {
+                color: #f4e8c6 !important;
+                line-height: 1.22 !important;
+                margin-top: 0.32em !important;
+                text-wrap: balance !important;
+                text-shadow: 2px 2px 0 #000, 0 0 6px rgba(0,0,0,0.85) !important;
+                opacity: 0 !important;
+                transform: translateY(8px) !important;
+                transition: opacity 0.35s, transform 0.35s !important;
+            }
+            #sc-tp-card .sc-tp-card-line.sc-tp-card-in { opacity: 1 !important; transform: none !important; }
+            #sc-tp-card .sc-tp-card-verdict {
+                position: absolute !important;
+                left: 0 !important;
+                right: 0 !important;
+                top: 46% !important;
+                opacity: 0 !important;
+                transition: opacity 0.4s !important;
+            }
+            #sc-tp-card .sc-tp-card-verdict.sc-tp-card-on { opacity: 1 !important; }
+            #sc-tp-card .sc-tp-card-stars { display: flex !important; justify-content: center !important; gap: 4% !important; }
+            #sc-tp-card .sc-tp-card-stars svg {
+                width: 17% !important;
+                height: auto !important;
+                filter: drop-shadow(2px 2px 0 #000) drop-shadow(0 0 6px rgba(0,0,0,0.6)) !important;
+                transform: scale(0) !important;
+                transition: transform 0.35s cubic-bezier(.3,1.6,.5,1) !important;
+            }
+            #sc-tp-card .sc-tp-card-stars svg.sc-tp-card-in { transform: scale(1) !important; }
+            #sc-tp-card .sc-tp-card-says {
+                color: #f4e8c6 !important;
+                font-size: calc(var(--sc-tp-line) * 1.1) !important;
+                margin-top: 10px !important;
+                text-shadow: 2px 2px 0 #000, 0 0 6px rgba(0,0,0,0.85) !important;
+                opacity: 0 !important;
+                transition: opacity 0.5s !important;
+            }
+            #sc-tp-card .sc-tp-card-says.sc-tp-card-on { opacity: 1 !important; }
             .sc-drm-btn:focus { outline: 3px solid #fff !important; outline-offset: 2px !important; }
 
             /* #sc-subtitles-btn's own base visual style lives in base.css (matches
