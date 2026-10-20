@@ -2,7 +2,7 @@ import { fetchImdbTrivia, fetchCastAndDirector, fetchPersonTrivia, fetchPersonKn
 import { npState } from './nowplaying.js';
 import { isYouTubeMedia } from '../titleinject.js';
 import { triviaPopupEnabled, triviaPopupFrequency } from '../store.js';
-import { inSubtitlesMode } from './subtitles.js';
+import { inSubtitlesMode, addSubtitleTrivia, clearSubtitleTrivia, SUBTITLE_LINE_TTL_MS } from './subtitles.js';
 import { isMovieSubtitlesVisible } from '../subtitles/overlay.js';
 import { isTv } from '../tvdetect.js';
 import { tpSafeImageUrl, tpDueFact, tpCatchUpFact, tpDriveInAction, TP_DRIVEIN_SEEN_KEY } from '../trivia/curated.js';
@@ -155,6 +155,7 @@ function _tpShuffle(arr) {
 function _tpResetForNewMovie(id) {
     clearTimeout(_tpPopTimer); _tpPopTimer = null;
     _tpDismissBubble(true); // hard-remove instantly -- stale trivia, no exit animation
+    clearSubtitleTrivia();
     hideDriveInCard(true);
     _tpDriveIn = null;
     _tpQueue = [];
@@ -570,19 +571,11 @@ function _tpRandomPosition(boxWidthPx, boxHeightPx) {
     }
 
     // Prefer the bottom third of the video area; fall back to whatever vertical room
-    // actually fits if the video area is too short for that. In the Subtitles chat mode,
-    // the bottom of the screen is already spoken for by the subtitle pills (cards/
-    // subtitles.js) -- landing a bubble there would overlap them, so prefer the top half
-    // instead there, same fallback-if-too-tall idea.
-    let topMinPx, topMaxPx;
-    if (inSubtitlesMode()) {
-        topMinPx = rect.top + marginPx;
-        topMaxPx = Math.min(rect.bottom - marginPx - boxHeightPx, rect.top + rect.height / 2);
-    } else {
-        const bottomThirdTopPx = rect.top + rect.height * (2 / 3);
-        topMinPx = Math.max(rect.top + marginPx, bottomThirdTopPx);
-        topMaxPx = rect.bottom - marginPx - boxHeightPx;
-    }
+    // actually fits if the video area is too short for that. (Subtitles chat mode never
+    // gets here -- trivia joins the subtitle pills there, see _tpShowSubtitleTrivia.)
+    const bottomThirdTopPx = rect.top + rect.height * (2 / 3);
+    let topMinPx = Math.max(rect.top + marginPx, bottomThirdTopPx);
+    let topMaxPx = rect.bottom - marginPx - boxHeightPx;
     if (topMaxPx < topMinPx) topMinPx = topMaxPx = Math.max(rect.top + marginPx, rect.bottom - marginPx - boxHeightPx);
 
     return {
@@ -690,9 +683,25 @@ function _tpAddHeadshot(svg, url) {
     if (ring) svg.appendChild(ring); // ring above the photo
 }
 
+// Subtitles chat mode: the fact flows through the subtitle pill stream (cards/subtitles.js)
+// instead of a free-floating bubble -- one area of on-screen text, not two. Styled as its own
+// pill (bone-white + red badge, overlays.css .sc-subtitle-trivia) so it never reads as chat.
+// Icon only, no headshot: the pill is re-rendered via innerHTML on every chat message, and
+// _tpAddHeadshot's DOM-built <image> wouldn't survive that.
+function _tpShowSubtitleTrivia(fact) {
+    const icon = TP_ICON_SVGS[tpPickIconKey(fact.icon)];
+    const bylineHtml = fact.byline ? `<span class="sc-subtitle-trivia-byline">${_escHtml(fact.byline)}</span>` : '';
+    addSubtitleTrivia(`<div class="sc-subtitle-pill sc-subtitle-trivia">` +
+        `<svg class="sc-subtitle-trivia-badge" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg">` +
+        `<circle cx="30" cy="30" r="27" fill="#000"/>` +
+        `<circle cx="30" cy="30" r="27" fill="none" stroke="#c81d25" stroke-width="3"/>${icon}</svg>` +
+        `<span class="sc-subtitle-trivia-text">${_escHtml(fact.text)}${bylineHtml}</span></div>`, SUBTITLE_LINE_TTL_MS);
+}
+
 function showTriviaBubble(fact) {
     _tpDismissBubble(true); // no double-stacking if one was somehow still up
     _tpPlayPopSound();
+    if (inSubtitlesMode()) { _tpShowSubtitleTrivia(fact); return; }
 
     _tpBubbleEl = document.createElement('div');
     _tpBubbleEl.id = 'sc-tp-bubble';
@@ -752,6 +761,7 @@ function _tpApplyMute() {
     if (_tpMuted) {
         clearTimeout(_tpPopTimer); _tpPopTimer = null;
         _tpDismissBubble(true); // pull whatever's on screen right now
+        clearSubtitleTrivia();
         hideDriveInCard(false);
     } else if (!_tpTimeline && !_tpExhausted && _tpQueue.length) {
         // (Timeline mode needs nothing -- the heartbeat picks up the next due fact.)

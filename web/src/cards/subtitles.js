@@ -33,6 +33,9 @@ import { emojiSlotHtml } from '../emojisupport.js';
 const DEFAULT_OPACITY   = 0.6;
 const DEFAULT_FONTSIZE  = 15;
 const DEFAULT_LINES     = 3;
+// How long any subtitle line (chat or pop-up trivia) stays up before fading out on its own,
+// so a quiet chat clears the screen instead of leaving the last few lines up indefinitely.
+export const SUBTITLE_LINE_TTL_MS = 60 * 1000;
 
 export function clampLines(n) {
     const v = Math.round(Number(n));
@@ -98,6 +101,54 @@ function ensureContainer() {
     return el;
 }
 
+/* Pop-up trivia (cards/triviapopup.js) flows through this same overlay while in Subtitles
+   mode instead of floating a separate bubble over the movie -- one stream of on-screen
+   text, not two. Each fact is anchored to whatever chat message was newest when it popped,
+   so it slots into the chronology and scrolls off as newer chat arrives, same as any line;
+   it also expires on its own (ttl) so a quiet chat doesn't leave stale trivia up for ages. */
+let _triviaLines = []; // { html, anchor: chat-msg element | null, timer }
+// When each chat-msg element was first rendered here -- CyTube's own .timestamp is display
+// text, so arrival is tracked locally. WeakMap: entries go away as #messagebuffer trims.
+const _chatSeenAt = new WeakMap();
+let _chatExpiryTimer = null;
+
+function _lastChatMsg() {
+    const buf = document.getElementById('messagebuffer');
+    const all = buf ? buf.querySelectorAll('[class*="chat-msg-"]') : [];
+    return all.length ? all[all.length - 1] : null;
+}
+
+export function addSubtitleTrivia(html, ttlMs) {
+    const entry = { html, anchor: _lastChatMsg(), timer: null };
+    entry.timer = setTimeout(() => {
+        _triviaLines = _triviaLines.filter(t => t !== entry);
+        refreshSubtitles();
+    }, ttlMs);
+    _triviaLines.push(entry);
+    refreshSubtitles();
+}
+
+export function clearSubtitleTrivia() {
+    if (!_triviaLines.length) return;
+    _triviaLines.forEach(t => clearTimeout(t.timer));
+    _triviaLines = [];
+    refreshSubtitles();
+}
+
+// Interleaves trivia entries into the chat-element list (each right after its anchor; a null
+// anchor -- chat was empty when it popped -- goes first) and keeps the newest maxLines items.
+// A trivia whose anchor has scrolled out of the window (or been trimmed from #messagebuffer)
+// is older than everything shown, so it's dropped. Pure -- exported for tests.
+export function mergeSubtitleItems(chatEls, trivia, maxLines) {
+    const recent = chatEls.slice(-(maxLines + trivia.length));
+    const items = trivia.filter(t => t.anchor === null).map(t => ({ trivia: t }));
+    recent.forEach(el => {
+        items.push({ el });
+        trivia.forEach(t => { if (t.anchor === el) items.push({ trivia: t }); });
+    });
+    return items.slice(-maxLines);
+}
+
 export function inSubtitlesMode() {
     try { return localStorage.getItem('sc_chat_mode') === 'subtitles'; } catch (e) { return false; }
 }
@@ -115,8 +166,22 @@ export function refreshSubtitles() {
 
     const maxLines = getSubtitleLines();
     const all = [...buf.querySelectorAll('[class*="chat-msg-"]')];
-    const lines = all.slice(-maxLines).map(extractSubtitleLine).filter(Boolean);
-    container.innerHTML = lines.map(renderSubtitleLine).join('');
+    const now = Date.now();
+    all.forEach(el => { if (!_chatSeenAt.has(el)) _chatSeenAt.set(el, now); });
+    // Expire after merging, not before: an aged-out message is always older than anything
+    // still up, so it just leaves a gap at the top -- and trivia anchored to it keeps its slot.
+    const items = mergeSubtitleItems(all, _triviaLines, maxLines)
+        .filter(item => item.trivia || now - _chatSeenAt.get(item.el) < SUBTITLE_LINE_TTL_MS);
+    container.innerHTML = items.map(item => {
+        if (item.trivia) return item.trivia.html;
+        const line = extractSubtitleLine(item.el);
+        return line ? renderSubtitleLine(line) : '';
+    }).join('');
+
+    // Re-render when the oldest visible chat line ages out (trivia has its own timer).
+    clearTimeout(_chatExpiryTimer);
+    const ages = items.filter(i => i.el).map(i => _chatSeenAt.get(i.el));
+    if (ages.length) _chatExpiryTimer = setTimeout(refreshSubtitles, Math.min(...ages) + SUBTITLE_LINE_TTL_MS - now + 50);
 }
 
 // Boot: creates the (initially empty) pill container and applies whatever appearance

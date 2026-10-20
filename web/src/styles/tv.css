@@ -1513,6 +1513,24 @@
             .sc-subtitle-pill img { height: clamp(24px, 1.8em, 40px) !important; width: auto !important; vertical-align: middle !important; }
             .sc-subtitle-emoji { display: inline-block !important; width: 1.3em !important; text-align: center !important; margin-right: 2px !important; }
             .sc-subtitle-name { font-weight: 700 !important; }
+            /* Pop-up trivia riding the subtitle stream (cards/triviapopup.js
+               _tpShowSubtitleTrivia): same slot as a chat line, but the Pop-up Video
+               bubble's bone-white / black / red-badge look so it never reads as chat. */
+            .sc-subtitle-pill.sc-subtitle-trivia {
+                display: flex !important; align-items: center !important; gap: 8px !important;
+                background: rgba(244,241,234,0.92) !important;
+                color: #0a0a0a !important;
+                border: 2px solid #000 !important; border-left: 4px solid #c81d25 !important;
+                border-radius: 14px !important;
+                padding: 5px 14px 5px 8px !important;
+                font-weight: 700 !important; text-shadow: none !important;
+                box-shadow: 0 3px 10px rgba(0,0,0,0.5) !important;
+            }
+            .sc-subtitle-trivia-badge { flex: 0 0 auto !important; width: 1.9em !important; height: 1.9em !important; }
+            .sc-subtitle-trivia-byline {
+                display: block !important; color: #4a4a4a !important;
+                font-size: 0.8em !important; font-weight: 400 !important; margin-top: 2px !important;
+            }
 
             /* Sidebar: header matches the chat panel exactly (same box, same padding) */
             body.sc-horizontal #sc-chat-header {

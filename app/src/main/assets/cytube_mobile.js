@@ -3426,6 +3426,7 @@
   var DEFAULT_OPACITY = 0.6;
   var DEFAULT_FONTSIZE = 15;
   var DEFAULT_LINES = 3;
+  var SUBTITLE_LINE_TTL_MS = 60 * 1e3;
   function clampLines(n) {
     const v = Math.round(Number(n));
     return Number.isFinite(v) ? Math.min(3, Math.max(1, v)) : DEFAULT_LINES;
@@ -3479,6 +3480,40 @@
     }
     return el;
   }
+  var _triviaLines = [];
+  var _chatSeenAt = /* @__PURE__ */ new WeakMap();
+  var _chatExpiryTimer = null;
+  function _lastChatMsg() {
+    const buf2 = document.getElementById("messagebuffer");
+    const all = buf2 ? buf2.querySelectorAll('[class*="chat-msg-"]') : [];
+    return all.length ? all[all.length - 1] : null;
+  }
+  function addSubtitleTrivia(html, ttlMs) {
+    const entry = { html, anchor: _lastChatMsg(), timer: null };
+    entry.timer = setTimeout(() => {
+      _triviaLines = _triviaLines.filter((t) => t !== entry);
+      refreshSubtitles();
+    }, ttlMs);
+    _triviaLines.push(entry);
+    refreshSubtitles();
+  }
+  function clearSubtitleTrivia() {
+    if (!_triviaLines.length) return;
+    _triviaLines.forEach((t) => clearTimeout(t.timer));
+    _triviaLines = [];
+    refreshSubtitles();
+  }
+  function mergeSubtitleItems(chatEls, trivia, maxLines) {
+    const recent = chatEls.slice(-(maxLines + trivia.length));
+    const items = trivia.filter((t) => t.anchor === null).map((t) => ({ trivia: t }));
+    recent.forEach((el) => {
+      items.push({ el });
+      trivia.forEach((t) => {
+        if (t.anchor === el) items.push({ trivia: t });
+      });
+    });
+    return items.slice(-maxLines);
+  }
   function inSubtitlesMode() {
     try {
       return localStorage.getItem("sc_chat_mode") === "subtitles";
@@ -3493,8 +3528,19 @@
     if (!buf2) return;
     const maxLines = getSubtitleLines();
     const all = [...buf2.querySelectorAll('[class*="chat-msg-"]')];
-    const lines = all.slice(-maxLines).map(extractSubtitleLine).filter(Boolean);
-    container.innerHTML = lines.map(renderSubtitleLine).join("");
+    const now = Date.now();
+    all.forEach((el) => {
+      if (!_chatSeenAt.has(el)) _chatSeenAt.set(el, now);
+    });
+    const items = mergeSubtitleItems(all, _triviaLines, maxLines).filter((item) => item.trivia || now - _chatSeenAt.get(item.el) < SUBTITLE_LINE_TTL_MS);
+    container.innerHTML = items.map((item) => {
+      if (item.trivia) return item.trivia.html;
+      const line = extractSubtitleLine(item.el);
+      return line ? renderSubtitleLine(line) : "";
+    }).join("");
+    clearTimeout(_chatExpiryTimer);
+    const ages = items.filter((i) => i.el).map((i) => _chatSeenAt.get(i.el));
+    if (ages.length) _chatExpiryTimer = setTimeout(refreshSubtitles, Math.min(...ages) + SUBTITLE_LINE_TTL_MS - now + 50);
   }
   function initSubtitles() {
     ensureContainer2();
@@ -3763,6 +3809,7 @@
     clearTimeout(_tpPopTimer);
     _tpPopTimer = null;
     _tpDismissBubble(true);
+    clearSubtitleTrivia();
     hideDriveInCard(true);
     _tpDriveIn = null;
     _tpQueue = [];
@@ -4076,15 +4123,9 @@
       const mid = rect.left + rect.width / 2;
       leftMinPx = leftMaxPx = mid;
     }
-    let topMinPx, topMaxPx;
-    if (inSubtitlesMode()) {
-      topMinPx = rect.top + marginPx;
-      topMaxPx = Math.min(rect.bottom - marginPx - boxHeightPx, rect.top + rect.height / 2);
-    } else {
-      const bottomThirdTopPx = rect.top + rect.height * (2 / 3);
-      topMinPx = Math.max(rect.top + marginPx, bottomThirdTopPx);
-      topMaxPx = rect.bottom - marginPx - boxHeightPx;
-    }
+    const bottomThirdTopPx = rect.top + rect.height * (2 / 3);
+    let topMinPx = Math.max(rect.top + marginPx, bottomThirdTopPx);
+    let topMaxPx = rect.bottom - marginPx - boxHeightPx;
     if (topMaxPx < topMinPx) topMinPx = topMaxPx = Math.max(rect.top + marginPx, rect.bottom - marginPx - boxHeightPx);
     return {
       leftPx: leftMinPx + Math.random() * (leftMaxPx - leftMinPx),
@@ -4171,9 +4212,18 @@
     const ring = svg.querySelector("circle[stroke]");
     if (ring) svg.appendChild(ring);
   }
+  function _tpShowSubtitleTrivia(fact) {
+    const icon = TP_ICON_SVGS[tpPickIconKey(fact.icon)];
+    const bylineHtml = fact.byline ? `<span class="sc-subtitle-trivia-byline">${_escHtml4(fact.byline)}</span>` : "";
+    addSubtitleTrivia(`<div class="sc-subtitle-pill sc-subtitle-trivia"><svg class="sc-subtitle-trivia-badge" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg"><circle cx="30" cy="30" r="27" fill="#000"/><circle cx="30" cy="30" r="27" fill="none" stroke="#c81d25" stroke-width="3"/>${icon}</svg><span class="sc-subtitle-trivia-text">${_escHtml4(fact.text)}${bylineHtml}</span></div>`, SUBTITLE_LINE_TTL_MS);
+  }
   function showTriviaBubble(fact) {
     _tpDismissBubble(true);
     _tpPlayPopSound();
+    if (inSubtitlesMode()) {
+      _tpShowSubtitleTrivia(fact);
+      return;
+    }
     _tpBubbleEl = document.createElement("div");
     _tpBubbleEl.id = "sc-tp-bubble";
     const icon = TP_ICON_SVGS[tpPickIconKey(fact.icon)];
@@ -4219,6 +4269,7 @@
       clearTimeout(_tpPopTimer);
       _tpPopTimer = null;
       _tpDismissBubble(true);
+      clearSubtitleTrivia();
       hideDriveInCard(false);
     } else if (!_tpTimeline && !_tpExhausted && _tpQueue.length) {
       clearTimeout(_tpPopTimer);
@@ -12280,6 +12331,24 @@
             .sc-subtitle-pill img { height: clamp(24px, 1.8em, 40px) !important; width: auto !important; vertical-align: middle !important; }
             .sc-subtitle-emoji { display: inline-block !important; width: 1.3em !important; text-align: center !important; margin-right: 2px !important; }
             .sc-subtitle-name { font-weight: 700 !important; }
+            /* Pop-up trivia riding the subtitle stream (cards/triviapopup.js
+               _tpShowSubtitleTrivia): same slot as a chat line, but the Pop-up Video
+               bubble's bone-white / black / red-badge look so it never reads as chat. */
+            .sc-subtitle-pill.sc-subtitle-trivia {
+                display: flex !important; align-items: center !important; gap: 8px !important;
+                background: rgba(244,241,234,0.92) !important;
+                color: #0a0a0a !important;
+                border: 2px solid #000 !important; border-left: 4px solid #c81d25 !important;
+                border-radius: 14px !important;
+                padding: 5px 14px 5px 8px !important;
+                font-weight: 700 !important; text-shadow: none !important;
+                box-shadow: 0 3px 10px rgba(0,0,0,0.5) !important;
+            }
+            .sc-subtitle-trivia-badge { flex: 0 0 auto !important; width: 1.9em !important; height: 1.9em !important; }
+            .sc-subtitle-trivia-byline {
+                display: block !important; color: #4a4a4a !important;
+                font-size: 0.8em !important; font-weight: 400 !important; margin-top: 2px !important;
+            }
 
             /* Sidebar: header matches the chat panel exactly (same box, same padding) */
             body.sc-horizontal #sc-chat-header {

@@ -144,3 +144,20 @@ test('getSubtitleOpacity/getSubtitleFontSize/getSubtitleLines: defaults and clam
     store.set('sc_subtitle_lines', '2');
     assert.strictEqual(getSubtitleLines(), 2);
 });
+
+test('mergeSubtitleItems: trivia slots in after its anchor and scrolls off with newer chat', async () => {
+    globalThis.window = {};
+    const { mergeSubtitleItems } = await import('../src/cards/subtitles.js?t=' + Date.now());
+    const [a, b, c, d] = ['a', 'b', 'c', 'd'].map(id => ({ id }));
+    const t = { anchor: b };
+    const label = items => items.map(i => i.trivia ? 'T' : i.el.id).join('');
+
+    assert.strictEqual(label(mergeSubtitleItems([a, b], [t], 3)), 'abT');
+    assert.strictEqual(label(mergeSubtitleItems([a, b, c], [t], 3)), 'bTc');
+    assert.strictEqual(label(mergeSubtitleItems([a, b, c, d], [t], 3)), 'Tcd');
+    assert.strictEqual(label(mergeSubtitleItems([a, b, c, d], [t], 2)), 'cd');
+    // Anchor trimmed out of #messagebuffer -> older than everything shown, dropped.
+    assert.strictEqual(label(mergeSubtitleItems([c, d], [t], 3)), 'cd');
+    // Popped while chat was empty -> leads.
+    assert.strictEqual(label(mergeSubtitleItems([a], [{ anchor: null }], 3)), 'Ta');
+});
