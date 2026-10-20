@@ -2737,12 +2737,29 @@
     return true;
   }
   function _npTitleFontSize(text) {
-    const base = isTv ? 60 : document.body.classList.contains("sc-vertical") ? 30 : 44;
+    const base = isTv ? 52 : document.body.classList.contains("sc-vertical") ? 30 : 44;
     let scale = 1;
     if (text.length > 60) scale = 0.5;
     else if (text.length > 40) scale = 0.65;
     else if (text.length > 25) scale = 0.8;
     return Math.round(base * scale);
+  }
+  var _NP_TOP_MARGIN = 0.05;
+  function _npFitToScreen(titleEl, startPx) {
+    const content = document.getElementById("sc-np-content");
+    const info = document.getElementById("sc-np-info");
+    const ov = document.getElementById("sc-np-overview");
+    if (!content || !info || !ov) return;
+    ov.style.removeProperty("max-height");
+    const avail = () => content.getBoundingClientRect().bottom - window.innerHeight * _NP_TOP_MARGIN;
+    const fits = () => info.getBoundingClientRect().height <= avail();
+    for (let px = startPx; !fits() && px > startPx * 0.6; px -= 2) {
+      titleEl.style.setProperty("font-size", px - 2 + "px", "important");
+    }
+    for (const em of [4.5, 3]) {
+      if (fits()) break;
+      ov.style.setProperty("max-height", em + "em", "important");
+    }
   }
   var _npScrollTimer = null;
   var _npScrollRaf = null;
@@ -2857,7 +2874,8 @@
     const epTag = episodeTag(data.season, data.episode);
     const titleText = title + year + (epTag ? ` · ${epTag}` : "") + (data.episodeName ? ` — ${data.episodeName}` : "");
     titleEl.textContent = titleText;
-    titleEl.style.setProperty("font-size", _npTitleFontSize(titleText) + "px", "important");
+    const titlePx = _npTitleFontSize(titleText);
+    titleEl.style.setProperty("font-size", titlePx + "px", "important");
     card.querySelector("#sc-np-overview").textContent = data.overview || "";
     const metaParts = [];
     if (data.rating) metaParts.push(`⭐ ${data.rating}`);
@@ -2886,6 +2904,7 @@
       clearInterval(_npProgTimer);
       if (progWrap) progWrap.style.display = "none";
     }
+    _npFitToScreen(titleEl, titlePx);
     _autoScrollOverview();
     clearTimeout(_npHideTimer);
     if (opts.autoHide) {
@@ -3426,7 +3445,7 @@
   var DEFAULT_OPACITY = 0.6;
   var DEFAULT_FONTSIZE = 15;
   var DEFAULT_LINES = 3;
-  var SUBTITLE_LINE_TTL_MS = 60 * 1e3;
+  var SUBTITLE_LINE_TTL_MS = 45 * 1e3;
   function clampLines(n) {
     const v = Math.round(Number(n));
     return Number.isFinite(v) ? Math.min(3, Math.max(1, v)) : DEFAULT_LINES;
@@ -4213,17 +4232,16 @@
     if (ring) svg.appendChild(ring);
   }
   function _tpShowSubtitleTrivia(fact) {
-    const icon = TP_ICON_SVGS[tpPickIconKey(fact.icon)];
     const bylineHtml = fact.byline ? `<span class="sc-subtitle-trivia-byline">${_escHtml4(fact.byline)}</span>` : "";
-    addSubtitleTrivia(`<div class="sc-subtitle-pill sc-subtitle-trivia"><svg class="sc-subtitle-trivia-badge" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg"><circle cx="30" cy="30" r="27" fill="#000"/><circle cx="30" cy="30" r="27" fill="none" stroke="#c81d25" stroke-width="3"/>${icon}</svg><span class="sc-subtitle-trivia-text">${_escHtml4(fact.text)}${bylineHtml}</span></div>`, SUBTITLE_LINE_TTL_MS);
+    addSubtitleTrivia(`<div class="sc-subtitle-pill sc-subtitle-trivia">${_escHtml4(fact.text)}${bylineHtml}</div>`, SUBTITLE_LINE_TTL_MS);
   }
   function showTriviaBubble(fact) {
     _tpDismissBubble(true);
-    _tpPlayPopSound();
     if (inSubtitlesMode()) {
       _tpShowSubtitleTrivia(fact);
       return;
     }
+    _tpPlayPopSound();
     _tpBubbleEl = document.createElement("div");
     _tpBubbleEl.id = "sc-tp-bubble";
     const icon = TP_ICON_SVGS[tpPickIconKey(fact.icon)];
@@ -11248,6 +11266,7 @@
                 -webkit-box-orient: vertical !important; overflow: hidden !important;
             }
             #sc-np-meta {
+                white-space: pre-wrap !important; /* keep the wide gaps between rating/runtime/genres */
                 font-size: 17px !important; color: rgba(255,255,255,0.82) !important;
                 margin-bottom: 16px !important; font-weight: 500 !important;
             }
@@ -11335,10 +11354,12 @@
 
             /* TV: scale the card up for the couch */
             body.sc-tv #sc-np-poster { width: 260px !important; }
-            body.sc-tv #sc-np-title { font-size: 60px !important; }
-            body.sc-tv #sc-np-meta { font-size: 22px !important; }
-            body.sc-tv #sc-np-overview { font-size: 20px !important; }
-            body.sc-tv .sc-np-chip { font-size: 16px !important; padding: 7px 16px !important; }
+            body.sc-tv #sc-np-title { font-size: 52px !important; }
+            body.sc-tv #sc-np-meta { font-size: 20px !important; margin-bottom: 12px !important; }
+            body.sc-tv #sc-np-overview { font-size: 19px !important; margin-bottom: 14px !important; }
+            body.sc-tv #sc-np-chips { gap: 6px !important; }
+            body.sc-tv .sc-np-chip { font-size: 14px !important; padding: 5px 12px !important; }
+            body.sc-tv #sc-np-progress { margin-top: 14px !important; }
 
             /* ── UP NEXT LINK (subtle, top-right next to Coming Attractions) ── */
             #sc-up-next-btn {
@@ -12332,21 +12353,13 @@
             .sc-subtitle-emoji { display: inline-block !important; width: 1.3em !important; text-align: center !important; margin-right: 2px !important; }
             .sc-subtitle-name { font-weight: 700 !important; }
             /* Pop-up trivia riding the subtitle stream (cards/triviapopup.js
-               _tpShowSubtitleTrivia): same slot as a chat line, but the Pop-up Video
-               bubble's bone-white / black / red-badge look so it never reads as chat. */
+               _tpShowSubtitleTrivia): same translucent pill as a chat line (honors the
+               subtitle opacity setting), just a lighter gray than chat's black so it reads as not-chat. */
             .sc-subtitle-pill.sc-subtitle-trivia {
-                display: flex !important; align-items: center !important; gap: 8px !important;
-                background: rgba(244,241,234,0.92) !important;
-                color: #0a0a0a !important;
-                border: 2px solid #000 !important; border-left: 4px solid #c81d25 !important;
-                border-radius: 14px !important;
-                padding: 5px 14px 5px 8px !important;
-                font-weight: 700 !important; text-shadow: none !important;
-                box-shadow: 0 3px 10px rgba(0,0,0,0.5) !important;
+                background: rgba(78,78,86,var(--sc-subtitle-opacity, 0.6)) !important;
             }
-            .sc-subtitle-trivia-badge { flex: 0 0 auto !important; width: 1.9em !important; height: 1.9em !important; }
             .sc-subtitle-trivia-byline {
-                display: block !important; color: #4a4a4a !important;
+                display: block !important; color: rgba(255,255,255,0.65) !important;
                 font-size: 0.8em !important; font-weight: 400 !important; margin-top: 2px !important;
             }
 

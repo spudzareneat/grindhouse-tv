@@ -64,18 +64,42 @@ function _renderNpProgress() {
 // on-device that it doesn't).
 export function _npCardEnabled() { return true; }
 
-// #sc-np-title's base size differs by layout (tv.css sets 44px default / 60px TV / 30px
+// #sc-np-title's base size differs by layout (tv.css sets 44px default / 52px TV / 30px
 // vertical) -- shrink it proportionally for long titles so a wordy one wraps to fewer lines
 // rather than growing tall enough to push this bottom-anchored card's content off the top of
 // the screen. The CSS line-clamp on #sc-np-title is the hard backstop for anything still too
 // long even at the smallest tier.
 function _npTitleFontSize(text) {
-    const base = isTv ? 60 : (document.body.classList.contains('sc-vertical') ? 30 : 44);
+    const base = isTv ? 52 : (document.body.classList.contains('sc-vertical') ? 30 : 44);
     let scale = 1;
     if (text.length > 60) scale = 0.5;
     else if (text.length > 40) scale = 0.65;
     else if (text.length > 25) scale = 0.8;
     return Math.round(base * scale);
+}
+
+// The length tiers above can't see the rest of the card -- a long synopsis, three rows of
+// parent-guide chips, the progress bar and the actions row can still add up to more than the
+// screen, and since the content is bottom-anchored the overflow goes off the TOP (title first).
+// So after rendering, measure: shrink the title a step at a time (down to 60% of its tier
+// size), then trim the synopsis window, until the info column fits between the content's
+// top margin and its bottom anchor. Synchronous layout reads -- runs once per show.
+const _NP_TOP_MARGIN = 0.05; // fraction of the viewport kept clear above the content
+function _npFitToScreen(titleEl, startPx) {
+    const content = document.getElementById('sc-np-content');
+    const info = document.getElementById('sc-np-info');
+    const ov = document.getElementById('sc-np-overview');
+    if (!content || !info || !ov) return;
+    ov.style.removeProperty('max-height');
+    const avail = () => content.getBoundingClientRect().bottom - window.innerHeight * _NP_TOP_MARGIN;
+    const fits = () => info.getBoundingClientRect().height <= avail();
+    for (let px = startPx; !fits() && px > startPx * 0.6; px -= 2) {
+        titleEl.style.setProperty('font-size', (px - 2) + 'px', 'important');
+    }
+    for (const em of [4.5, 3]) {
+        if (fits()) break;
+        ov.style.setProperty('max-height', em + 'em', 'important');
+    }
 }
 
 // Long synopses overflow the fixed overview window. Start at the top (so the
@@ -213,7 +237,8 @@ export function showNowPlayingCard(data, opts = {}) {
     const titleText = title + year + (epTag ? ` · ${epTag}` : '')
         + (data.episodeName ? ` — ${data.episodeName}` : '');
     titleEl.textContent = titleText;
-    titleEl.style.setProperty('font-size', _npTitleFontSize(titleText) + 'px', 'important');
+    const titlePx = _npTitleFontSize(titleText);
+    titleEl.style.setProperty('font-size', titlePx + 'px', 'important');
     card.querySelector('#sc-np-overview').textContent = data.overview || '';
 
     const metaParts = [];
@@ -251,6 +276,8 @@ export function showNowPlayingCard(data, opts = {}) {
         clearInterval(_npProgTimer);
         if (progWrap) progWrap.style.display = 'none';
     }
+
+    _npFitToScreen(titleEl, titlePx); // after progress/chips/actions have their final display
 
     // Reveal a long synopsis by gliding to its bottom after a few seconds.
     _autoScrollOverview();

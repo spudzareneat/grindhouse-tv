@@ -684,24 +684,17 @@ function _tpAddHeadshot(svg, url) {
 }
 
 // Subtitles chat mode: the fact flows through the subtitle pill stream (cards/subtitles.js)
-// instead of a free-floating bubble -- one area of on-screen text, not two. Styled as its own
-// pill (bone-white + red badge, overlays.css .sc-subtitle-trivia) so it never reads as chat.
-// Icon only, no headshot: the pill is re-rendered via innerHTML on every chat message, and
-// _tpAddHeadshot's DOM-built <image> wouldn't survive that.
+// instead of a free-floating bubble -- one area of on-screen text, not two. Styled like a
+// chat line but with its own background tint (tv.css .sc-subtitle-trivia); no badge/headshot.
 function _tpShowSubtitleTrivia(fact) {
-    const icon = TP_ICON_SVGS[tpPickIconKey(fact.icon)];
     const bylineHtml = fact.byline ? `<span class="sc-subtitle-trivia-byline">${_escHtml(fact.byline)}</span>` : '';
-    addSubtitleTrivia(`<div class="sc-subtitle-pill sc-subtitle-trivia">` +
-        `<svg class="sc-subtitle-trivia-badge" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg">` +
-        `<circle cx="30" cy="30" r="27" fill="#000"/>` +
-        `<circle cx="30" cy="30" r="27" fill="none" stroke="#c81d25" stroke-width="3"/>${icon}</svg>` +
-        `<span class="sc-subtitle-trivia-text">${_escHtml(fact.text)}${bylineHtml}</span></div>`, SUBTITLE_LINE_TTL_MS);
+    addSubtitleTrivia(`<div class="sc-subtitle-pill sc-subtitle-trivia">${_escHtml(fact.text)}${bylineHtml}</div>`, SUBTITLE_LINE_TTL_MS);
 }
 
 function showTriviaBubble(fact) {
     _tpDismissBubble(true); // no double-stacking if one was somehow still up
+    if (inSubtitlesMode()) { _tpShowSubtitleTrivia(fact); return; } // silent -- it's just another subtitle line
     _tpPlayPopSound();
-    if (inSubtitlesMode()) { _tpShowSubtitleTrivia(fact); return; }
 
     _tpBubbleEl = document.createElement('div');
     _tpBubbleEl.id = 'sc-tp-bubble';

@@ -430,6 +430,7 @@
                 -webkit-box-orient: vertical !important; overflow: hidden !important;
             }
             #sc-np-meta {
+                white-space: pre-wrap !important; /* keep the wide gaps between rating/runtime/genres */
                 font-size: 17px !important; color: rgba(255,255,255,0.82) !important;
                 margin-bottom: 16px !important; font-weight: 500 !important;
             }
@@ -517,10 +518,12 @@
 
             /* TV: scale the card up for the couch */
             body.sc-tv #sc-np-poster { width: 260px !important; }
-            body.sc-tv #sc-np-title { font-size: 60px !important; }
-            body.sc-tv #sc-np-meta { font-size: 22px !important; }
-            body.sc-tv #sc-np-overview { font-size: 20px !important; }
-            body.sc-tv .sc-np-chip { font-size: 16px !important; padding: 7px 16px !important; }
+            body.sc-tv #sc-np-title { font-size: 52px !important; }
+            body.sc-tv #sc-np-meta { font-size: 20px !important; margin-bottom: 12px !important; }
+            body.sc-tv #sc-np-overview { font-size: 19px !important; margin-bottom: 14px !important; }
+            body.sc-tv #sc-np-chips { gap: 6px !important; }
+            body.sc-tv .sc-np-chip { font-size: 14px !important; padding: 5px 12px !important; }
+            body.sc-tv #sc-np-progress { margin-top: 14px !important; }
 
             /* ── UP NEXT LINK (subtle, top-right next to Coming Attractions) ── */
             #sc-up-next-btn {
@@ -1514,21 +1517,13 @@
             .sc-subtitle-emoji { display: inline-block !important; width: 1.3em !important; text-align: center !important; margin-right: 2px !important; }
             .sc-subtitle-name { font-weight: 700 !important; }
             /* Pop-up trivia riding the subtitle stream (cards/triviapopup.js
-               _tpShowSubtitleTrivia): same slot as a chat line, but the Pop-up Video
-               bubble's bone-white / black / red-badge look so it never reads as chat. */
+               _tpShowSubtitleTrivia): same translucent pill as a chat line (honors the
+               subtitle opacity setting), just a lighter gray than chat's black so it reads as not-chat. */
             .sc-subtitle-pill.sc-subtitle-trivia {
-                display: flex !important; align-items: center !important; gap: 8px !important;
-                background: rgba(244,241,234,0.92) !important;
-                color: #0a0a0a !important;
-                border: 2px solid #000 !important; border-left: 4px solid #c81d25 !important;
-                border-radius: 14px !important;
-                padding: 5px 14px 5px 8px !important;
-                font-weight: 700 !important; text-shadow: none !important;
-                box-shadow: 0 3px 10px rgba(0,0,0,0.5) !important;
+                background: rgba(78,78,86,var(--sc-subtitle-opacity, 0.6)) !important;
             }
-            .sc-subtitle-trivia-badge { flex: 0 0 auto !important; width: 1.9em !important; height: 1.9em !important; }
             .sc-subtitle-trivia-byline {
-                display: block !important; color: #4a4a4a !important;
+                display: block !important; color: rgba(255,255,255,0.65) !important;
                 font-size: 0.8em !important; font-weight: 400 !important; margin-top: 2px !important;
             }
 

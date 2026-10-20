@@ -35,7 +35,7 @@ const DEFAULT_FONTSIZE  = 15;
 const DEFAULT_LINES     = 3;
 // How long any subtitle line (chat or pop-up trivia) stays up before fading out on its own,
 // so a quiet chat clears the screen instead of leaving the last few lines up indefinitely.
-export const SUBTITLE_LINE_TTL_MS = 60 * 1000;
+export const SUBTITLE_LINE_TTL_MS = 45 * 1000;
 
 export function clampLines(n) {
     const v = Math.round(Number(n));
