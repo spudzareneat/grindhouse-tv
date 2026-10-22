@@ -657,20 +657,6 @@
     // resumes it and fades immediately, in sync with whatever pinned it
   };
 
-  // src/usercolors.js
-  function hashString(str) {
-    let h = 5381;
-    for (let i = 0; i < str.length; i++) {
-      h = (h << 5) + h ^ str.charCodeAt(i);
-      h |= 0;
-    }
-    return Math.abs(h);
-  }
-  function usernameToColor(u) {
-    const hue = hashString(u) * 137.508 % 360;
-    return `hsl(${hue.toFixed(1)}, 72%, 70%)`;
-  }
-
   // src/useremoji.js
   var _cachedSourceText = null;
   var _cachedStyles = null;
@@ -708,6 +694,23 @@
     const entry = _cachedStyles[username];
     if (Array.isArray(entry)) return entry[1] || null;
     return null;
+  }
+
+  // src/usercolors.js
+  function hashString(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) {
+      h = (h << 5) + h ^ str.charCodeAt(i);
+      h |= 0;
+    }
+    return Math.abs(h);
+  }
+  function usernameToColor(u) {
+    const hue = hashString(u) * 137.508 % 360;
+    return `hsl(${hue.toFixed(1)}, 72%, 70%)`;
+  }
+  function resolveUserColor(u) {
+    return getExternalUserColor(u) || usernameToColor(u);
   }
 
   // src/emojisupport.js
@@ -3484,7 +3487,7 @@
     clone.querySelectorAll(".timestamp, .username, .sc-img-embed").forEach((el) => el.remove());
     const html = clone.innerHTML.trim();
     if (!html) return null;
-    return { username, color: usernameToColor(username), emoji: getExternalUserEmoji(username), html };
+    return { username, color: resolveUserColor(username), emoji: getExternalUserEmoji(username), html };
   }
   function renderSubtitleLine(line) {
     const emojiHtml = line.emoji ? emojiSlotHtml(line.emoji, "sc-subtitle-emoji", _escHtml2(line.emoji)) : "";
@@ -8121,7 +8124,7 @@
       panel.innerHTML = `
             <div class="sc-users-panel-header">${headerText}</div>
             ${users.map((u) => {
-        const color = usernameToColor(u.name);
+        const color = resolveUserColor(u.name);
         const emoji = getExternalUserEmoji(u.name);
         const emojiHtml = emoji ? emojiSlotHtml(emoji, "sc-users-panel-emoji", emoji) : "";
         const afkClass = u.afk ? " sc-users-panel-afk" : "";
@@ -12871,11 +12874,11 @@
       if (!cls) return;
       const u = el.dataset.scUser || cls.replace("chat-msg-", "");
       const span = el.querySelector(".username");
-      if (span && span.dataset.scColored !== u) {
-        const color = getExternalUserColor(u) || usernameToColor(u);
+      const color = span && resolveUserColor(u);
+      if (span && span.dataset.scColored !== u + "|" + color) {
         span.style.setProperty("color", color, "important");
         span.style.setProperty("font-weight", "700", "important");
-        span.dataset.scColored = u;
+        span.dataset.scColored = u + "|" + color;
         const emoji = getExternalUserEmoji(u);
         if (emoji) {
           span.dataset.emoji = emoji;
@@ -12909,6 +12912,11 @@
         }
       }).observe(buf2, { childList: true, subtree: true });
       applyUserColors();
+      let tick2 = 0;
+      const retry = setInterval(() => {
+        applyUserColors();
+        if (++tick2 > 40) clearInterval(retry);
+      }, 500);
     }
     function openSettingsModal() {
       const old = document.getElementById("sc-settings-overlay");

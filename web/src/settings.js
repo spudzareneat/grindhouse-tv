@@ -15,8 +15,8 @@ import {
 import { initDesyncButton, addFloatingButtons, addCastButton } from './chrome/buttons.js';
 import { isStuck, pinChatToBottom } from './chat/stickbottom.js';
 import { layoutDock } from './chrome/dock.js';
-import { usernameToColor } from './usercolors.js';
-import { getExternalUserEmoji, getExternalUserColor } from './useremoji.js';
+import { resolveUserColor } from './usercolors.js';
+import { getExternalUserEmoji } from './useremoji.js';
 import { shouldSwapEmoji, twemojiUrl } from './emojisupport.js';
 import { nativeHttpGet } from './native.js';
 import { authAvailable, authLogin, authSwitch, authLogout, authList, authRemove, currentCyName } from './auth.js';
@@ -461,15 +461,18 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
         if (!cls) return;
         const u = el.dataset.scUser || cls.replace('chat-msg-', '');
         const span = el.querySelector('.username');
-        if (span && span.dataset.scColored !== u) {
+        // Keyed on the resolved color, not just the name: CHANNEL.js (the channel's
+        // userStyles) can arrive after the first pass, and the hash fallback must not
+        // stick once the hand-picked color is known (see the retry in startUserColorObserver).
+        const color = span && resolveUserColor(u);
+        if (span && span.dataset.scColored !== u + '|' + color) {
             // Prefer the channel userscript's hand-picked color so its own colorer and
             // ours land on the same value (no flashing); hash-fallback otherwise.
             // Written !important so a later plain inline write by the channel script
             // can't repaint it.
-            const color = getExternalUserColor(u) || usernameToColor(u);
             span.style.setProperty('color', color, 'important');
             span.style.setProperty('font-weight', '700', 'important');
-            span.dataset.scColored = u;
+            span.dataset.scColored = u + '|' + color;
             // data attribute + CSS ::before, not textContent, so autocomplete/mention
             // matching (which reads the raw name) is unaffected.
             const emoji = getExternalUserEmoji(u);
@@ -505,6 +508,14 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
             }
         }).observe(buf, { childList: true, subtree: true });
         applyUserColors();
+        // CyTube fills CHANNEL.js asynchronously with no ready event, so backlog
+        // messages colored before it lands would keep the hash color. Re-run for
+        // ~20s (same as the userscript) so they self-correct without new chat.
+        let tick = 0;
+        const retry = setInterval(() => {
+            applyUserColors();
+            if (++tick > 40) clearInterval(retry);
+        }, 500);
     }
 
     /* ==========================================================

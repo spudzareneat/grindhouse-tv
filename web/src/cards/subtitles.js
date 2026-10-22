@@ -1,5 +1,5 @@
 import { getKey, LS_SUBTITLE_OPACITY, LS_SUBTITLE_FONTSIZE, LS_SUBTITLE_LINES } from '../store.js';
-import { usernameToColor } from '../usercolors.js';
+import { resolveUserColor } from '../usercolors.js';
 import { getExternalUserEmoji } from '../useremoji.js';
 import { emojiSlotHtml } from '../emojisupport.js';
 
@@ -81,7 +81,7 @@ export function extractSubtitleLine(msgEl) {
     const html = clone.innerHTML.trim();
     if (!html) return null;
 
-    return { username, color: usernameToColor(username), emoji: getExternalUserEmoji(username), html };
+    return { username, color: resolveUserColor(username), emoji: getExternalUserEmoji(username), html };
 }
 
 function renderSubtitleLine(line) {

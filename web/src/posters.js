@@ -1,4 +1,4 @@
-import { usernameToColor } from './usercolors.js';
+import { resolveUserColor } from './usercolors.js';
 import { getExternalUserEmoji } from './useremoji.js';
 import { emojiSlotHtml } from './emojisupport.js';
 import { onSocket } from './socket.js';
@@ -265,7 +265,7 @@ export function initUserCount() {
         panel.innerHTML = `
             <div class="sc-users-panel-header">${headerText}</div>
             ${users.map(u => {
-                const color = usernameToColor(u.name);
+                const color = resolveUserColor(u.name);
                 const emoji = getExternalUserEmoji(u.name);
                 const emojiHtml = emoji ? emojiSlotHtml(emoji, 'sc-users-panel-emoji', emoji) : '';
                 const afkClass = u.afk ? ' sc-users-panel-afk' : '';
