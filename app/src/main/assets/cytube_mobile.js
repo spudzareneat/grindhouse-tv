@@ -12947,9 +12947,9 @@
                         <button id="sc-logout-btn" class="sc-settings-btn-wide sc-hidden" type="button">Log out</button>
                         <div id="sc-account-add" class="sc-account-add">
                             <input id="sc-input-cy-user" class="sc-settings-input" type="text"
-                                placeholder="CyTube username" autocomplete="username" autocapitalize="off" spellcheck="false" />
+                                placeholder="CyTube username" autocomplete="off" autocapitalize="off" spellcheck="false" />
                             <input id="sc-input-cy-pass" class="sc-settings-input" type="password"
-                                placeholder="Password" autocomplete="current-password" />
+                                placeholder="Password" autocomplete="off" />
                             <label class="sc-settings-toggle-label">
                                 <span class="sc-toggle-row">
                                     <input type="checkbox" id="sc-input-cy-remember" checked />

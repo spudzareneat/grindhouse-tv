@@ -640,6 +640,11 @@ class MainActivity : AppCompatActivity() {
         // Allow inspecting the WebView from desktop Chrome via chrome://inspect — debug builds only
         if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
 
+        // Keep the system autofill service (e.g. Firefox as password manager) out of the page:
+        // otherwise the in-app login's password field pops an "Unlock with Firefox" prompt on
+        // every keystroke. Saved accounts are handled by CytubeAuth instead.
+        webView.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
