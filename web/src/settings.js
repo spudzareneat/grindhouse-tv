@@ -549,11 +549,15 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
                         <div id="sc-account-status" class="sc-account-status"></div>
                         <div id="sc-account-list" class="sc-account-list"></div>
                         <button id="sc-logout-btn" class="sc-settings-btn-wide sc-hidden" type="button">Log out</button>
-                        <div id="sc-account-add" class="sc-account-add">
-                            <input id="sc-input-cy-user" class="sc-settings-input" type="text"
-                                placeholder="CyTube username" autocomplete="off" autocapitalize="off" spellcheck="false" />
-                            <input id="sc-input-cy-pass" class="sc-settings-input" type="password"
-                                placeholder="Password" autocomplete="off" />
+                        <!-- A real <form> so the on-screen keyboard offers Next (user → password)
+                             and Go (password → submit) instead of a dead-end Done key. -->
+                        <form id="sc-account-add" class="sc-account-add" autocomplete="off" novalidate>
+                            <input id="sc-input-cy-user" class="sc-settings-input" type="text" name="sc-cy-user"
+                                placeholder="CyTube username" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="next" />
+                            <input id="sc-input-cy-pass" class="sc-settings-input" type="password" name="sc-cy-pass"
+                                placeholder="Password" autocomplete="off" enterkeyhint="go" />
+                            <button id="sc-login-btn" class="sc-settings-btn-wide" type="submit">Log in</button>
+                            <span id="sc-login-status" class="sc-settings-test-status"></span>
                             <label class="sc-settings-toggle-label">
                                 <span class="sc-toggle-row">
                                     <input type="checkbox" id="sc-input-cy-remember" checked />
@@ -561,9 +565,7 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
                                 </span>
                                 <span class="sc-settings-note">Saved accounts can be switched to with one press</span>
                             </label>
-                            <button id="sc-login-btn" class="sc-settings-btn-wide" type="button">Log in</button>
-                            <span id="sc-login-status" class="sc-settings-test-status"></span>
-                        </div>
+                        </form>
                     </div>
 
                     <div class="sc-settings-group sc-settings-divider">
@@ -1029,16 +1031,38 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
             const doLogin = () => {
                 const name = userIn.value.trim();
                 const pw = passIn.value;
-                if (!name || !pw) { setStatus('sc-test-bad', 'Enter a username and password'); return; }
+                if (!name) { setStatus('sc-test-bad', 'Enter your username'); focusTo(userIn); return; }
+                if (!pw) { setStatus('sc-test-bad', 'Enter your password'); focusTo(passIn); return; }
+                try { passIn.blur(); } catch (e) {}   // drop the on-screen keyboard
+                focusTo(loginBtn);
                 run('Logging in…', () => authLogin(name, pw, remember.checked), (res) => {
                     passIn.value = '';
                     setStatus('sc-test-ok', '✓ Logged in as ' + res.name + ' — reloading…');
                     reloadSoon();
                 });
             };
-            loginBtn.addEventListener('click', doLogin);
-            passIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doLogin(); } });
-            userIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); focusTo(passIn); } });
+            // One path for every way of finishing: the keyboard's Go key, the phone keyboard's
+            // Enter, and OK on the Log in button all submit the form.
+            document.getElementById('sc-account-add').addEventListener('submit', (e) => {
+                e.preventDefault();
+                doLogin();
+            });
+            // Enter / Next in the username field → hop to the password field.
+            userIn.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); focusTo(passIn); }
+            });
+            passIn.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); doLogin(); }
+            });
+            // The keyboard's Next key moves DOM focus on its own — pull the remote's focus
+            // ring along so the next D-pad press starts from where you actually are.
+            [userIn, passIn].forEach((el) => el.addEventListener('focus', () => {
+                if (isTv && tvNavState.getFocus && tvNavState.getFocus() !== el) focusTo(el);
+            }));
+            // Keyboard closed with both fields filled → land on Log in, so one OK press finishes.
+            passIn.addEventListener('change', () => {
+                if (userIn.value.trim() && passIn.value && !busy) setTimeout(() => focusTo(loginBtn), 0);
+            });
 
             logoutBtn.addEventListener('click', () => {
                 run('Logging out…', () => authLogout(), () => {
