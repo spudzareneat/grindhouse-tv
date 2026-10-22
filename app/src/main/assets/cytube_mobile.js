@@ -8676,6 +8676,66 @@
   // src/settings.js
   init_native();
 
+  // src/auth.js
+  var _scAuthCbs = {};
+  if (typeof window !== "undefined") {
+    window.__scAuthResolve = function(id, res) {
+      const cb = _scAuthCbs[id];
+      if (cb) {
+        delete _scAuthCbs[id];
+        cb(res);
+      }
+    };
+  }
+  function authAvailable() {
+    return !!(window.CytubeNative && typeof CytubeNative.authLogin === "function");
+  }
+  function call(method, ...args) {
+    return new Promise((resolve) => {
+      if (!authAvailable()) {
+        resolve({ ok: false, error: "Update the app to log in here" });
+        return;
+      }
+      const id = "a" + Math.random().toString(36).slice(2);
+      _scAuthCbs[id] = (res) => resolve(res || { ok: false, error: "No response" });
+      try {
+        CytubeNative[method](id, ...args);
+      } catch (e) {
+        delete _scAuthCbs[id];
+        resolve({ ok: false, error: String(e && e.message || e) });
+      }
+      setTimeout(() => {
+        if (_scAuthCbs[id]) {
+          delete _scAuthCbs[id];
+          resolve({ ok: false, error: "Timed out — try again" });
+        }
+      }, 2e4);
+    });
+  }
+  var authLogin = (name, password, remember) => call("authLogin", name, password, !!remember);
+  var authSwitch = (name) => call("authSwitch", name);
+  var authLogout = () => call("authLogout");
+  function authList() {
+    try {
+      return JSON.parse(CytubeNative.authList());
+    } catch (e) {
+      return { active: "", accounts: [] };
+    }
+  }
+  function authRemove(name) {
+    try {
+      CytubeNative.authRemove(name);
+    } catch (e) {
+    }
+  }
+  function currentCyName() {
+    try {
+      if (window.CLIENT && CLIENT.name && CLIENT.rank >= 1) return String(CLIENT.name);
+    } catch (e) {
+    }
+    return "";
+  }
+
   // src/chat/keyboard.js
   function isEditable(el) {
     return !!el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT");
@@ -10394,6 +10454,30 @@
                 cursor: pointer !important; width: 100% !important;
             }
             .sc-settings-btn-wide:hover { background: rgba(192,176,255,0.32) !important; }
+            /* In-app CyTube account block (every row full-width so TV D-pad never skips one) */
+            #sc-account-group { display: flex !important; flex-direction: column !important; gap: 8px !important; }
+            #sc-logout-btn.sc-hidden { display: none !important; }
+            .sc-account-status { font-size: 13px !important; color: rgba(255,255,255,0.75) !important; }
+            .sc-account-status b { color: #c0b0ff !important; }
+            .sc-account-list:empty { display: none !important; }
+            .sc-account-list, .sc-account-add {
+                display: flex !important; flex-direction: column !important; gap: 6px !important;
+            }
+            .sc-account-row { display: flex !important; flex-direction: column !important; gap: 4px !important; }
+            .sc-account-switch { text-align: left !important; }
+            .sc-account-switch.sc-account-active {
+                background: rgba(125,255,160,0.12) !important; color: #7dffa0 !important;
+                border-color: rgba(125,255,160,0.4) !important; cursor: default !important;
+            }
+            .sc-account-forget {
+                background: transparent !important; color: rgba(255,255,255,0.5) !important;
+                border-color: rgba(255,255,255,0.15) !important; font-size: 11px !important;
+                font-weight: 400 !important; padding: 5px 18px !important;
+            }
+            #sc-logout-btn {
+                background: rgba(255,128,128,0.12) !important; color: #ff9a9a !important;
+                border-color: rgba(255,128,128,0.4) !important;
+            }
             #sc-phone-qr {
                 display: block !important; margin: 14px auto !important;
                 background: #fff !important; padding: 14px !important; border-radius: 14px !important;
@@ -11184,7 +11268,11 @@
             body.sc-tv .sc-settings-test { font-size: 16px !important; }
             body.sc-tv #sc-settings-save,
             body.sc-tv #sc-settings-cancel,
-            body.sc-tv #sc-login-btn { font-size: 16px !important; padding: 12px 22px !important; }
+            body.sc-tv #sc-login-btn,
+            body.sc-tv #sc-logout-btn,
+            body.sc-tv .sc-account-switch { font-size: 16px !important; padding: 12px 22px !important; }
+            body.sc-tv .sc-account-forget { font-size: 13px !important; padding: 7px 22px !important; }
+            body.sc-tv .sc-account-status { font-size: 15px !important; }
 
             /* Send button */
             #sc-send-btn {
@@ -12850,6 +12938,30 @@
                 </nav>
 
                 <div class="sc-settings-pane" data-pane="account">
+                    <div class="sc-settings-group" id="sc-account-group">
+                        <label class="sc-settings-label">CyTube Account
+                            <span class="sc-settings-note">Stays in the app — saved accounts are encrypted on this device</span>
+                        </label>
+                        <div id="sc-account-status" class="sc-account-status"></div>
+                        <div id="sc-account-list" class="sc-account-list"></div>
+                        <button id="sc-logout-btn" class="sc-settings-btn-wide sc-hidden" type="button">Log out</button>
+                        <div id="sc-account-add" class="sc-account-add">
+                            <input id="sc-input-cy-user" class="sc-settings-input" type="text"
+                                placeholder="CyTube username" autocomplete="username" autocapitalize="off" spellcheck="false" />
+                            <input id="sc-input-cy-pass" class="sc-settings-input" type="password"
+                                placeholder="Password" autocomplete="current-password" />
+                            <label class="sc-settings-toggle-label">
+                                <span class="sc-toggle-row">
+                                    <input type="checkbox" id="sc-input-cy-remember" checked />
+                                    <span class="sc-toggle-text">Remember this account</span>
+                                </span>
+                                <span class="sc-settings-note">Saved accounts can be switched to with one press</span>
+                            </label>
+                            <button id="sc-login-btn" class="sc-settings-btn-wide" type="button">Log in</button>
+                            <span id="sc-login-status" class="sc-settings-test-status"></span>
+                        </div>
+                    </div>
+
                     <div class="sc-settings-group sc-settings-divider">
                         <label class="sc-settings-toggle-label">
                             <span class="sc-toggle-row">
@@ -12931,13 +13043,6 @@
                             <input type="range" id="sc-input-simkl-threshold" class="sc-settings-range"
                                 min="${SIMKL_THRESHOLD_MIN}" max="${SIMKL_THRESHOLD_MAX}" step="5" value="${simklClampThreshold(simklThresholdRaw())}" />
                         </div>
-                    </div>
-
-                    <div class="sc-settings-group">
-                        <label class="sc-settings-label">CyTube Account
-                            <span class="sc-settings-note">Opens the CyTube login page — your settings here are saved first</span>
-                        </label>
-                        <button id="sc-login-btn" class="sc-settings-btn-wide" type="button">Log in / Switch Account</button>
                     </div>
 
                     <div class="sc-settings-group">
@@ -13239,10 +13344,109 @@
         status.textContent = "✓ Saved";
         setTimeout(closeSettings, 800);
       });
-      document.getElementById("sc-login-btn").addEventListener("click", () => {
-        persistSettings();
-        window.location.href = "/login?redirect=" + encodeURIComponent(window.location.pathname);
-      });
+      (() => {
+        const statusEl = document.getElementById("sc-account-status");
+        const listEl = document.getElementById("sc-account-list");
+        const logoutBtn = document.getElementById("sc-logout-btn");
+        const userIn = document.getElementById("sc-input-cy-user");
+        const passIn = document.getElementById("sc-input-cy-pass");
+        const remember = document.getElementById("sc-input-cy-remember");
+        const loginBtn = document.getElementById("sc-login-btn");
+        const loginStatus = document.getElementById("sc-login-status");
+        let busy = false;
+        const setStatus = (cls, text) => {
+          loginStatus.className = "sc-settings-test-status " + cls;
+          loginStatus.textContent = text;
+        };
+        const focusTo = (el) => {
+          if (!el) return;
+          if (tvNavState.setFocus) tvNavState.setFocus(el);
+          else el.focus();
+        };
+        const reloadSoon = () => {
+          persistSettings();
+          setTimeout(() => window.location.reload(), 700);
+        };
+        const run = async (label, fn, onOk) => {
+          if (busy) return;
+          busy = true;
+          setStatus("sc-test-pending", label);
+          const res = await fn();
+          busy = false;
+          if (res && res.ok) onOk(res);
+          else setStatus("sc-test-bad", "✗ " + (res && res.error || "Something went wrong"));
+        };
+        const render2 = () => {
+          const me = currentCyName();
+          statusEl.innerHTML = me ? `Logged in as <b>${simklEsc(me)}</b>` : "Watching as a guest — log in to chat with your account";
+          logoutBtn.classList.toggle("sc-hidden", !me);
+          if (!authAvailable()) {
+            listEl.innerHTML = "";
+            return;
+          }
+          const { accounts = [] } = authList();
+          listEl.innerHTML = accounts.map((a) => {
+            const active = me && a.name.toLowerCase() === me.toLowerCase();
+            const n = simklEsc(a.name);
+            return `<div class="sc-account-row">
+                        <button type="button" class="sc-settings-btn-wide sc-account-switch${active ? " sc-account-active" : ""}" data-name="${n}">
+                            ${active ? "✓ " + n + " — signed in" : "Switch to " + n}
+                        </button>
+                        <button type="button" class="sc-settings-btn-wide sc-account-forget" data-name="${n}">Forget ${n}</button>
+                    </div>`;
+          }).join("");
+        };
+        listEl.addEventListener("click", (e) => {
+          const btn = e.target.closest("button[data-name]");
+          if (!btn) return;
+          const name = btn.dataset.name;
+          if (btn.classList.contains("sc-account-forget")) {
+            authRemove(name);
+            render2();
+            focusTo(listEl.querySelector("button") || userIn);
+            setStatus("sc-test-ok", "Forgot " + name);
+            return;
+          }
+          if (btn.classList.contains("sc-account-active")) return;
+          run("Switching to " + name + "…", () => authSwitch(name), (res) => {
+            setStatus("sc-test-ok", "✓ Logged in as " + res.name + " — reloading…");
+            reloadSoon();
+          });
+        });
+        const doLogin = () => {
+          const name = userIn.value.trim();
+          const pw = passIn.value;
+          if (!name || !pw) {
+            setStatus("sc-test-bad", "Enter a username and password");
+            return;
+          }
+          run("Logging in…", () => authLogin(name, pw, remember.checked), (res) => {
+            passIn.value = "";
+            setStatus("sc-test-ok", "✓ Logged in as " + res.name + " — reloading…");
+            reloadSoon();
+          });
+        };
+        loginBtn.addEventListener("click", doLogin);
+        passIn.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            doLogin();
+          }
+        });
+        userIn.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            focusTo(passIn);
+          }
+        });
+        logoutBtn.addEventListener("click", () => {
+          run("Logging out…", () => authLogout(), () => {
+            setStatus("sc-test-ok", "✓ Logged out — reloading…");
+            reloadSoon();
+          });
+        });
+        render2();
+      })();
       document.getElementById("sc-patreon-btn").addEventListener("click", () => {
         openExternalUrl("https://www.patreon.com/c/420Grindhouse/posts?vanity=420Grindhouse");
       });

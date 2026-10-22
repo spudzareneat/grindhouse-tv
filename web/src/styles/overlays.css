@@ -245,6 +245,30 @@
                 cursor: pointer !important; width: 100% !important;
             }
             .sc-settings-btn-wide:hover { background: rgba(192,176,255,0.32) !important; }
+            /* In-app CyTube account block (every row full-width so TV D-pad never skips one) */
+            #sc-account-group { display: flex !important; flex-direction: column !important; gap: 8px !important; }
+            #sc-logout-btn.sc-hidden { display: none !important; }
+            .sc-account-status { font-size: 13px !important; color: rgba(255,255,255,0.75) !important; }
+            .sc-account-status b { color: #c0b0ff !important; }
+            .sc-account-list:empty { display: none !important; }
+            .sc-account-list, .sc-account-add {
+                display: flex !important; flex-direction: column !important; gap: 6px !important;
+            }
+            .sc-account-row { display: flex !important; flex-direction: column !important; gap: 4px !important; }
+            .sc-account-switch { text-align: left !important; }
+            .sc-account-switch.sc-account-active {
+                background: rgba(125,255,160,0.12) !important; color: #7dffa0 !important;
+                border-color: rgba(125,255,160,0.4) !important; cursor: default !important;
+            }
+            .sc-account-forget {
+                background: transparent !important; color: rgba(255,255,255,0.5) !important;
+                border-color: rgba(255,255,255,0.15) !important; font-size: 11px !important;
+                font-weight: 400 !important; padding: 5px 18px !important;
+            }
+            #sc-logout-btn {
+                background: rgba(255,128,128,0.12) !important; color: #ff9a9a !important;
+                border-color: rgba(255,128,128,0.4) !important;
+            }
             #sc-phone-qr {
                 display: block !important; margin: 14px auto !important;
                 background: #fff !important; padding: 14px !important; border-radius: 14px !important;

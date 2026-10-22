@@ -189,4 +189,24 @@ class CytubeJsBridge(
         }.start()
     }
 
+    // ── In-app CyTube login (see CytubeAuth) ─────────────────────────────────
+    // Results arrive via window.__scAuthResolve(reqId, {ok, error, name}).
+
+    @JavascriptInterface
+    fun authLogin(reqId: String, name: String, password: String, remember: Boolean) =
+        activity.auth.login(reqId, name, password, remember)
+
+    @JavascriptInterface
+    fun authSwitch(reqId: String, name: String) = activity.auth.switchTo(reqId, name)
+
+    @JavascriptInterface
+    fun authLogout(reqId: String) = activity.auth.logout(reqId)
+
+    /** Saved accounts as {active, accounts:[{name, lastUsed}]} — never includes passwords. */
+    @JavascriptInterface
+    fun authList(): String = activity.auth.listJson()
+
+    @JavascriptInterface
+    fun authRemove(name: String) = activity.auth.remove(name)
+
 }

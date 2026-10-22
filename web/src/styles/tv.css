@@ -348,7 +348,11 @@
             body.sc-tv .sc-settings-test { font-size: 16px !important; }
             body.sc-tv #sc-settings-save,
             body.sc-tv #sc-settings-cancel,
-            body.sc-tv #sc-login-btn { font-size: 16px !important; padding: 12px 22px !important; }
+            body.sc-tv #sc-login-btn,
+            body.sc-tv #sc-logout-btn,
+            body.sc-tv .sc-account-switch { font-size: 16px !important; padding: 12px 22px !important; }
+            body.sc-tv .sc-account-forget { font-size: 13px !important; padding: 7px 22px !important; }
+            body.sc-tv .sc-account-status { font-size: 15px !important; }
 
             /* Send button */
             #sc-send-btn {

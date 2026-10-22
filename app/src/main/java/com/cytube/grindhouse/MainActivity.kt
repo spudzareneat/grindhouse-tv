@@ -76,6 +76,7 @@ class MainActivity : AppCompatActivity() {
     private val backgroundExit = Runnable { finishAndRemoveTask() }
     private lateinit var fullscreenContainer: FrameLayout
     private lateinit var prefs: SharedPreferences
+    lateinit var auth: CytubeAuth                 // in-app CyTube login + saved accounts
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
 
     private lateinit var loadingOverlay: ImageView
@@ -140,6 +141,13 @@ class MainActivity : AppCompatActivity() {
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
+        // Saved CyTube accounts get their own file so the getKey() bridge can never read them.
+        val accountStore = EncryptedSharedPreferences.create(
+            this, "cytube_accounts", masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+        auth = CytubeAuth(this, accountStore) { webViewUa }
 
         webView = findViewById(R.id.webview)
         fullscreenContainer = findViewById(R.id.fullscreen_container)

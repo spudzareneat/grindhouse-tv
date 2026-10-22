@@ -19,6 +19,7 @@ import { usernameToColor } from './usercolors.js';
 import { getExternalUserEmoji, getExternalUserColor } from './useremoji.js';
 import { shouldSwapEmoji, twemojiUrl } from './emojisupport.js';
 import { nativeHttpGet } from './native.js';
+import { authAvailable, authLogin, authSwitch, authLogout, authList, authRemove, currentCyName } from './auth.js';
 import { initPhoneKeyboard } from './chat/keyboard.js';
 import { renderQrToCanvas } from './vendor/qr.js';
 import { _appVersion, checkForUpdate, initUpdateCheck, _updateInfo, GH_RELEASES_PAGE } from './update.js';
@@ -541,6 +542,30 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
                 </nav>
 
                 <div class="sc-settings-pane" data-pane="account">
+                    <div class="sc-settings-group" id="sc-account-group">
+                        <label class="sc-settings-label">CyTube Account
+                            <span class="sc-settings-note">Stays in the app — saved accounts are encrypted on this device</span>
+                        </label>
+                        <div id="sc-account-status" class="sc-account-status"></div>
+                        <div id="sc-account-list" class="sc-account-list"></div>
+                        <button id="sc-logout-btn" class="sc-settings-btn-wide sc-hidden" type="button">Log out</button>
+                        <div id="sc-account-add" class="sc-account-add">
+                            <input id="sc-input-cy-user" class="sc-settings-input" type="text"
+                                placeholder="CyTube username" autocomplete="username" autocapitalize="off" spellcheck="false" />
+                            <input id="sc-input-cy-pass" class="sc-settings-input" type="password"
+                                placeholder="Password" autocomplete="current-password" />
+                            <label class="sc-settings-toggle-label">
+                                <span class="sc-toggle-row">
+                                    <input type="checkbox" id="sc-input-cy-remember" checked />
+                                    <span class="sc-toggle-text">Remember this account</span>
+                                </span>
+                                <span class="sc-settings-note">Saved accounts can be switched to with one press</span>
+                            </label>
+                            <button id="sc-login-btn" class="sc-settings-btn-wide" type="button">Log in</button>
+                            <span id="sc-login-status" class="sc-settings-test-status"></span>
+                        </div>
+                    </div>
+
                     <div class="sc-settings-group sc-settings-divider">
                         <label class="sc-settings-toggle-label">
                             <span class="sc-toggle-row">
@@ -622,13 +647,6 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
                             <input type="range" id="sc-input-simkl-threshold" class="sc-settings-range"
                                 min="${SIMKL_THRESHOLD_MIN}" max="${SIMKL_THRESHOLD_MAX}" step="5" value="${simklClampThreshold(simklThresholdRaw())}" />
                         </div>
-                    </div>
-
-                    <div class="sc-settings-group">
-                        <label class="sc-settings-label">CyTube Account
-                            <span class="sc-settings-note">Opens the CyTube login page — your settings here are saved first</span>
-                        </label>
-                        <button id="sc-login-btn" class="sc-settings-btn-wide" type="button">Log in / Switch Account</button>
                     </div>
 
                     <div class="sc-settings-group">
@@ -936,10 +954,101 @@ const triviaFreqIndex = (value) => Math.max(0, TRIVIA_FREQ_STEPS.findIndex(s => 
             setTimeout(closeSettings, 800);
         });
 
-        document.getElementById('sc-login-btn').addEventListener('click', () => {
-            persistSettings();     // don't lose entries when we navigate away to log in
-            window.location.href = '/login?redirect=' + encodeURIComponent(window.location.pathname);
-        });
+        // ── CyTube account: in-app login / logout / saved-account switching ──
+        // Native does the actual form login + cookie install (auth.js / CytubeAuth.kt);
+        // on success we reload so CyTube's socket reconnects as the new user.
+        (() => {
+            const statusEl = document.getElementById('sc-account-status');
+            const listEl   = document.getElementById('sc-account-list');
+            const logoutBtn = document.getElementById('sc-logout-btn');
+            const userIn   = document.getElementById('sc-input-cy-user');
+            const passIn   = document.getElementById('sc-input-cy-pass');
+            const remember = document.getElementById('sc-input-cy-remember');
+            const loginBtn = document.getElementById('sc-login-btn');
+            const loginStatus = document.getElementById('sc-login-status');
+            let busy = false;
+
+            const setStatus = (cls, text) => {
+                loginStatus.className = 'sc-settings-test-status ' + cls;
+                loginStatus.textContent = text;
+            };
+            const focusTo = (el) => {
+                if (!el) return;
+                if (tvNavState.setFocus) tvNavState.setFocus(el); else el.focus();
+            };
+            const reloadSoon = () => { persistSettings(); setTimeout(() => window.location.reload(), 700); };
+
+            const run = async (label, fn, onOk) => {
+                if (busy) return;
+                busy = true;
+                setStatus('sc-test-pending', label);
+                const res = await fn();
+                busy = false;
+                if (res && res.ok) onOk(res);
+                else setStatus('sc-test-bad', '✗ ' + ((res && res.error) || 'Something went wrong'));
+            };
+
+            const render = () => {
+                const me = currentCyName();
+                statusEl.innerHTML = me
+                    ? `Logged in as <b>${simklEsc(me)}</b>`
+                    : 'Watching as a guest — log in to chat with your account';
+                logoutBtn.classList.toggle('sc-hidden', !me);
+                if (!authAvailable()) { listEl.innerHTML = ''; return; }
+                const { accounts = [] } = authList();
+                listEl.innerHTML = accounts.map((a) => {
+                    const active = me && a.name.toLowerCase() === me.toLowerCase();
+                    const n = simklEsc(a.name);
+                    return `<div class="sc-account-row">
+                        <button type="button" class="sc-settings-btn-wide sc-account-switch${active ? ' sc-account-active' : ''}" data-name="${n}">
+                            ${active ? '✓ ' + n + ' — signed in' : 'Switch to ' + n}
+                        </button>
+                        <button type="button" class="sc-settings-btn-wide sc-account-forget" data-name="${n}">Forget ${n}</button>
+                    </div>`;
+                }).join('');
+            };
+
+            listEl.addEventListener('click', (e) => {
+                const btn = e.target.closest('button[data-name]');
+                if (!btn) return;
+                const name = btn.dataset.name;
+                if (btn.classList.contains('sc-account-forget')) {
+                    authRemove(name);
+                    render();
+                    focusTo(listEl.querySelector('button') || userIn);
+                    setStatus('sc-test-ok', 'Forgot ' + name);
+                    return;
+                }
+                if (btn.classList.contains('sc-account-active')) return;
+                run('Switching to ' + name + '…', () => authSwitch(name), (res) => {
+                    setStatus('sc-test-ok', '✓ Logged in as ' + res.name + ' — reloading…');
+                    reloadSoon();
+                });
+            });
+
+            const doLogin = () => {
+                const name = userIn.value.trim();
+                const pw = passIn.value;
+                if (!name || !pw) { setStatus('sc-test-bad', 'Enter a username and password'); return; }
+                run('Logging in…', () => authLogin(name, pw, remember.checked), (res) => {
+                    passIn.value = '';
+                    setStatus('sc-test-ok', '✓ Logged in as ' + res.name + ' — reloading…');
+                    reloadSoon();
+                });
+            };
+            loginBtn.addEventListener('click', doLogin);
+            passIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doLogin(); } });
+            userIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); focusTo(passIn); } });
+
+            logoutBtn.addEventListener('click', () => {
+                run('Logging out…', () => authLogout(), () => {
+                    setStatus('sc-test-ok', '✓ Logged out — reloading…');
+                    reloadSoon();
+                });
+            });
+
+            render();
+        })();
         document.getElementById('sc-patreon-btn').addEventListener('click', () => {
             openExternalUrl('https://www.patreon.com/c/420Grindhouse/posts?vanity=420Grindhouse');
         });
