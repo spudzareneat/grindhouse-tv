@@ -462,14 +462,14 @@
       const detail = document.getElementById("sc-error-detail");
       if (!preview) return;
       const sorted = workingMatches.slice().sort((a, b) => a.offset - b.offset);
-      const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const esc2 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
       let html = "", pos = 0;
       sorted.forEach((m, i) => {
-        if (m.offset > pos) html += esc(workingText.slice(pos, m.offset));
-        html += `<span class="sc-error-span" data-idx="${i}" title="${esc(m.shortMessage || m.message)}">${esc(workingText.slice(m.offset, m.offset + m.length))}</span>`;
+        if (m.offset > pos) html += esc2(workingText.slice(pos, m.offset));
+        html += `<span class="sc-error-span" data-idx="${i}" title="${esc2(m.shortMessage || m.message)}">${esc2(workingText.slice(m.offset, m.offset + m.length))}</span>`;
         pos = m.offset + m.length;
       });
-      html += esc(workingText.slice(pos));
+      html += esc2(workingText.slice(pos));
       preview.innerHTML = html;
       preview.querySelectorAll(".sc-error-span").forEach((span) => {
         span.addEventListener("click", () => showErrorDetail(sorted[parseInt(span.dataset.idx)]));
@@ -1027,27 +1027,63 @@
       return null;
     }
   }
-  var IMDB_TITLE_FIELDS_QUERY = "query GHCombined($id: ID!){ title(id:$id){ id ratingsSummary{ aggregateRating voteCount } runtime{ seconds } plot{ plotText{ plainText } } primaryImage{ url width height } titleGenres{ genres{ genre{ text } } } } }";
+  var IMDB_TITLE_FIELDS_QUERY = "query GHCombined($id: ID!){ title(id:$id){ id titleText{ text } releaseYear{ year } ratingsSummary{ aggregateRating voteCount } runtime{ seconds } plot{ plotText{ plainText } } primaryImage{ url width height } titleGenres{ genres{ genre{ text } } } } }";
   async function fetchImdbTitleFields(tconst) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p;
     if (!tconst) return null;
     try {
       const data = await imdbQuery("GHCombined", IMDB_TITLE_FIELDS_QUERY, { id: tconst });
       const t = (_a = data == null ? void 0 : data.data) == null ? void 0 : _a.title;
       if (!t) return null;
       return {
-        rating: (_c = (_b = t.ratingsSummary) == null ? void 0 : _b.aggregateRating) != null ? _c : null,
-        runtime: ((_d = t.runtime) == null ? void 0 : _d.seconds) != null ? Math.round(t.runtime.seconds / 60) : null,
-        overview: (_g = (_f = (_e = t.plot) == null ? void 0 : _e.plotText) == null ? void 0 : _f.plainText) != null ? _g : null,
-        poster: (_i = (_h = t.primaryImage) == null ? void 0 : _h.url) != null ? _i : null,
-        genres: (_l = (_k = (_j = t.titleGenres) == null ? void 0 : _j.genres) == null ? void 0 : _k.map((g) => {
+        titleText: (_c = (_b = t.titleText) == null ? void 0 : _b.text) != null ? _c : null,
+        releaseYear: (_e = (_d = t.releaseYear) == null ? void 0 : _d.year) != null ? _e : null,
+        rating: (_g = (_f = t.ratingsSummary) == null ? void 0 : _f.aggregateRating) != null ? _g : null,
+        runtime: ((_h = t.runtime) == null ? void 0 : _h.seconds) != null ? Math.round(t.runtime.seconds / 60) : null,
+        overview: (_k = (_j = (_i = t.plot) == null ? void 0 : _i.plotText) == null ? void 0 : _j.plainText) != null ? _k : null,
+        poster: (_m = (_l = t.primaryImage) == null ? void 0 : _l.url) != null ? _m : null,
+        genres: (_p = (_o = (_n = t.titleGenres) == null ? void 0 : _n.genres) == null ? void 0 : _o.map((g) => {
           var _a2;
           return (_a2 = g.genre) == null ? void 0 : _a2.text;
-        }).filter(Boolean)) != null ? _l : null
+        }).filter(Boolean)) != null ? _p : null
       };
     } catch (e) {
       return null;
     }
+  }
+  async function searchImdbCandidates(term, limit = 10) {
+    var _a, _b;
+    if (!term) return [];
+    try {
+      const data = await imdbQuery("MainSearch", IMDB_MAIN_SEARCH_QUERY, { term });
+      const edges = ((_b = (_a = data == null ? void 0 : data.data) == null ? void 0 : _a.mainSearch) == null ? void 0 : _b.edges) || [];
+      return normalizeImdbCandidates(edges.map((e) => {
+        var _a2;
+        return (_a2 = e == null ? void 0 : e.node) == null ? void 0 : _a2.entity;
+      }), limit);
+    } catch (e) {
+      return [];
+    }
+  }
+  function normalizeImdbCandidates(entities, limit = 10) {
+    return (entities || []).filter((r) => {
+      var _a, _b;
+      return r && r.id && ((_a = r.titleText) == null ? void 0 : _a.text) && ((_b = r.titleType) == null ? void 0 : _b.id) !== "podcastEpisode";
+    }).slice(0, limit).map((r) => {
+      var _a, _b, _c, _d, _e, _f;
+      return {
+        source: "imdb",
+        imdbId: r.id,
+        tmdbId: null,
+        tmdbType: null,
+        title: r.titleText.text,
+        year: (_b = (_a = r.releaseYear) == null ? void 0 : _a.year) != null ? _b : null,
+        type: (_d = (_c = r.titleType) == null ? void 0 : _c.text) != null ? _d : null,
+        votes: (_f = (_e = r.ratingsSummary) == null ? void 0 : _e.voteCount) != null ? _f : null,
+        poster: null
+        // filled lazily by the picker via fetchImdbTitleFields
+      };
+    });
   }
   async function fetchImdbMovieByTitle(title, year) {
     const match = await imdbSearchTitle(title, year);
@@ -1201,6 +1237,46 @@
     }
   }
 
+  // src/metadata/overrides.js
+  var LS_MOVIE_OVERRIDE = "sc_movie_override_v1";
+  function load() {
+    try {
+      const raw = localStorage.getItem(LS_MOVIE_OVERRIDE);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function save(map) {
+    try {
+      localStorage.setItem(LS_MOVIE_OVERRIDE, JSON.stringify(map));
+    } catch (e) {
+    }
+  }
+  function getMovieOverride(rawTitle) {
+    if (!rawTitle) return null;
+    const entry = load()[rawTitle];
+    return entry && entry.imdbId ? entry : null;
+  }
+  function setMovieOverride(rawTitle, { imdbId, tmdbId = null, tmdbType = null } = {}) {
+    if (!rawTitle || !imdbId) return;
+    const map = load();
+    map[rawTitle] = { imdbId, tmdbId, tmdbType, ts: Date.now() };
+    save(map);
+  }
+  function clearMovieOverride(rawTitle) {
+    if (!rawTitle) return;
+    const map = load();
+    if (!(rawTitle in map)) return;
+    delete map[rawTitle];
+    save(map);
+  }
+  function detectTconst(s) {
+    const m = String(s || "").match(/\b(tt\d{7,10})\b/);
+    return m ? m[1] : null;
+  }
+
   // src/metadata/tmdb.js
   var LINK_DEFS = [
     { key: "imdb", label: "IMDb", color: "#f5c518", fg: "#000", char: "i" },
@@ -1346,7 +1422,6 @@
     }
   }
   async function fetchTmdbPrimary(title, year) {
-    var _a, _b, _c, _d, _e, _f, _g;
     if (!title || !hasKey(LS_TMDB)) return null;
     try {
       const apiKey = getKey(LS_TMDB);
@@ -1362,27 +1437,35 @@
         const yearMatch = candidates.find((r) => (r.release_date || r.first_air_date || "").slice(0, 4) === String(year));
         if (yearMatch) best = yearMatch;
       }
-      const mediaType = best.media_type;
+      return await fetchTmdbDetails(best.media_type, best.id);
+    } catch (e) {
+      return null;
+    }
+  }
+  async function fetchTmdbDetails(mediaType, tmdbId) {
+    var _a, _b, _c, _d, _e, _f;
+    if (tmdbId == null || mediaType !== "movie" && mediaType !== "tv" || !hasKey(LS_TMDB)) return null;
+    try {
       const detailsRes = await fetch(
-        `https://api.themoviedb.org/3/${mediaType}/${best.id}?append_to_response=external_ids&api_key=${encodeURIComponent(apiKey)}`
+        `https://api.themoviedb.org/3/${mediaType}/${tmdbId}?append_to_response=external_ids&api_key=${encodeURIComponent(getKey(LS_TMDB))}`
       );
       if (!detailsRes.ok) return null;
       const d = await detailsRes.json();
       const imdbId = ((_a = d.external_ids) == null ? void 0 : _a.imdb_id) || null;
       if (!imdbId) return null;
       let killCount = null;
-      if (mediaType === "movie" && best.id != null) {
+      if (mediaType === "movie") {
         const db = await getKillCountDb();
-        const count = db[String(best.id)];
+        const count = db[String(tmdbId)];
         if (count !== void 0 && count !== null) killCount = count;
       }
       return {
         imdbId,
-        tmdbId: (_b = best.id) != null ? _b : null,
-        title: mediaType === "movie" ? (_c = d.title) != null ? _c : null : (_d = d.name) != null ? _d : null,
+        tmdbId,
+        title: mediaType === "movie" ? (_b = d.title) != null ? _b : null : (_c = d.name) != null ? _c : null,
         year: (d.release_date || d.first_air_date || "").slice(0, 4) || null,
         rating: d.vote_average ? Math.round(d.vote_average * 10) / 10 : null,
-        runtime: mediaType === "movie" ? (_e = d.runtime) != null ? _e : null : (_g = (_f = d.episode_run_time) == null ? void 0 : _f[0]) != null ? _g : null,
+        runtime: mediaType === "movie" ? (_d = d.runtime) != null ? _d : null : (_f = (_e = d.episode_run_time) == null ? void 0 : _e[0]) != null ? _f : null,
         genres: (d.genres || []).map((g) => g.name).filter(Boolean),
         overview: d.overview || null,
         poster: d.poster_path ? `https://image.tmdb.org/t/p/w500${d.poster_path}` : null,
@@ -1393,12 +1476,51 @@
       return null;
     }
   }
-  async function lookupMovie(title, year, season, episode) {
+  async function searchTmdbCandidates(term, limit = 10) {
+    if (!term || !hasKey(LS_TMDB)) return [];
+    try {
+      const res = await fetch(
+        `https://api.themoviedb.org/3/search/multi?query=${encodeURIComponent(term)}&include_adult=false&api_key=${encodeURIComponent(getKey(LS_TMDB))}`
+      );
+      if (!res.ok) return [];
+      const data = await res.json();
+      return normalizeTmdbCandidates(data.results, limit);
+    } catch (e) {
+      return [];
+    }
+  }
+  function normalizeTmdbCandidates(results, limit = 10) {
+    return (results || []).filter((r) => r && r.id != null && (r.media_type === "movie" || r.media_type === "tv")).map((r) => {
+      var _a;
+      return {
+        source: "tmdb",
+        imdbId: null,
+        tmdbId: r.id,
+        tmdbType: r.media_type,
+        title: (r.media_type === "movie" ? r.title : r.name) || "",
+        year: (r.release_date || r.first_air_date || "").slice(0, 4) || null,
+        type: r.media_type === "movie" ? "Movie" : "TV Series",
+        votes: (_a = r.vote_count) != null ? _a : null,
+        poster: r.poster_path ? `https://image.tmdb.org/t/p/w92${r.poster_path}` : null
+      };
+    }).filter((r) => r.title).slice(0, limit);
+  }
+  function overrideCacheKey(rawTitle) {
+    return "override:" + rawTitle;
+  }
+  function forgetCachedLookup(cacheKey) {
+    if (!(cacheKey in movieState.movieLinkCache)) return;
+    delete movieState.movieLinkCache[cacheKey];
+    delete _movieCacheTimestamps[cacheKey];
+    persistMovieCache();
+  }
+  async function lookupMovie(title, year, season, episode, rawTitle) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
-    const cacheKey = title + (year || "") + (episode != null ? `S${season != null ? season : ""}E${episode}` : "");
+    const override = rawTitle ? getMovieOverride(rawTitle) : null;
+    const cacheKey = override ? overrideCacheKey(rawTitle) : title + (year || "") + (episode != null ? `S${season != null ? season : ""}E${episode}` : "");
     if (movieState.movieLinkCache[cacheKey] !== void 0) return movieState.movieLinkCache[cacheKey];
     let wikiUrl = null;
-    const tmdbPrimaryPromise = fetchTmdbPrimary(title, year);
+    const tmdbPrimaryPromise = override ? Promise.resolve(null) : fetchTmdbPrimary(title, year);
     const wikiPromise = (async () => {
       var _a2, _b2;
       try {
@@ -1414,11 +1536,21 @@
       }
     })();
     const rawTmdbPrimary = await tmdbPrimaryPromise;
-    const tmdbPrimary = rawTmdbPrimary && titlesMatch(rawTmdbPrimary.title, title) ? rawTmdbPrimary : null;
+    let tmdbPrimary = rawTmdbPrimary && titlesMatch(rawTmdbPrimary.title, title) ? rawTmdbPrimary : null;
     let imdbResult = null;
     let tmdbSupplemental = null;
     let imdbId;
-    if (tmdbPrimary) {
+    if (override) {
+      imdbId = override.imdbId;
+      if (override.tmdbId != null && override.tmdbType) {
+        tmdbPrimary = await fetchTmdbDetails(override.tmdbType, override.tmdbId);
+      }
+      if (!tmdbPrimary) {
+        const fields = await fetchImdbTitleFields(imdbId);
+        imdbResult = fields ? { ...fields, tconst: imdbId, title: fields.titleText, year: fields.releaseYear } : null;
+        tmdbSupplemental = await fetchTmdbSupplemental(imdbId);
+      }
+    } else if (tmdbPrimary) {
       imdbId = tmdbPrimary.imdbId;
     } else {
       imdbResult = await fetchImdbMovieByTitle(title, year);
@@ -1437,7 +1569,11 @@
         letterboxd: imdbId ? `https://letterboxd.com/imdb/${imdbId}` : null,
         wiki: wikiUrl
       },
-      resolved: !!(tmdbPrimary || imdbResult),
+      // A pin resolves even if its detail fetch failed -- the pin itself is the answer.
+      resolved: !!(tmdbPrimary || imdbResult || override && imdbId),
+      // Which path produced this entry -- the fix-match picker offers "Reset to auto-match"
+      // only on 'pinned'.
+      matchSource: override ? "pinned" : tmdbPrimary ? "tmdb" : imdbResult ? "imdb" : null,
       killCount: (_b = (_a = tmdbPrimary == null ? void 0 : tmdbPrimary.killCount) != null ? _a : tmdbSupplemental == null ? void 0 : tmdbSupplemental.killCount) != null ? _b : null,
       parentalGuide,
       imdbId: imdbId || null,
@@ -1461,7 +1597,7 @@
       backdrop: (_v = (_u = (_t = (_s = episodeInfo == null ? void 0 : episodeInfo.image) != null ? _s : tmdbPrimary == null ? void 0 : tmdbPrimary.backdrop) != null ? _t : tmdbSupplemental == null ? void 0 : tmdbSupplemental.backdrop) != null ? _u : imdbResult == null ? void 0 : imdbResult.poster) != null ? _v : null,
       overview: (_y = (_x = (_w = episodeInfo == null ? void 0 : episodeInfo.overview) != null ? _w : tmdbPrimary == null ? void 0 : tmdbPrimary.overview) != null ? _x : imdbResult == null ? void 0 : imdbResult.overview) != null ? _y : ""
     };
-    if (result.resolved) {
+    if (result.resolved && !(override && !tmdbPrimary && !imdbResult)) {
       movieState.movieLinkCache[cacheKey] = result;
       _movieCacheTimestamps[cacheKey] = Date.now();
       persistMovieCache();
@@ -2694,366 +2830,6 @@
     return lastAiredMap.get(normalizeKey(title, year)) || null;
   }
 
-  // src/cards/nowplaying.js
-  var NP_PG_SHORT = {
-    "Sex & Nudity": "Sex/Nudity",
-    "Violence & Gore": "Violence",
-    "Profanity": "Profanity",
-    "Alcohol, Drugs & Smoking": "Drugs",
-    "Frightening & Intense Scenes": "Frightening"
-  };
-  var npState = {
-    data: null,
-    // latest movie data for the card
-    introDone: false
-    // startup intro card has run (see initIntroSequence)
-  };
-  var _npHideTimer = null;
-  var _npProgTimer = null;
-  var _npWatcherInit = false;
-  function _renderNpProgress() {
-    const card = document.getElementById("sc-np-card");
-    if (!card) {
-      clearInterval(_npProgTimer);
-      return;
-    }
-    const wrap = card.querySelector("#sc-np-progress");
-    const fill = card.querySelector("#sc-np-prog-fill");
-    const elapsedEl = card.querySelector("#sc-np-prog-elapsed");
-    const totalEl = card.querySelector("#sc-np-prog-total");
-    const remainEl = card.querySelector("#sc-np-prog-remain");
-    if (!wrap || !fill) return;
-    const dur = getCurrentMediaSeconds();
-    if (dur > 0) {
-      const elapsed = Math.min(getCurrentPlaybackSeconds(), dur);
-      const pct = Math.max(0, Math.min(100, elapsed / dur * 100));
-      fill.style.setProperty("width", pct + "%", "important");
-      elapsedEl.textContent = formatHMS(elapsed);
-      totalEl.textContent = formatHMS(dur);
-      remainEl.textContent = "−" + formatHMS(dur - elapsed) + " left";
-      wrap.style.display = "";
-    } else {
-      wrap.style.display = "none";
-    }
-  }
-  function _npCardEnabled() {
-    return true;
-  }
-  function _npTitleFontSize(text) {
-    const base = isTv ? 52 : document.body.classList.contains("sc-vertical") ? 30 : 44;
-    let scale = 1;
-    if (text.length > 60) scale = 0.5;
-    else if (text.length > 40) scale = 0.65;
-    else if (text.length > 25) scale = 0.8;
-    return Math.round(base * scale);
-  }
-  var _NP_TOP_MARGIN = 0.05;
-  function _npFitToScreen(titleEl, startPx) {
-    const content = document.getElementById("sc-np-content");
-    const info = document.getElementById("sc-np-info");
-    const ov = document.getElementById("sc-np-overview");
-    if (!content || !info || !ov) return;
-    ov.style.removeProperty("max-height");
-    const avail = () => content.getBoundingClientRect().bottom - window.innerHeight * _NP_TOP_MARGIN;
-    const fits = () => info.getBoundingClientRect().height <= avail();
-    for (let px = startPx; !fits() && px > startPx * 0.6; px -= 2) {
-      titleEl.style.setProperty("font-size", px - 2 + "px", "important");
-    }
-    for (const em of [4.5, 3]) {
-      if (fits()) break;
-      ov.style.setProperty("max-height", em + "em", "important");
-    }
-  }
-  var _npScrollTimer = null;
-  var _npScrollRaf = null;
-  var _NP_SCROLL_DELAY = 3500;
-  function _autoScrollOverview() {
-    clearTimeout(_npScrollTimer);
-    cancelAnimationFrame(_npScrollRaf);
-    const card = document.getElementById("sc-np-card");
-    const ov = card && card.querySelector("#sc-np-overview");
-    if (!ov) return 0;
-    ov.scrollTop = 0;
-    const dist = ov.scrollHeight - ov.clientHeight;
-    if (dist <= 4) return 0;
-    const dur = Math.min(12e3, Math.max(2500, dist / 24 * 1e3));
-    _npScrollTimer = setTimeout(() => {
-      const start = ov.scrollTop;
-      const span = ov.scrollHeight - ov.clientHeight - start;
-      if (span <= 0) return;
-      const t0 = performance.now();
-      const step = (now) => {
-        const c = document.getElementById("sc-np-card");
-        if (!c || !c.classList.contains("sc-np-visible")) return;
-        const p = Math.min(1, (now - t0) / dur);
-        const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-        ov.scrollTop = start + span * e;
-        if (p < 1) _npScrollRaf = requestAnimationFrame(step);
-      };
-      _npScrollRaf = requestAnimationFrame(step);
-    }, _NP_SCROLL_DELAY);
-    return _NP_SCROLL_DELAY + dur;
-  }
-  function showNowPlayingCard(data, opts = {}) {
-    if (!data || !data.cleanTitle && !data.backdrop) return;
-    let card = document.getElementById("sc-np-card");
-    if (!card) {
-      card = document.createElement("div");
-      card.id = "sc-np-card";
-      card.innerHTML = `
-            <div id="sc-np-backdrop"></div>
-            <div id="sc-np-scrim"></div>
-            <div id="sc-np-content">
-                <img id="sc-np-poster" alt="" />
-                <div id="sc-np-info">
-                    <div id="sc-np-eyebrow">Now Playing</div>
-                    <div id="sc-np-title"></div>
-                    <div id="sc-np-meta"></div>
-                    <div id="sc-np-overview"></div>
-                    <div id="sc-np-chips"></div>
-                    <div id="sc-np-progress">
-                        <div id="sc-np-prog-bar"><div id="sc-np-prog-fill"></div></div>
-                        <div id="sc-np-prog-times">
-                            <span id="sc-np-prog-elapsed">0:00</span>
-                            <span id="sc-np-prog-remain"></span>
-                            <span id="sc-np-prog-total">0:00</span>
-                        </div>
-                    </div>
-                    <div id="sc-np-actions">
-                        <div id="sc-np-links"></div>
-                        <button id="sc-np-trivia-btn" type="button">Trivia</button>
-                    </div>
-                </div>
-            </div>`;
-      document.body.appendChild(card);
-      card.addEventListener("click", hideNowPlayingCard);
-      card.querySelector("#sc-np-trivia-btn").addEventListener("click", (e) => {
-        e.stopPropagation();
-        showTriviaCard();
-      });
-    }
-    const title = data.cleanTitle || movieState.lastMovieTitle || "";
-    const year = data.cleanYear ? ` (${data.cleanYear})` : "";
-    const bd = card.querySelector("#sc-np-backdrop");
-    const poster = card.querySelector("#sc-np-poster");
-    const meta = card.querySelector("#sc-np-meta");
-    const chips = card.querySelector("#sc-np-chips");
-    bd.style.backgroundImage = data.backdrop ? `url(${data.backdrop})` : "none";
-    if (data.poster) {
-      poster.src = data.poster;
-      poster.style.display = "";
-    } else poster.style.display = "none";
-    const eyebrow = card.querySelector("#sc-np-eyebrow");
-    eyebrow.style.display = opts.showProgress !== false ? "" : "none";
-    const triviaBtn = card.querySelector("#sc-np-trivia-btn");
-    const showTrivia = opts.showProgress !== false && !!(npState.data && npState.data.imdbId);
-    triviaBtn.style.display = showTrivia ? "" : "none";
-    const linksRow = card.querySelector("#sc-np-links");
-    linksRow.innerHTML = "";
-    if (!isTv && data.links) {
-      LINK_DEFS.forEach(({ key, label, color, fg, char }) => {
-        const url = data.links[key];
-        if (!url) return;
-        const a = document.createElement("a");
-        a.href = url;
-        a.target = "_blank";
-        a.rel = "noopener noreferrer";
-        a.title = `${label}: "${title}"`;
-        a.className = "sc-np-link";
-        a.style.background = color;
-        a.style.color = fg;
-        a.textContent = char;
-        a.addEventListener("click", (e) => {
-          e.stopPropagation();
-          if (window.CytubeNative && typeof CytubeNative.openInApp === "function") {
-            e.preventDefault();
-            CytubeNative.openInApp(url);
-          }
-        });
-        linksRow.appendChild(a);
-      });
-    }
-    const titleEl = card.querySelector("#sc-np-title");
-    const epTag = episodeTag(data.season, data.episode);
-    const titleText = title + year + (epTag ? ` · ${epTag}` : "") + (data.episodeName ? ` — ${data.episodeName}` : "");
-    titleEl.textContent = titleText;
-    const titlePx = _npTitleFontSize(titleText);
-    titleEl.style.setProperty("font-size", titlePx + "px", "important");
-    card.querySelector("#sc-np-overview").textContent = data.overview || "";
-    const metaParts = [];
-    if (data.rating) metaParts.push(`⭐ ${data.rating}`);
-    if (data.runtime) metaParts.push(`${Math.floor(data.runtime / 60)}h ${data.runtime % 60}m`);
-    if (data.genres && data.genres.length) metaParts.push(data.genres.slice(0, 3).join(" · "));
-    const lastAired = getLastAired(title, data.cleanYear);
-    if (lastAired) metaParts.push(`📅 Last aired ${lastAired.dateStr}`);
-    meta.textContent = metaParts.join("     ");
-    const chipHtml = [];
-    (data.parentalGuide || []).forEach((pg) => {
-      const sev = String(pg.severity || "").toLowerCase();
-      const label = NP_PG_SHORT[pg.category] || pg.category;
-      chipHtml.push(`<span class="sc-np-chip sc-sev-${sev}">${label}: ${pg.severity}</span>`);
-    });
-    if (data.killCount !== null && data.killCount !== void 0) {
-      chipHtml.push(`<span class="sc-np-chip">💀 ${data.killCount} kills</span>`);
-    }
-    chips.innerHTML = chipHtml.join("");
-    card.classList.add("sc-np-visible");
-    const progWrap = card.querySelector("#sc-np-progress");
-    if (opts.showProgress !== false) {
-      _renderNpProgress();
-      clearInterval(_npProgTimer);
-      _npProgTimer = setInterval(_renderNpProgress, 500);
-    } else {
-      clearInterval(_npProgTimer);
-      if (progWrap) progWrap.style.display = "none";
-    }
-    _npFitToScreen(titleEl, titlePx);
-    _autoScrollOverview();
-    clearTimeout(_npHideTimer);
-    if (opts.autoHide) {
-      _npHideTimer = setTimeout(hideNowPlayingCard, opts.autoHideMs || 2e4);
-    }
-  }
-  function hideNowPlayingCard() {
-    const card = document.getElementById("sc-np-card");
-    if (card) card.classList.remove("sc-np-visible");
-    clearTimeout(_npHideTimer);
-    clearInterval(_npProgTimer);
-    clearTimeout(_npScrollTimer);
-    cancelAnimationFrame(_npScrollRaf);
-  }
-  function initNowPlayingWatcher() {
-    if (_npWatcherInit) return;
-    _npWatcherInit = true;
-    const toggle = () => {
-      const card = document.getElementById("sc-np-card");
-      if (card && card.classList.contains("sc-np-visible")) hideNowPlayingCard();
-      else if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
-    };
-    document.addEventListener("keydown", (e) => {
-      const t = e.target;
-      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
-      if (e.key === "i" || e.key === "I") toggle();
-      else if (e.key === "t" || e.key === "T") toggleTriviaCard();
-    });
-  }
-
-  // src/lineup/sectionThemes.js
-  var THEMES = {
-    "funky-cheese-friday": { font: "Boogaloo", color: "#e0a92a", wash: "#2b210a" },
-    "friday-grindhouse-a-go-go": { font: "Chewy", color: "#ec4899", wash: "#2a0e1c" },
-    "friday-night-freak-show": { font: "Creepster", color: "#52c41a", wash: "#0f2109" },
-    "psychedelic-saturday": { font: "'Rubik Wet Paint'", color: "#a855f7", wash: "#200c2b" },
-    "saturday-prime-time-drive-in": { font: "Monoton", color: "#22d3ee", wash: "#06232a" },
-    "red-light-saturday-night": { font: "'Vast Shadow'", color: "#ef4444", wash: "#2b0a0a" },
-    "the-sunday-classics": { font: "Cinzel", color: "#b8b8b8", wash: "#1c1c1c" },
-    "sunday-slop-o-rama": { font: "Eater", color: "#a3b125", wash: "#1c1f08" },
-    "last-call-sunday-night": { font: "'Bungee Shade'", color: "#6366f1", wash: "#12102b" }
-  };
-  var DEFAULT_THEME = { font: null, color: "#9aa0a8", wash: "#14141a" };
-  function getSectionTheme(slug) {
-    return THEMES[slug] || DEFAULT_THEME;
-  }
-  var FONT_FAMILIES = ["Boogaloo", "Chewy", "Creepster", "Rubik+Wet+Paint", "Monoton", "Vast+Shadow", "Cinzel", "Eater", "Bungee+Shade", "Bebas+Neue", "Alfa+Slab+One"];
-  var FONTS_LINK_ID = "sc-lineup-theme-fonts";
-  function ensureThemeFontsLoaded() {
-    if (document.getElementById(FONTS_LINK_ID)) return;
-    const link = document.createElement("link");
-    link.id = FONTS_LINK_ID;
-    link.rel = "stylesheet";
-    link.href = `https://fonts.googleapis.com/css2?${FONT_FAMILIES.map((f) => `family=${f}`).join("&")}&display=swap`;
-    document.head.appendChild(link);
-  }
-
-  // src/player/scrubber.js
-  function neutralizeVjsInactivityTimer() {
-    try {
-      const p = window.PLAYER && window.PLAYER.player;
-      if (p && typeof p.options === "function") p.options({ inactivityTimeout: 0 });
-    } catch (e) {
-    }
-  }
-  function wakeVideoControls() {
-    try {
-      const p = window.PLAYER && window.PLAYER.player;
-      if (p && typeof p.userActive === "function") {
-        p.userActive(true);
-        if (typeof p.reportUserActivity === "function") p.reportUserActivity();
-        return;
-      }
-    } catch (e) {
-    }
-    const el = document.querySelector("#videowrap .video-js");
-    if (el) {
-      el.classList.add("vjs-user-active");
-      el.classList.remove("vjs-user-inactive");
-    }
-  }
-  var _scrubHoldTimer = null;
-  function holdScrubber(on) {
-    if (on) {
-      wakeVideoControls();
-      if (!_scrubHoldTimer) _scrubHoldTimer = setInterval(wakeVideoControls, 1e3);
-      return;
-    }
-    if (!_scrubHoldTimer) return;
-    clearInterval(_scrubHoldTimer);
-    _scrubHoldTimer = null;
-  }
-
-  // src/cards/upnext.js
-  var UPNEXT_BOT_URL = "https://bot.420grindhouseserver.com";
-  var UPNEXT_LOAD_TIMEOUT_MS = 1e4;
-  var _frameCreated = false;
-  function ensureFrame(body) {
-    if (_frameCreated) return;
-    _frameCreated = true;
-    const iframe = document.createElement("iframe");
-    iframe.id = "sc-upnext-frame";
-    iframe.title = "Upcoming queue";
-    iframe.style.display = "none";
-    let settled = false;
-    const showFrame = () => {
-      var _a;
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeoutId);
-      (_a = body.querySelector(".sc-upnext-loading")) == null ? void 0 : _a.remove();
-      iframe.style.display = "block";
-    };
-    const showError = () => {
-      if (settled) return;
-      settled = true;
-      body.innerHTML = '<div class="sc-upnext-error">Schedule unavailable right now.</div>';
-    };
-    iframe.addEventListener("load", showFrame);
-    iframe.addEventListener("error", showError);
-    const timeoutId = setTimeout(showError, UPNEXT_LOAD_TIMEOUT_MS);
-    iframe.src = UPNEXT_BOT_URL;
-    body.appendChild(iframe);
-  }
-  function showUpNextCard() {
-    let card = document.getElementById("sc-upnext-card");
-    if (!card) {
-      card = document.createElement("div");
-      card.id = "sc-upnext-card";
-      card.innerHTML = `
-            <div id="sc-upnext-head">
-                <span>Up Next</span>
-                <button id="sc-upnext-close" type="button">✕</button>
-            </div>
-            <div id="sc-upnext-body"><div class="sc-upnext-loading">Loading…</div></div>`;
-      document.body.appendChild(card);
-      card.querySelector("#sc-upnext-close").addEventListener("click", hideUpNextCard);
-    }
-    card.classList.add("sc-upnext-visible");
-    ensureFrame(card.querySelector("#sc-upnext-body"));
-  }
-  function hideUpNextCard() {
-    var _a;
-    (_a = document.getElementById("sc-upnext-card")) == null ? void 0 : _a.classList.remove("sc-upnext-visible");
-  }
-
   // src/titleinject.js
   init_native();
 
@@ -3219,1328 +2995,93 @@
     return !!(el && el.classList.contains("sc-movie-subtitles-visible"));
   }
 
-  // src/chrome/dock.js
-  var DOCK_ORDER = ["sc-chatmode-btn", "sc-settings-btn", "sc-subtitles-btn", "sc-desync-btn", "sc-cast-btn"];
-  function layoutDock() {
-    let slot = 0;
-    for (const id of DOCK_ORDER) {
-      const el = document.getElementById(id);
-      if (!el || el.classList.contains("sc-hidden")) continue;
-      el.style.setProperty("--sc-dock-slot", String(slot));
-      slot++;
-    }
-    document.body.style.setProperty("--sc-dock-count", String(slot));
-  }
-
-  // src/subtitles/ui.js
-  var SUBTITLE_CACHE_MAX_ENTRIES = 15;
-  var _subtitleCache = {};
-  function loadSubtitleCache() {
+  // src/player/scrubber.js
+  function neutralizeVjsInactivityTimer() {
     try {
-      const raw = localStorage.getItem(LS_SUBTITLE_CACHE);
-      if (raw) _subtitleCache = JSON.parse(raw);
-    } catch (e) {
-      _subtitleCache = {};
-    }
-  }
-  loadSubtitleCache();
-  function persistSubtitleCache() {
-    try {
-      const keys = Object.keys(_subtitleCache);
-      if (keys.length > SUBTITLE_CACHE_MAX_ENTRIES) {
-        const oldestFirst = keys.sort((a, b) => (_subtitleCache[a].ts || 0) - (_subtitleCache[b].ts || 0));
-        for (const k of oldestFirst.slice(0, keys.length - SUBTITLE_CACHE_MAX_ENTRIES)) delete _subtitleCache[k];
-      }
-      localStorage.setItem(LS_SUBTITLE_CACHE, JSON.stringify(_subtitleCache));
+      const p = window.PLAYER && window.PLAYER.player;
+      if (p && typeof p.options === "function") p.options({ inactivityTimeout: 0 });
     } catch (e) {
     }
   }
-  var _imdbId = null;
-  var _cues2 = null;
-  var _lastResults = [];
-  var _loading = false;
-  function escapeHtml(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-  function ensureButton() {
-    let btn = document.getElementById("sc-subtitles-btn");
-    if (!btn) {
-      btn = document.createElement("button");
-      btn.id = "sc-subtitles-btn";
-      btn.className = "sc-dock-btn";
-      btn.type = "button";
-      btn.title = "Download subtitles for this movie";
-      btn.dataset.tvLabel = "Subtitles";
-      btn.addEventListener("click", onButtonClick);
-      document.body.appendChild(btn);
-    }
-    return btn;
-  }
-  function updateSubtitleButton(imdbId) {
-    if (imdbId !== _imdbId) {
-      _imdbId = imdbId;
-      _cues2 = null;
-      _lastResults = [];
-      closeSubtitlesPicker();
-      closeManageModal();
-      hideMovieSubtitles();
-      const cached = imdbId && _subtitleCache[imdbId];
-      if (cached) {
-        _cues2 = cached.cues;
-        setSubtitleOffset(cached.offset || 0);
-      }
-    }
-    const show = !!(imdbId && hasKey(LS_OPENSUBTITLES));
-    const btn = show ? ensureButton() : document.getElementById("sc-subtitles-btn");
-    if (btn) btn.classList.toggle("sc-hidden", !show);
-    layoutDock();
-  }
-  async function onButtonClick() {
-    if (_loading) return;
-    if (_cues2) {
-      openManageModal();
-      return;
-    }
-    _loading = true;
-    const btn = document.getElementById("sc-subtitles-btn");
-    btn.disabled = true;
-    btn.title = "Searching…";
-    _lastResults = await searchSubtitles(_imdbId);
-    btn.disabled = false;
-    btn.title = "Download subtitles for this movie";
-    _loading = false;
-    openSubtitlesPicker();
-  }
-  function resultBadges(r) {
-    const badges = [];
-    if (r.fromTrusted) badges.push('<span class="sc-subtitles-badge sc-subtitles-badge-trusted">✓ Trusted</span>');
-    if (r.hearingImpaired) badges.push('<span class="sc-subtitles-badge">SDH</span>');
-    if (r.machineTranslated) badges.push('<span class="sc-subtitles-badge sc-subtitles-badge-warn">Machine-translated</span>');
-    return badges.join("");
-  }
-  function openSubtitlesPicker() {
-    closeManageModal();
-    closeSubtitlesPicker();
-    const results = _lastResults;
-    const panel = document.createElement("div");
-    panel.id = "sc-subtitles-picker";
-    panel.innerHTML = `
-        <div id="sc-subtitles-picker-box">
-            <div id="sc-subtitles-picker-head">
-                <span>Choose Subtitles</span>
-                <button id="sc-subtitles-picker-close" type="button">✕</button>
-            </div>
-            <div id="sc-subtitles-picker-body">
-                ${results.length ? results.map((r, i) => `
-                    <button type="button" class="sc-subtitles-result" data-idx="${i}">
-                        <span class="sc-subtitles-result-release">${escapeHtml(r.release)}</span>
-                        <span class="sc-subtitles-result-meta">${escapeHtml(r.uploader)} · ${r.downloadCount.toLocaleString()} downloads</span>
-                        ${resultBadges(r) ? `<span class="sc-subtitles-result-badges">${resultBadges(r)}</span>` : ""}
-                    </button>`).join("") : '<div class="sc-subtitles-empty">No subtitles found for this movie.</div>'}
-            </div>
-            <div id="sc-subtitles-picker-status"></div>
-        </div>`;
-    document.body.appendChild(panel);
-    panel.querySelector("#sc-subtitles-picker-close").addEventListener("click", closeSubtitlesPicker);
-    panel.querySelectorAll(".sc-subtitles-result").forEach((el, i) => {
-      el.addEventListener("click", () => selectResult(results[i]));
-    });
-    const first = panel.querySelector(".sc-subtitles-result") || panel.querySelector("#sc-subtitles-picker-close");
-    if (first && tvNavState.setFocus) tvNavState.setFocus(first);
-  }
-  function closeSubtitlesPicker() {
-    const panel = document.getElementById("sc-subtitles-picker");
-    if (panel) panel.remove();
-  }
-  async function selectResult(result) {
-    const status = document.getElementById("sc-subtitles-picker-status");
-    if (status) status.textContent = "Downloading…";
-    const link = await downloadSubtitle(result.fileId);
-    if (!link) {
-      if (status) status.textContent = "Download failed — try another, or check your key/quota.";
-      return;
-    }
-    const srt = await fetchSrtText(link);
-    const cues = srt ? parseSrt(srt) : [];
-    if (!cues.length) {
-      if (status) status.textContent = "Couldn't read that subtitle file — try another.";
-      return;
-    }
-    _cues2 = cues;
-    resetSubtitleOffset();
-    _subtitleCache[_imdbId] = { cues, offset: 0, release: result.release, uploader: result.uploader, ts: Date.now() };
-    persistSubtitleCache();
-    closeSubtitlesPicker();
-    showMovieSubtitles(_cues2);
-  }
-  var OFFSET_STEP = 0.5;
-  function renderOffsetReadout(modal) {
-    const seconds = getSubtitleOffset();
-    const el = modal.querySelector("#sc-subtitles-offset-val");
-    if (el) el.textContent = (seconds > 0 ? "+" : "") + seconds.toFixed(1) + "s";
-  }
-  function openManageModal() {
-    closeSubtitlesPicker();
-    closeManageModal();
-    const modal = document.createElement("div");
-    modal.id = "sc-subtitles-manage";
-    modal.innerHTML = `
-        <div id="sc-subtitles-manage-box">
-            <div id="sc-subtitles-manage-head">
-                <span>Subtitles</span>
-                <button id="sc-subtitles-manage-close" type="button">✕</button>
-            </div>
-            <button id="sc-subtitles-manage-toggle" type="button" class="sc-settings-btn-wide"></button>
-            <div class="sc-subtitles-offset-row">
-                <span class="sc-subtitles-offset-label">Sync offset</span>
-                <div class="sc-subtitles-offset-controls">
-                    <button id="sc-subtitles-offset-minus" type="button" class="sc-settings-test">−0.5s</button>
-                    <span id="sc-subtitles-offset-val"></span>
-                    <button id="sc-subtitles-offset-plus" type="button" class="sc-settings-test">+0.5s</button>
-                </div>
-            </div>
-            <button id="sc-subtitles-offset-reset" type="button" class="sc-update-github-link">Reset offset</button>
-            <button id="sc-subtitles-manage-different" type="button" class="sc-settings-btn-wide">Download a different one</button>
-        </div>`;
-    document.body.appendChild(modal);
-    const toggleBtn = modal.querySelector("#sc-subtitles-manage-toggle");
-    const syncToggleLabel = () => {
-      toggleBtn.textContent = isMovieSubtitlesVisible() ? "Hide Subtitles" : "Show Subtitles";
-    };
-    syncToggleLabel();
-    toggleBtn.addEventListener("click", () => {
-      if (isMovieSubtitlesVisible()) hideMovieSubtitles();
-      else showMovieSubtitles(_cues2);
-      syncToggleLabel();
-    });
-    const applyOffset = (seconds) => {
-      setSubtitleOffset(seconds);
-      renderOffsetReadout(modal);
-      if (_subtitleCache[_imdbId]) {
-        _subtitleCache[_imdbId].offset = seconds;
-        persistSubtitleCache();
-      }
-    };
-    renderOffsetReadout(modal);
-    modal.querySelector("#sc-subtitles-offset-minus").addEventListener("click", () => applyOffset(getSubtitleOffset() - OFFSET_STEP));
-    modal.querySelector("#sc-subtitles-offset-plus").addEventListener("click", () => applyOffset(getSubtitleOffset() + OFFSET_STEP));
-    modal.querySelector("#sc-subtitles-offset-reset").addEventListener("click", () => applyOffset(0));
-    modal.querySelector("#sc-subtitles-manage-close").addEventListener("click", closeManageModal);
-    modal.querySelector("#sc-subtitles-manage-different").addEventListener("click", async (e) => {
-      if (!_lastResults.length) {
-        const btn = e.currentTarget;
-        btn.disabled = true;
-        btn.textContent = "Searching…";
-        _lastResults = await searchSubtitles(_imdbId);
-        btn.disabled = false;
-        btn.textContent = "Download a different one";
-      }
-      openSubtitlesPicker();
-    });
-    if (tvNavState.setFocus) tvNavState.setFocus(toggleBtn);
-  }
-  function closeManageModal() {
-    const modal = document.getElementById("sc-subtitles-manage");
-    if (modal) modal.remove();
-  }
-
-  // src/cards/subtitles.js
-  var DEFAULT_OPACITY = 0.6;
-  var DEFAULT_FONTSIZE = 15;
-  var DEFAULT_LINES = 3;
-  var SUBTITLE_LINE_TTL_MS = 45 * 1e3;
-  function clampLines(n) {
-    const v = Math.round(Number(n));
-    return Number.isFinite(v) ? Math.min(3, Math.max(1, v)) : DEFAULT_LINES;
-  }
-  function clampOpacity(n) {
-    const v = Number(n);
-    return Number.isFinite(v) ? Math.min(0.9, Math.max(0.2, v)) : DEFAULT_OPACITY;
-  }
-  function clampFontSize(n) {
-    const v = Number(n);
-    return Number.isFinite(v) ? Math.min(24, Math.max(12, v)) : DEFAULT_FONTSIZE;
-  }
-  function getSubtitleOpacity() {
-    return clampOpacity(getKey(LS_SUBTITLE_OPACITY) || DEFAULT_OPACITY);
-  }
-  function getSubtitleFontSize() {
-    return clampFontSize(getKey(LS_SUBTITLE_FONTSIZE) || DEFAULT_FONTSIZE);
-  }
-  function getSubtitleLines() {
-    return clampLines(getKey(LS_SUBTITLE_LINES) || DEFAULT_LINES);
-  }
-  function applySubtitleOpacity(v) {
-    document.body.style.setProperty("--sc-subtitle-opacity", String(clampOpacity(v)));
-  }
-  function applySubtitleFontSize(px) {
-    document.body.style.setProperty("--sc-subtitle-fontsize", clampFontSize(px) + "px");
-  }
-  function _escHtml2(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-  function extractSubtitleLine(msgEl) {
-    const cls = [...msgEl.classList].find((c) => c.startsWith("chat-msg-"));
-    if (!cls) return null;
-    const username = cls.replace("chat-msg-", "");
-    const clone = msgEl.cloneNode(true);
-    clone.querySelectorAll(".timestamp, .username, .sc-img-embed").forEach((el) => el.remove());
-    const html = clone.innerHTML.trim();
-    if (!html) return null;
-    return { username, color: resolveUserColor(username), emoji: getExternalUserEmoji(username), html };
-  }
-  function renderSubtitleLine(line) {
-    const emojiHtml = line.emoji ? emojiSlotHtml(line.emoji, "sc-subtitle-emoji", _escHtml2(line.emoji)) : "";
-    return `<div class="sc-subtitle-pill">${emojiHtml}<span class="sc-subtitle-name" style="color:${line.color}">${_escHtml2(line.username)}:</span> <span class="sc-subtitle-text">${line.html}</span></div>`;
-  }
-  function ensureContainer2() {
-    let el = document.getElementById("sc-subtitles-overlay");
-    if (!el) {
-      el = document.createElement("div");
-      el.id = "sc-subtitles-overlay";
-      document.body.appendChild(el);
-    }
-    return el;
-  }
-  var _triviaLines = [];
-  var _chatSeenAt = /* @__PURE__ */ new WeakMap();
-  var _chatExpiryTimer = null;
-  function _lastChatMsg() {
-    const buf2 = document.getElementById("messagebuffer");
-    const all = buf2 ? buf2.querySelectorAll('[class*="chat-msg-"]') : [];
-    return all.length ? all[all.length - 1] : null;
-  }
-  function addSubtitleTrivia(html, ttlMs) {
-    const entry = { html, anchor: _lastChatMsg(), timer: null };
-    entry.timer = setTimeout(() => {
-      _triviaLines = _triviaLines.filter((t) => t !== entry);
-      refreshSubtitles();
-    }, ttlMs);
-    _triviaLines.push(entry);
-    refreshSubtitles();
-  }
-  function clearSubtitleTrivia() {
-    if (!_triviaLines.length) return;
-    _triviaLines.forEach((t) => clearTimeout(t.timer));
-    _triviaLines = [];
-    refreshSubtitles();
-  }
-  function mergeSubtitleItems(chatEls, trivia, maxLines) {
-    const recent = chatEls.slice(-(maxLines + trivia.length));
-    const items = trivia.filter((t) => t.anchor === null).map((t) => ({ trivia: t }));
-    recent.forEach((el) => {
-      items.push({ el });
-      trivia.forEach((t) => {
-        if (t.anchor === el) items.push({ trivia: t });
-      });
-    });
-    return items.slice(-maxLines);
-  }
-  function inSubtitlesMode() {
+  function wakeVideoControls() {
     try {
-      return localStorage.getItem("sc_chat_mode") === "subtitles";
-    } catch (e) {
-      return false;
-    }
-  }
-  function refreshSubtitles() {
-    if (!inSubtitlesMode()) return;
-    const container = ensureContainer2();
-    const buf2 = document.getElementById("messagebuffer");
-    if (!buf2) return;
-    const maxLines = getSubtitleLines();
-    const all = [...buf2.querySelectorAll('[class*="chat-msg-"]')];
-    const now = Date.now();
-    all.forEach((el) => {
-      if (!_chatSeenAt.has(el)) _chatSeenAt.set(el, now);
-    });
-    const items = mergeSubtitleItems(all, _triviaLines, maxLines).filter((item) => item.trivia || now - _chatSeenAt.get(item.el) < SUBTITLE_LINE_TTL_MS);
-    container.innerHTML = items.map((item) => {
-      if (item.trivia) return item.trivia.html;
-      const line = extractSubtitleLine(item.el);
-      return line ? renderSubtitleLine(line) : "";
-    }).join("");
-    clearTimeout(_chatExpiryTimer);
-    const ages = items.filter((i) => i.el).map((i) => _chatSeenAt.get(i.el));
-    if (ages.length) _chatExpiryTimer = setTimeout(refreshSubtitles, Math.min(...ages) + SUBTITLE_LINE_TTL_MS - now + 50);
-  }
-  function initSubtitles() {
-    ensureContainer2();
-    applySubtitleOpacity(getSubtitleOpacity());
-    applySubtitleFontSize(getSubtitleFontSize());
-    refreshSubtitles();
-  }
-  var _subtitlesObserverStarted = false;
-  function startSubtitlesObserver() {
-    const buf2 = document.getElementById("messagebuffer");
-    if (!buf2) return;
-    if (_subtitlesObserverStarted) {
-      refreshSubtitles();
-      return;
-    }
-    _subtitlesObserverStarted = true;
-    new MutationObserver(refreshSubtitles).observe(buf2, { childList: true, subtree: true });
-    refreshSubtitles();
-  }
-
-  // src/cards/driveincard.js
-  function _escHtml3(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-  var CARD_MS = {
-    header: 1200,
-    line: 1500,
-    pause: 1200,
-    clear: 600,
-    starStart: 150,
-    star: 280,
-    says: 300,
-    hold: 6e3,
-    fade: 800,
-    // Academy Award slide: the verdict holds `verdictHold` first, then the
-    // header swaps; each nominee stays up long enough to read (`awardCharMs`
-    // per character, never less than `line`, at most `awardLineMax`), then
-    // the slide holds `awardHold`.
-    verdictHold: 4e3,
-    swap: 600,
-    awardCharMs: 55,
-    awardLineMax: 8e3,
-    awardHold: 1e4
-  };
-  var CARD_FONT_LINK_ID = "sc-tp-card-font";
-  var STAR_PATH2 = "M12 1.8l3.1 6.6 7.1.8-5.3 4.9 1.4 7.1L12 17.6l-6.3 3.6 1.4-7.1L1.8 9.2l7.1-.8z";
-  var _cardEl = null;
-  var _cardTimers = [];
-  var _onHidden = null;
-  var isDriveInCardUp = () => !!_cardEl;
-  function _ensureCardFont() {
-    if (document.getElementById(CARD_FONT_LINK_ID)) return;
-    const link = document.createElement("link");
-    link.id = CARD_FONT_LINK_ID;
-    link.rel = "stylesheet";
-    link.href = "https://fonts.googleapis.com/css2?family=Patua+One&display=swap";
-    document.head.appendChild(link);
-  }
-  function pictureRect() {
-    const v = document.querySelector("#videowrap video");
-    const r = v && v.getBoundingClientRect();
-    if (r && r.width > 0 && r.height > 0 && v.videoWidth > 0 && v.videoHeight > 0) {
-      const scale = Math.min(r.width / v.videoWidth, r.height / v.videoHeight);
-      const picW = v.videoWidth * scale, picH = v.videoHeight * scale;
-      return { left: r.left + (r.width - picW) / 2, top: r.top + (r.height - picH) / 2, width: picW, height: picH };
-    }
-    const wrap = document.getElementById("videowrap");
-    const wr = wrap && wrap.getBoundingClientRect();
-    if (wr && wr.width > 0 && wr.height > 0) return { left: wr.left, top: wr.top, width: wr.width, height: wr.height };
-    return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
-  }
-  function _starSvg2(fill, k) {
-    const id = `sc-tp-star-clip-${k}`;
-    return `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><defs><clipPath id="${id}"><rect x="0" y="0" width="${24 * fill}" height="24"/></clipPath></defs><path d="${STAR_PATH2}" fill="rgba(20,20,20,.35)" stroke="#f5d76e" stroke-width="1.2"/><path d="${STAR_PATH2}" fill="#f5d76e" stroke="#7a5a10" stroke-width=".6" clip-path="url(#${id})"/></svg>`;
-  }
-  function _later(ms, fn) {
-    _cardTimers.push(setTimeout(fn, ms));
-  }
-  function showDriveInCard(card, onHidden) {
-    hideDriveInCard(true);
-    _ensureCardFont();
-    _onHidden = onHidden || null;
-    const P = pictureRect();
-    const el = document.createElement("div");
-    el.id = "sc-tp-card";
-    el.style.setProperty("left", P.left + P.width * 0.59 + "px", "important");
-    el.style.setProperty("top", P.top + P.height * 0.01 + "px", "important");
-    el.style.setProperty("width", P.width * 0.4 + "px", "important");
-    el.style.setProperty("--sc-tp-head", Math.max(18, P.height * 0.09) + "px");
-    el.style.setProperty("--sc-tp-line", Math.max(12, P.height * 0.046) + "px");
-    const awards = card.awards || [];
-    el.innerHTML = `
-        <div class="sc-tp-card-h">Drive-In<br>Totals</div>
-        <div class="sc-tp-card-rule"></div>
-        <div class="sc-tp-card-lines"><div class="sc-tp-card-track"></div></div>
-        <div class="sc-tp-card-verdict">
-            ${card.stars !== null ? `<div class="sc-tp-card-stars">${tpStarFills(card.stars).map(_starSvg2).join("")}</div>` : ""}
-            <div class="sc-tp-card-says">${_escHtml3(card.says)}</div>
-        </div>`;
-    document.body.appendChild(el);
-    _cardEl = el;
-    const linesEl = el.querySelector(".sc-tp-card-lines");
-    const track = el.querySelector(".sc-tp-card-track");
-    requestAnimationFrame(() => el.classList.add("sc-tp-card-on"));
-    const addLine = (text) => {
-      const line = document.createElement("div");
-      line.className = "sc-tp-card-line";
-      line.textContent = text;
-      track.appendChild(line);
-      requestAnimationFrame(() => line.classList.add("sc-tp-card-in"));
-      const over = track.offsetHeight - linesEl.clientHeight;
-      if (over > 0) {
-        linesEl.classList.add("sc-tp-card-scrolling");
-        track.style.setProperty("transform", `translateY(${-over}px)`, "important");
-      }
-    };
-    let t = CARD_MS.header;
-    for (const text of card.lines) {
-      _later(t, () => addLine(text));
-      t += CARD_MS.line;
-    }
-    if (card.stars !== null || card.says) {
-      t += CARD_MS.pause;
-      _later(t, () => linesEl.classList.add("sc-tp-card-gone"));
-      t += CARD_MS.clear;
-      const verdict = el.querySelector(".sc-tp-card-verdict");
-      _later(t, () => verdict.classList.add("sc-tp-card-on"));
-      const stars = el.querySelectorAll(".sc-tp-card-stars svg");
-      stars.forEach((s, k) => _later(t + CARD_MS.starStart + k * CARD_MS.star, () => s.classList.add("sc-tp-card-in")));
-      t += CARD_MS.starStart + stars.length * CARD_MS.star + CARD_MS.says;
-      const says = el.querySelector(".sc-tp-card-says");
-      _later(t, () => says.classList.add("sc-tp-card-on"));
-    }
-    if (awards.length) {
-      t += CARD_MS.verdictHold;
-      const head = el.querySelector(".sc-tp-card-h");
-      const verdict = el.querySelector(".sc-tp-card-verdict");
-      _later(t, () => {
-        head.classList.add("sc-tp-card-swap");
-        verdict.classList.remove("sc-tp-card-on");
-        linesEl.classList.add("sc-tp-card-gone");
-      });
-      t += CARD_MS.swap;
-      _later(t, () => {
-        head.innerHTML = "Drive-In Academy<br>Award Nominations";
-        el.classList.add("sc-tp-card-awards");
-        track.textContent = "";
-        track.style.setProperty("transform", "none", "important");
-        linesEl.classList.remove("sc-tp-card-scrolling", "sc-tp-card-gone");
-        head.classList.remove("sc-tp-card-swap");
-      });
-      t += CARD_MS.header;
-      for (const text of awards) {
-        _later(t, () => addLine(text));
-        t += Math.min(CARD_MS.awardLineMax, Math.max(CARD_MS.line, text.length * CARD_MS.awardCharMs));
-      }
-      t += CARD_MS.awardHold - CARD_MS.hold;
-    }
-    t += CARD_MS.hold;
-    _later(t, () => hideDriveInCard(false));
-  }
-  function hideDriveInCard(instant) {
-    _cardTimers.forEach(clearTimeout);
-    _cardTimers = [];
-    if (!_cardEl) return;
-    const el = _cardEl;
-    const done = () => {
-      el.remove();
-      if (_cardEl === el) {
-        _cardEl = null;
-        const cb = _onHidden;
-        _onHidden = null;
-        if (cb) cb();
-      }
-    };
-    if (instant) {
-      done();
-      return;
-    }
-    el.classList.add("sc-tp-card-out");
-    _cardTimers.push(setTimeout(done, CARD_MS.fade));
-  }
-
-  // src/cards/triviapopup.js
-  var TP_POLL_MS = 3e3;
-  var TP_GAP_TIERS = {
-    frequent: [45 * 1e3, 90 * 1e3],
-    occasional: [3 * 60 * 1e3, 6 * 60 * 1e3],
-    rare: [8 * 60 * 1e3, 15 * 60 * 1e3]
-  };
-  function _tpGapRange() {
-    return TP_GAP_TIERS[triviaPopupFrequency()] || TP_GAP_TIERS.occasional;
-  }
-  var TP_RETRY_MS = 20 * 1e3;
-  var TP_VISIBLE_MS = 20 * 1e3;
-  var TP_EXIT_ANIM_MS = 300;
-  var TP_MAX_FACT_LEN = 280;
-  var TP_PERSON_TRIVIA_CAP = 3;
-  function _escHtml4(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-  var _tpLastImdbId = void 0;
-  var _tpQueue = [];
-  var _tpExhausted = false;
-  var _tpPopTimer = null;
-  var _tpBubbleEl = null;
-  var _tpDismissTimer = null;
-  var _tpTimeline = null;
-  var _tpDriveIn = null;
-  var _tpLastPopAt = 0;
-  var _tpCuratedRecheckAt = 0;
-  var LS_TRIVIA_SEEN = "sc_trivia_popup_seen";
-  var TRIVIA_SEEN_TTL_MS = 3 * 60 * 60 * 1e3;
-  function _tpLoadSeenTexts(id) {
-    let raw;
-    try {
-      raw = JSON.parse(localStorage.getItem(LS_TRIVIA_SEEN));
-    } catch (e) {
-      return [];
-    }
-    if (!raw || raw.id !== id) return [];
-    if (!raw.savedAt || Date.now() - raw.savedAt > TRIVIA_SEEN_TTL_MS) return [];
-    return Array.isArray(raw.texts) ? raw.texts : [];
-  }
-  function _tpMarkSeen(id, text) {
-    if (!id) return;
-    const texts = _tpLoadSeenTexts(id);
-    if (!texts.includes(text)) texts.push(text);
-    try {
-      localStorage.setItem(LS_TRIVIA_SEEN, JSON.stringify({ id, texts, savedAt: Date.now() }));
-    } catch (e) {
-    }
-  }
-  var _tpMuted = false;
-  var TP_RESUME_MS = 1500;
-  function _tpKnownForFact(person, knownFor) {
-    if (!knownFor) return null;
-    const titleYear = knownFor.year ? `${knownFor.title} (${knownFor.year})` : knownFor.title;
-    if (person.role === "director") return `${person.name} is also known for ${titleYear}.`;
-    const charPart = person.character ? ` (${person.character})` : "";
-    return `${person.name}${charPart} also starred in ${titleYear}.`;
-  }
-  async function _tpBuildCastCrewItems(people, excludeTconst, excludeSeriesTconst) {
-    const items = [];
-    await Promise.all(people.map(async (person) => {
-      const [trivia, knownFor] = await Promise.all([
-        fetchPersonTrivia(person.nconst),
-        fetchPersonKnownFor(person.nconst, excludeTconst, excludeSeriesTconst)
-      ]);
-      const byline = `${person.name} — ${person.role === "director" ? "Director" : person.character || "Cast"}`;
-      trivia.filter((t) => t.length <= TP_MAX_FACT_LEN).slice(0, TP_PERSON_TRIVIA_CAP).forEach((t) => items.push({ text: t, byline }));
-      const knownForFact = _tpKnownForFact(person, knownFor);
-      if (knownForFact) items.push({ text: knownForFact, byline: null });
-    }));
-    return items;
-  }
-  function _tpShuffle(arr) {
-    const a = arr.slice();
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [a[i], a[j]] = [a[j], a[i]];
-    }
-    return a;
-  }
-  function _tpResetForNewMovie(id) {
-    clearTimeout(_tpPopTimer);
-    _tpPopTimer = null;
-    _tpDismissBubble(true);
-    clearSubtitleTrivia();
-    hideDriveInCard(true);
-    _tpDriveIn = null;
-    _tpQueue = [];
-    _tpExhausted = false;
-    _tpTimeline = null;
-    _tpLastPopAt = Date.now();
-    _tpCuratedRecheckAt = Date.now() + CURATED_RECHECK_MS;
-    if (!id) return;
-    if (isTv) {
-      fetchDriveInCard(id).then((card) => {
-        if (id !== _tpLastImdbId) return;
-        _tpDriveIn = card;
-      });
-    }
-    fetchCuratedTrivia(id).then((curated) => {
-      if (id !== _tpLastImdbId) return;
-      if (curated) {
-        _tpTimeline = curated.facts;
+      const p = window.PLAYER && window.PLAYER.player;
+      if (p && typeof p.userActive === "function") {
+        p.userActive(true);
+        if (typeof p.reportUserActivity === "function") p.reportUserActivity();
         return;
       }
-      _tpStartImdbQueue(id);
-    });
-  }
-  function _tpStartImdbQueue(id) {
-    fetchImdbTrivia(id).then(async (items) => {
-      if (id !== _tpLastImdbId) return;
-      const seenTexts = _tpLoadSeenTexts(id);
-      const movieItems = (items || []).filter((text) => !seenTexts.includes(text)).map((text) => ({ text, byline: null }));
-      _tpQueue = _tpShuffle(movieItems);
-      _tpScheduleNextPop();
-      if (!triviaPopupEnabled()) return;
-      if (npState.data && npState.data.episode != null) return;
-      const result = await fetchCastAndDirector(id);
-      if (id !== _tpLastImdbId) return;
-      if (!result || !result.people.length) return;
-      if (result.seriesTconst) return;
-      const castCrewItems = await _tpBuildCastCrewItems(result.people, id, result.seriesTconst);
-      if (id !== _tpLastImdbId) return;
-      const seenTextsNow = _tpLoadSeenTexts(id);
-      const freshCastCrewItems = castCrewItems.filter((it) => !seenTextsNow.includes(it.text));
-      if (!freshCastCrewItems.length) return;
-      _tpQueue = _tpShuffle(_tpQueue.concat(freshCastCrewItems));
-      if (_tpExhausted) {
-        _tpExhausted = false;
-        _tpScheduleNextPop();
-      }
-    });
-  }
-  function _tpScheduleNextPop() {
-    clearTimeout(_tpPopTimer);
-    if (_tpTimeline || _tpExhausted || !_tpQueue.length) {
-      _tpExhausted = true;
-      return;
-    }
-    if (_tpMuted) return;
-    const [minGap, maxGap] = _tpGapRange();
-    const gap = minGap + Math.random() * (maxGap - minGap);
-    _tpPopTimer = setTimeout(_tpAttemptPop, gap);
-  }
-  function _tpMoviePlaying() {
-    if (isYouTubeMedia()) return false;
-    const v = document.querySelector("#videowrap video");
-    return !!v && !v.paused;
-  }
-  function _tpAttemptPop() {
-    const curId = npState.data && npState.data.imdbId;
-    if (curId !== _tpLastImdbId) return;
-    if (_tpMuted) return;
-    if (_tpTimeline) return;
-    if (!_tpCanPop() || isDriveInCardUp()) {
-      _tpPopTimer = setTimeout(_tpAttemptPop, TP_RETRY_MS);
-      return;
-    }
-    let fact = null;
-    while (_tpQueue.length) {
-      const candidate = _tpQueue.shift();
-      if (candidate.text.length <= TP_MAX_FACT_LEN) {
-        fact = candidate;
-        break;
-      }
-    }
-    if (!fact) {
-      _tpExhausted = true;
-      return;
-    }
-    showTriviaBubble(fact);
-    _tpMarkSeen(_tpLastImdbId, fact.text);
-    _tpLastPopAt = Date.now();
-    _tpScheduleNextPop();
-  }
-  function _tpCanPop() {
-    return triviaPopupEnabled() && !_tpMuted && _tpMoviePlaying() && !isMovieSubtitlesVisible();
-  }
-  var _tpCurrentTime = () => {
-    const v = document.querySelector("#videowrap video");
-    return v ? v.currentTime : NaN;
-  };
-  function _tpDriveInTick() {
-    const curId = npState.data && npState.data.imdbId;
-    if (!_tpDriveIn || curId !== _tpLastImdbId) return;
-    if (!_tpCanPop() || isDriveInCardUp() || _tpBubbleEl) return;
-    const seen = _tpLoadSeenTexts(_tpLastImdbId);
-    const sinceLastPop = (Date.now() - _tpLastPopAt) / 1e3;
-    if (!tpDriveInAction(_tpDriveIn, _tpCurrentTime(), seen, sinceLastPop)) return;
-    showDriveInCard(_tpDriveIn, () => {
-      _tpLastPopAt = Date.now();
-    });
-    _tpMarkSeen(_tpLastImdbId, TP_DRIVEIN_SEEN_KEY);
-  }
-  function _tpTimelineTick() {
-    const curId = npState.data && npState.data.imdbId;
-    if (!_tpTimeline || curId !== _tpLastImdbId) return;
-    if (!_tpCanPop() || isDriveInCardUp()) return;
-    if (_tpBubbleEl) return;
-    const t = _tpCurrentTime();
-    const tier = triviaPopupFrequency() || "occasional";
-    const seen = _tpLoadSeenTexts(_tpLastImdbId);
-    const sinceLastPop = (Date.now() - _tpLastPopAt) / 1e3;
-    const fact = tpDueFact(_tpTimeline, t, tier, seen) || tpCatchUpFact(_tpTimeline, t, tier, seen, sinceLastPop);
-    if (!fact) return;
-    showTriviaBubble(fact);
-    _tpMarkSeen(_tpLastImdbId, fact.text);
-    _tpLastPopAt = Date.now();
-  }
-  function _tpRecheckCurated(id) {
-    _tpCuratedRecheckAt = Date.now() + CURATED_RECHECK_MS;
-    fetchCuratedTrivia(id).then((curated) => {
-      if (!curated || id !== _tpLastImdbId || _tpTimeline) return;
-      clearTimeout(_tpPopTimer);
-      _tpPopTimer = null;
-      _tpQueue = [];
-      _tpExhausted = true;
-      _tpTimeline = curated.facts;
-    });
-  }
-  function _tpMoviePollTick() {
-    const curId = npState.data && npState.data.imdbId;
-    if (curId !== _tpLastImdbId) {
-      _tpLastImdbId = curId;
-      _tpResetForNewMovie(_tpLastImdbId);
-    }
-    if (!_tpTimeline && _tpLastImdbId && Date.now() >= _tpCuratedRecheckAt) _tpRecheckCurated(_tpLastImdbId);
-    _tpDriveInTick();
-    _tpTimelineTick();
-  }
-  function triviaPopupBoot() {
-    _tpMoviePollTick();
-    setInterval(_tpMoviePollTick, TP_POLL_MS);
-  }
-  var TP_ICON_SVGS = {
-    // Skull + blood drip
-    skull: `<path d="M30 10 C19 10 12 18 12 27 C12 33 15 38 19 41 L19 47 L24 47 L24 43 L27 43 L27 47 L33 47 L33 43 L36 43 L36 47 L41 47 L41 41 C45 38 48 33 48 27 C48 18 41 10 30 10 Z"
-          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
-     <circle cx="22" cy="26" r="5" fill="#000"/>
-     <circle cx="38" cy="26" r="5" fill="#000"/>
-     <polygon points="30,30 27,36 33,36" fill="#000"/>
-     <path d="M39 16 C39 16 43 22 41 27 C40 30 36 30 35 27 C33 23 39 16 39 16 Z"
-          fill="#c81d25" stroke="#000" stroke-width="1.5" stroke-linejoin="round"/>`,
-    // Cracked tombstone
-    tombstone: `<path d="M14 54 V30 C14 16 22 8 30 8 C38 8 46 16 46 30 V54 Z"
-          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
-     <path d="M30 12 L26 26 L34 30 L28 44 L33 54" stroke="#000" stroke-width="2" fill="none"/>
-     <line x1="30" y1="18" x2="30" y2="26" stroke="#000" stroke-width="2"/>
-     <line x1="26" y1="21" x2="34" y2="21" stroke="#000" stroke-width="2"/>`,
-    // Film reel
-    reel: `<circle cx="30" cy="30" r="18" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
-     <circle cx="30" cy="30" r="4" fill="#000"/>
-     <circle cx="30" cy="16" r="4.5" fill="#000"/>
-     <circle cx="30" cy="44" r="4.5" fill="#000"/>
-     <circle cx="18" cy="23" r="4.5" fill="#000"/>
-     <circle cx="18" cy="37" r="4.5" fill="#000"/>
-     <circle cx="42" cy="23" r="4.5" fill="#000"/>
-     <circle cx="42" cy="37" r="4.5" fill="#000"/>`,
-    // --- Sci-fi (toxic-green #39d98a accent) ---
-    // Flying saucer
-    saucer: `<ellipse cx="30" cy="33" rx="22" ry="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <ellipse cx="30" cy="24" rx="11" ry="9" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
-     <circle cx="18" cy="36" r="2.2" fill="#39d98a" stroke="#000" stroke-width="1.2"/>
-     <circle cx="30" cy="38" r="2.2" fill="#39d98a" stroke="#000" stroke-width="1.2"/>
-     <circle cx="42" cy="36" r="2.2" fill="#39d98a" stroke="#000" stroke-width="1.2"/>`,
-    // Bug-eyed alien head
-    alien: `<path d="M30 6 C14 6 6 20 8 32 C10 44 20 54 30 54 C40 54 50 44 52 32 C54 20 46 6 30 6 Z"
-          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
-     <ellipse cx="20" cy="27" rx="7" ry="10" fill="#000" transform="rotate(-15 20 27)"/>
-     <ellipse cx="40" cy="27" rx="7" ry="10" fill="#000" transform="rotate(15 40 27)"/>
-     <circle cx="20" cy="27" r="1.8" fill="#39d98a"/>
-     <circle cx="40" cy="27" r="1.8" fill="#39d98a"/>`,
-    // Rocket ship
-    rocket: `<path d="M30 6 C24 6 20 14 20 24 V44 H40 V24 C40 14 36 6 30 6 Z"
-          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
-     <circle cx="30" cy="20" r="5" fill="#39d98a" stroke="#000" stroke-width="2"/>
-     <polygon points="20,38 10,50 20,50" fill="#d8d8d8" stroke="#000" stroke-width="2" stroke-linejoin="round"/>
-     <polygon points="40,38 50,50 40,50" fill="#d8d8d8" stroke="#000" stroke-width="2" stroke-linejoin="round"/>
-     <path d="M24 44 C24 44 22 54 30 58 C38 54 36 44 36 44 Z"
-          fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round"/>`,
-    // Robot head
-    robot: `<rect x="14" y="16" width="32" height="28" rx="4" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <line x1="30" y1="16" x2="30" y2="6" stroke="#000" stroke-width="2.5"/>
-     <circle cx="30" cy="5" r="3" fill="#39d98a" stroke="#000" stroke-width="1.5"/>
-     <circle cx="30" cy="28" r="7" fill="#000"/>
-     <circle cx="30" cy="28" r="3" fill="#39d98a"/>
-     <rect x="20" y="38" width="20" height="4" fill="#000"/>
-     <circle cx="16" cy="20" r="2" fill="#3a2a1a"/>
-     <circle cx="44" cy="20" r="2" fill="#3a2a1a"/>`,
-    // Radioactive trefoil
-    radioactive: `<circle cx="30" cy="30" r="20" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
-     <path d="M30 30 L23 15 L37 15 Z" fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round" transform="rotate(0 30 30)"/>
-     <path d="M30 30 L23 15 L37 15 Z" fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round" transform="rotate(120 30 30)"/>
-     <path d="M30 30 L23 15 L37 15 Z" fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round" transform="rotate(240 30 30)"/>
-     <circle cx="30" cy="30" r="5" fill="#000"/>`,
-    // --- Action (marquee-gold #e8b923 accent) ---
-    // Explosion burst
-    explosion: `<polygon points="30,4 35,19 48,12 41,25 56,30 41,35 48,48 35,41 30,56 25,41 12,48 19,35 4,30 19,25 12,12 25,19"
-             fill="#e8b923" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
-     <polygon points="30,16 33,24 40,20 36,27 44,30 36,33 40,40 33,36 30,44 27,36 20,40 25,33 16,30 25,27 20,20 27,25"
-             fill="#c81d25" stroke="#000" stroke-width="1.5" stroke-linejoin="round"/>`,
-    // Crosshair scope
-    crosshair: `<circle cx="30" cy="30" r="21" fill="#f4f1ea" stroke="#c81d25" stroke-width="4"/>
-     <rect x="6" y="28" width="15" height="4" fill="#000"/>
-     <rect x="39" y="28" width="15" height="4" fill="#000"/>
-     <rect x="28" y="6" width="4" height="15" fill="#000"/>
-     <rect x="28" y="39" width="4" height="15" fill="#000"/>
-     <circle cx="30" cy="30" r="4" fill="#e8b923" stroke="#000" stroke-width="1.5"/>`,
-    // Brass knuckles
-    knuckles: `<circle cx="14" cy="20" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <circle cx="26" cy="18" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <circle cx="38" cy="18" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <circle cx="50" cy="20" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <rect x="10" y="26" width="44" height="8" rx="3" fill="#3a2a1a" stroke="#000" stroke-width="2.5"/>`,
-    // --- Comedy (marquee-gold #e8b923 accent) ---
-    // Disco ball
-    disco: `<circle cx="30" cy="30" r="20" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <path d="M12 30 H48 M13 20 H47 M13 40 H47 M20 12 V48 M30 10 V50 M40 12 V48"
-          stroke="#000" stroke-width="1.5" fill="none"/>
-     <polyline points="46,10 50,6" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>
-     <polyline points="50,14 55,12" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>
-     <polyline points="44,6 47,2" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>`,
-    // Boombox
-    boombox: `<rect x="6" y="18" width="48" height="30" rx="5" fill="#3a2a1a" stroke="#000" stroke-width="2.5"/>
-     <circle cx="18" cy="33" r="10" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
-     <circle cx="18" cy="33" r="4" fill="#000"/>
-     <circle cx="42" cy="33" r="10" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
-     <circle cx="42" cy="33" r="4" fill="#000"/>
-     <rect x="24" y="10" width="12" height="8" rx="2" fill="#e8b923" stroke="#000" stroke-width="2"/>`,
-    // Aviator sunglasses
-    sunglasses: `<ellipse cx="18" cy="30" rx="12" ry="10" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <ellipse cx="42" cy="30" rx="12" ry="10" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <rect x="27" y="27" width="6" height="4" fill="#000"/>
-     <line x1="6" y1="27" x2="0" y2="21" stroke="#000" stroke-width="3" stroke-linecap="round"/>
-     <line x1="54" y1="27" x2="60" y2="21" stroke="#000" stroke-width="3" stroke-linecap="round"/>
-     <polyline points="12,26 18,23" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>`,
-    // --- Curated-fact topics (named by the generator, not random-picked by genre) ---
-    // Drive-in window speaker -- Joe Bob / Drive-In Totals
-    joebob: `<path d="M22 14 V8 H38 V14" fill="none" stroke="#000" stroke-width="2.5"/>
-     <rect x="14" y="14" width="32" height="34" rx="5" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <circle cx="30" cy="31" r="10" fill="#3a2a1a" stroke="#000" stroke-width="2"/>
-     <path d="M22 31 H38 M24 26 H36 M24 36 H36" stroke="#000" stroke-width="1.5"/>
-     <rect x="24" y="48" width="12" height="5" fill="#c81d25" stroke="#000" stroke-width="1.5"/>`,
-    // Banknote -- budget / box office
-    money: `<rect x="8" y="16" width="44" height="28" rx="3" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
-     <rect x="12" y="20" width="36" height="20" rx="2" fill="none" stroke="#000" stroke-width="1"/>
-     <circle cx="30" cy="30" r="9" fill="#e8b923" stroke="#000" stroke-width="2"/>
-     <text x="30" y="35" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-size="14" font-weight="900" fill="#000">$</text>`,
-    // Two-reel movie camera -- production / behind the scenes
-    camera: `<circle cx="20" cy="18" r="9" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
-     <circle cx="38" cy="18" r="9" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
-     <circle cx="20" cy="18" r="2.5" fill="#000"/>
-     <circle cx="38" cy="18" r="2.5" fill="#000"/>
-     <rect x="10" y="28" width="34" height="20" rx="3" fill="#3a2a1a" stroke="#000" stroke-width="2.5"/>
-     <polygon points="44,32 54,26 54,50 44,44" fill="#d8d8d8" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
-     <circle cx="20" cy="38" r="3" fill="#c81d25"/>`,
-    // Walk-of-fame star -- cast
-    star: `<polygon points="30,6 36,22 53,22 39,32 44,49 30,39 16,49 21,32 7,22 24,22"
-             fill="#e8b923" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
-     <circle cx="30" cy="28" r="4" fill="#c81d25" stroke="#000" stroke-width="1.5"/>`,
-    // Chain links -- ties to other movies
-    link: `<rect x="6" y="22" width="28" height="16" rx="8" fill="none" stroke="#000" stroke-width="7"/>
-     <rect x="6" y="22" width="28" height="16" rx="8" fill="none" stroke="#d8d8d8" stroke-width="3.5"/>
-     <rect x="26" y="22" width="28" height="16" rx="8" fill="none" stroke="#000" stroke-width="7"/>
-     <rect x="26" y="22" width="28" height="16" rx="8" fill="none" stroke="#e8b923" stroke-width="3.5"/>`,
-    // Ribbon microphone -- interview quotes
-    mic: `<rect x="20" y="6" width="20" height="28" rx="10" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
-     <path d="M24 14 H36 M24 20 H36 M24 26 H36" stroke="#000" stroke-width="1.5"/>
-     <path d="M14 26 C14 38 22 42 30 42 C38 42 46 38 46 26" fill="none" stroke="#000" stroke-width="2.5"/>
-     <line x1="30" y1="42" x2="30" y2="52" stroke="#000" stroke-width="3"/>
-     <rect x="20" y="51" width="20" height="4" rx="1" fill="#c81d25" stroke="#000" stroke-width="1.5"/>`,
-    // "CUT" stamp -- censorship / banned / alternate versions
-    censor: `<g transform="rotate(-12 30 30)">
-       <rect x="7" y="17" width="46" height="26" rx="3" fill="#f4f1ea" stroke="#c81d25" stroke-width="3"/>
-       <text x="30" y="36" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-size="15" font-weight="900" fill="#c81d25">CUT</text>
-     </g>`,
-    // Trophy -- awards
-    trophy: `<path d="M18 12 H10 C10 22 14 24 18 24 M42 12 H50 C50 22 46 24 42 24" fill="none" stroke="#000" stroke-width="2.5"/>
-     <path d="M18 8 H42 V22 C42 30 36 36 30 36 C24 36 18 30 18 22 Z" fill="#e8b923" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
-     <rect x="27" y="36" width="6" height="8" fill="#e8b923" stroke="#000" stroke-width="2"/>
-     <rect x="18" y="44" width="24" height="8" rx="1" fill="#3a2a1a" stroke="#000" stroke-width="2.5"/>`
-  };
-  var TP_ICON_KEYS = Object.keys(TP_ICON_SVGS);
-  function tpPickIconKey(iconKey) {
-    if (iconKey && TP_ICON_KEYS.includes(iconKey)) return iconKey;
-    return TP_ICON_KEYS[Math.floor(Math.random() * TP_ICON_KEYS.length)];
-  }
-  function _tpRandomPosition(boxWidthPx, boxHeightPx) {
-    const wrap = document.getElementById("videowrap");
-    const rect = wrap ? wrap.getBoundingClientRect() : { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight, width: window.innerWidth, height: window.innerHeight };
-    const marginPx = 14;
-    const halfW = boxWidthPx / 2;
-    let leftMinPx = rect.left + marginPx + halfW;
-    let leftMaxPx = rect.left + rect.width - marginPx - halfW;
-    if (leftMaxPx < leftMinPx) {
-      const mid = rect.left + rect.width / 2;
-      leftMinPx = leftMaxPx = mid;
-    }
-    const bottomThirdTopPx = rect.top + rect.height * (2 / 3);
-    let topMinPx = Math.max(rect.top + marginPx, bottomThirdTopPx);
-    let topMaxPx = rect.bottom - marginPx - boxHeightPx;
-    if (topMaxPx < topMinPx) topMinPx = topMaxPx = Math.max(rect.top + marginPx, rect.bottom - marginPx - boxHeightPx);
-    return {
-      leftPx: leftMinPx + Math.random() * (leftMaxPx - leftMinPx),
-      topPx: topMinPx + Math.random() * (topMaxPx - topMinPx)
-    };
-  }
-  var _tpAudioCtx = null;
-  function _tpGetAudioCtx() {
-    if (!_tpAudioCtx) {
-      const Ctor = window.AudioContext || window.webkitAudioContext;
-      _tpAudioCtx = new Ctor();
-    }
-    if (_tpAudioCtx.state === "suspended") _tpAudioCtx.resume();
-    return _tpAudioCtx;
-  }
-  function _tpNoiseBurst(ac, { start, dur, freq, q, peak }) {
-    const size = Math.max(1, Math.floor(ac.sampleRate * dur));
-    const buffer = ac.createBuffer(1, size, ac.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < size; i++) data[i] = Math.random() * 2 - 1;
-    const src = ac.createBufferSource();
-    src.buffer = buffer;
-    const bp = ac.createBiquadFilter();
-    bp.type = "bandpass";
-    bp.frequency.value = freq;
-    bp.Q.value = q;
-    const gain = ac.createGain();
-    gain.gain.setValueAtTime(0, start);
-    gain.gain.linearRampToValueAtTime(peak, start + 3e-3);
-    gain.gain.exponentialRampToValueAtTime(1e-4, start + dur);
-    src.connect(bp).connect(gain).connect(ac.destination);
-    src.start(start);
-    src.stop(start + dur + 0.01);
-  }
-  function _tpBubbleTone(ac, { start, dur, freqStart, freqPeak, freqEnd, lpStart, lpEnd, q, peak }) {
-    const osc = ac.createOscillator();
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(freqStart, start);
-    osc.frequency.exponentialRampToValueAtTime(freqPeak, start + dur * 0.4);
-    osc.frequency.exponentialRampToValueAtTime(freqEnd, start + dur);
-    const lp = ac.createBiquadFilter();
-    lp.type = "lowpass";
-    lp.Q.value = q;
-    lp.frequency.setValueAtTime(lpStart, start);
-    lp.frequency.exponentialRampToValueAtTime(lpEnd, start + dur);
-    const gain = ac.createGain();
-    gain.gain.setValueAtTime(0, start);
-    gain.gain.linearRampToValueAtTime(peak, start + 6e-3);
-    gain.gain.exponentialRampToValueAtTime(1e-4, start + dur);
-    osc.connect(lp).connect(gain).connect(ac.destination);
-    osc.start(start);
-    osc.stop(start + dur + 0.02);
-  }
-  function _tpPlayPopSound() {
-    try {
-      const ac = _tpGetAudioCtx();
-      const t = ac.currentTime;
-      _tpNoiseBurst(ac, { start: t, dur: 0.02, freq: 1800, q: 2.5, peak: 0.55 });
-      _tpBubbleTone(ac, { start: t, dur: 0.13, freqStart: 220, freqPeak: 600, freqEnd: 380, lpStart: 2600, lpEnd: 600, q: 8, peak: 0.3 });
     } catch (e) {
     }
+    const el = document.querySelector("#videowrap .video-js");
+    if (el) {
+      el.classList.add("vjs-user-active");
+      el.classList.remove("vjs-user-inactive");
+    }
   }
-  function _tpAddHeadshot(svg, url) {
-    if (!svg) return;
-    const NS = "http://www.w3.org/2000/svg";
-    const clip = document.createElementNS(NS, "clipPath");
-    clip.setAttribute("id", "sc-tp-headshot-clip");
-    const disc = document.createElementNS(NS, "circle");
-    disc.setAttribute("cx", "30");
-    disc.setAttribute("cy", "30");
-    disc.setAttribute("r", "25.5");
-    clip.appendChild(disc);
-    const img = document.createElementNS(NS, "image");
-    img.setAttribute("href", url);
-    img.setAttribute("x", "4.5");
-    img.setAttribute("y", "4.5");
-    img.setAttribute("width", "51");
-    img.setAttribute("height", "51");
-    img.setAttribute("preserveAspectRatio", "xMidYMid slice");
-    img.setAttribute("clip-path", "url(#sc-tp-headshot-clip)");
-    img.addEventListener("error", () => img.remove());
-    svg.insertBefore(clip, svg.firstChild);
-    svg.appendChild(img);
-    const ring = svg.querySelector("circle[stroke]");
-    if (ring) svg.appendChild(ring);
-  }
-  function _tpShowSubtitleTrivia(fact) {
-    const bylineHtml = fact.byline ? `<span class="sc-subtitle-trivia-byline">${_escHtml4(fact.byline)}</span>` : "";
-    addSubtitleTrivia(`<div class="sc-subtitle-pill sc-subtitle-trivia">${_escHtml4(fact.text)}${bylineHtml}</div>`, SUBTITLE_LINE_TTL_MS);
-  }
-  function showTriviaBubble(fact) {
-    _tpDismissBubble(true);
-    if (inSubtitlesMode()) {
-      _tpShowSubtitleTrivia(fact);
+  var _scrubHoldTimer = null;
+  function holdScrubber(on) {
+    if (on) {
+      wakeVideoControls();
+      if (!_scrubHoldTimer) _scrubHoldTimer = setInterval(wakeVideoControls, 1e3);
       return;
     }
-    _tpPlayPopSound();
-    _tpBubbleEl = document.createElement("div");
-    _tpBubbleEl.id = "sc-tp-bubble";
-    const icon = TP_ICON_SVGS[tpPickIconKey(fact.icon)];
-    const bylineHtml = fact.byline ? `<div id="sc-tp-byline">${_escHtml4(fact.byline)}</div>` : "";
-    _tpBubbleEl.innerHTML = `
-        <svg id="sc-tp-tail" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="30" cy="30" r="27" fill="#000"/>
-            <circle cx="30" cy="30" r="27" fill="none" stroke="#c81d25" stroke-width="3"/>
-            ${icon}
-        </svg>
-        <div id="sc-tp-text">${_escHtml4(fact.text)}${bylineHtml}</div>`;
-    if (tpSafeImageUrl(fact.image)) _tpAddHeadshot(_tpBubbleEl.querySelector("#sc-tp-tail"), fact.image);
-    document.body.appendChild(_tpBubbleEl);
-    const pos = _tpRandomPosition(_tpBubbleEl.offsetWidth, _tpBubbleEl.offsetHeight);
-    _tpBubbleEl.style.setProperty("left", pos.leftPx + "px", "important");
-    _tpBubbleEl.style.setProperty("top", pos.topPx + "px", "important");
-    requestAnimationFrame(() => _tpBubbleEl && _tpBubbleEl.classList.add("sc-tp-in"));
-    _tpBubbleEl.addEventListener("click", () => _tpDismissBubble(false));
-    _tpBubbleEl.addEventListener("mouseenter", () => clearTimeout(_tpDismissTimer));
-    _tpBubbleEl.addEventListener("mouseleave", _tpArmDismissTimer);
-    _tpArmDismissTimer();
-  }
-  function _tpArmDismissTimer() {
-    clearTimeout(_tpDismissTimer);
-    _tpDismissTimer = setTimeout(() => _tpDismissBubble(false), TP_VISIBLE_MS);
-  }
-  function _tpDismissBubble(instant) {
-    clearTimeout(_tpDismissTimer);
-    _tpDismissTimer = null;
-    if (!_tpBubbleEl) return;
-    const el = _tpBubbleEl;
-    _tpBubbleEl = null;
-    if (instant) {
-      el.remove();
-      return;
-    }
-    el.classList.add("sc-tp-out");
-    setTimeout(() => el.remove(), TP_EXIT_ANIM_MS);
-  }
-  var TP_BTN_ID = "sc-trivia-popup-btn";
-  function _tpApplyMute() {
-    if (_tpMuted) {
-      clearTimeout(_tpPopTimer);
-      _tpPopTimer = null;
-      _tpDismissBubble(true);
-      clearSubtitleTrivia();
-      hideDriveInCard(false);
-    } else if (!_tpTimeline && !_tpExhausted && _tpQueue.length) {
-      clearTimeout(_tpPopTimer);
-      _tpPopTimer = setTimeout(_tpAttemptPop, TP_RESUME_MS);
-    }
-    _tpSyncButton();
-  }
-  function _tpToggleMute() {
-    _tpMuted = !_tpMuted;
-    _tpApplyMute();
-  }
-  function _tpSyncButton() {
-    const btn = document.getElementById(TP_BTN_ID);
-    if (!btn) return;
-    btn.innerHTML = `<span class="sc-tp-dot">${_tpMuted ? "○" : "●"}</span>Pop-ups`;
-    btn.title = _tpMuted ? "Pop-up trivia muted for this session — tap to resume" : "Mute pop-up trivia bubbles for this session";
-    btn.setAttribute("aria-pressed", _tpMuted ? "true" : "false");
-  }
-  function renderTriviaPopupButton() {
-    const shouldShow = triviaPopupEnabled() && !!(npState.data && npState.data.imdbId);
-    let btn = document.getElementById(TP_BTN_ID);
-    if (!shouldShow) {
-      if (btn) btn.remove();
-      return;
-    }
-    if (!btn) {
-      btn = document.createElement("button");
-      btn.id = TP_BTN_ID;
-      btn.type = "button";
-      btn.dataset.noTvCaption = "1";
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        _tpToggleMute();
-      });
-      const header = document.getElementById("videowrap-header");
-      const anchor = document.getElementById("sc-up-next-btn") || document.getElementById("sc-poster-toggle");
-      if (header && anchor && anchor.parentNode === header) header.insertBefore(btn, anchor);
-      else (header || document.body).appendChild(btn);
-    }
-    _tpSyncButton();
+    if (!_scrubHoldTimer) return;
+    clearInterval(_scrubHoldTimer);
+    _scrubHoldTimer = null;
   }
 
-  // src/titleinject.js
-  var NP_AUTO_HIDE_MS = isTv ? 1e4 : 8e3;
-  var NP_AUTO_MIN_SECONDS = 45 * 60;
-  function _npShouldAutoAnnounce(isYt) {
-    return !isYt && getCurrentMediaSeconds() >= NP_AUTO_MIN_SECONDS;
+  // src/cards/upnext.js
+  var UPNEXT_BOT_URL = "https://bot.420grindhouseserver.com";
+  var UPNEXT_LOAD_TIMEOUT_MS = 1e4;
+  var _frameCreated = false;
+  function ensureFrame(body) {
+    if (_frameCreated) return;
+    _frameCreated = true;
+    const iframe = document.createElement("iframe");
+    iframe.id = "sc-upnext-frame";
+    iframe.title = "Upcoming queue";
+    iframe.style.display = "none";
+    let settled = false;
+    const showFrame = () => {
+      var _a;
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      (_a = body.querySelector(".sc-upnext-loading")) == null ? void 0 : _a.remove();
+      iframe.style.display = "block";
+    };
+    const showError = () => {
+      if (settled) return;
+      settled = true;
+      body.innerHTML = '<div class="sc-upnext-error">Schedule unavailable right now.</div>';
+    };
+    iframe.addEventListener("load", showFrame);
+    iframe.addEventListener("error", showError);
+    const timeoutId = setTimeout(showError, UPNEXT_LOAD_TIMEOUT_MS);
+    iframe.src = UPNEXT_BOT_URL;
+    body.appendChild(iframe);
   }
-  function isYouTubeMedia() {
-    try {
-      const p = window.PLAYER || window.player;
-      if (p && p.type === "yt") return true;
-      if (p && p.mediaType === "yt") return true;
-    } catch (e) {
+  function showUpNextCard() {
+    let card = document.getElementById("sc-upnext-card");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "sc-upnext-card";
+      card.innerHTML = `
+            <div id="sc-upnext-head">
+                <span>Up Next</span>
+                <button id="sc-upnext-close" type="button">✕</button>
+            </div>
+            <div id="sc-upnext-body"><div class="sc-upnext-loading">Loading…</div></div>`;
+      document.body.appendChild(card);
+      card.querySelector("#sc-upnext-close").addEventListener("click", hideUpNextCard);
     }
-    if (document.querySelector('#ytapiplayer iframe[src*="youtube.com"]')) return true;
-    if (document.querySelector('#ytapiplayer[src*="youtube.com"]')) return true;
-    return false;
+    card.classList.add("sc-upnext-visible");
+    ensureFrame(card.querySelector("#sc-upnext-body"));
   }
-  function _domYtVideoId() {
-    const el = document.querySelector('#ytapiplayer iframe[src*="youtube.com"]');
-    if (!el) return "";
-    const src = el.getAttribute("src") || "";
-    const m = src.match(/[?&]v=([\w-]{11})/) || src.match(/\/embed\/([\w-]{11})/);
-    return m ? m[1] : "";
-  }
-  function fetchYtOembed(videoId) {
-    if (!videoId) return Promise.resolve(null);
-    const watchUrl = "https://www.youtube.com/watch?v=" + encodeURIComponent(videoId);
-    const url = "https://www.youtube.com/oembed?url=" + encodeURIComponent(watchUrl) + "&format=json";
-    return nativeHttpGet(url).then((res) => {
-      if (!res || res.status !== 200) return null;
-      try {
-        return JSON.parse(res.body);
-      } catch (e) {
-        return null;
-      }
-    }).catch(() => null);
-  }
-  function applyCleanTitleDom(titleEl, movieData) {
-    const { cleanTitle, cleanYear, season, episode, episodeName } = movieData;
-    if (!cleanTitle || !titleEl) return;
-    const epTag = episodeTag(season, episode);
-    const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : "") + (epTag ? ` · ${epTag}` : "") + (episodeName ? ` — ${episodeName}` : "");
-    let span = titleEl.querySelector(":scope > #sc-title-text") || document.getElementById("sc-title-text");
-    if (!span) {
-      span = document.createElement("span");
-      span.id = "sc-title-text";
-      span.style.cursor = "pointer";
-      span.title = "Movie info";
-      span.dataset.noTvCaption = "1";
-      span.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
-      });
-      const textNode = [...titleEl.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
-      if (textNode) textNode.parentNode.replaceChild(span, textNode);
-      else titleEl.insertBefore(span, titleEl.firstChild);
-    }
-    span.textContent = newText;
-  }
-  function injectMovieLinks(titleEl) {
-    const rawTitle = titleEl.textContent.trim().replace(/^currently\s+playing[:\s]*/i, "").replace(/^now\s+playing[:\s]*/i, "").trim();
-    if (!rawTitle || rawTitle.length < 2) return;
-    if (rawTitle === movieState.lastMovieTitle) {
-      if (npState.data && !titleEl.querySelector("#sc-title-text")) {
-        applyCleanTitleDom(titleEl, npState.data);
-      }
-      renderTriviaPopupButton();
-      return;
-    }
-    movieState.lastMovieTitle = rawTitle;
-    ["sc-movie-stats"].forEach((id) => {
-      const el = document.getElementById(id);
-      if (el) el.remove();
-    });
-    npState.data = null;
-    updateSubtitleButton(null);
-    renderTriviaPopupButton();
-    const isYt = isYouTubeMedia();
-    let ytSeconds = 0;
-    if (isYt) {
-      ytSeconds = getCurrentMediaSeconds();
-      if (ytSeconds < 3600) {
-        const videoId = mediaState.currentYtVideoId || _domYtVideoId();
-        if (videoId) {
-          fetchYtOembed(videoId).then((info) => {
-            if (!info || !info.title) return;
-            if (movieState.lastMovieTitle !== rawTitle) return;
-            const movieData = {
-              cleanTitle: info.title,
-              cleanYear: null,
-              poster: info.thumbnail_url || null,
-              backdrop: info.thumbnail_url || null,
-              overview: info.author_name ? `Uploaded by ${info.author_name}` : null,
-              rating: null,
-              runtime: null,
-              genres: [],
-              parentalGuide: null,
-              killCount: null,
-              imdbId: null,
-              links: {},
-              season: null,
-              episode: null,
-              episodeName: null
-            };
-            npState.data = movieData;
-            applyCleanTitleDom(titleEl, movieData);
-            renderTriviaPopupButton();
-          });
-        }
-        return;
-      }
-    }
-    const { title, year, season, episode } = isYt ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
-    if (!title || title.length < 2) return;
-    lookupMovie(title, year, season, episode).then((movieData) => {
-      const { killCount, parentalGuide, cleanTitle, cleanYear } = movieData;
-      if (isYt) {
-        if (!cleanTitle) return;
-        if (movieData.runtime && ytSeconds) {
-          const diff = Math.abs(movieData.runtime - ytSeconds / 60);
-          if (diff > 30) return;
-        }
-      }
-      npState.data = movieData;
-      updateSubtitleButton(movieData.imdbId);
-      renderTriviaPopupButton();
-      if (_npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt)) showNowPlayingCard(movieData, { autoHide: true, autoHideMs: NP_AUTO_HIDE_MS });
-      applyCleanTitleDom(titleEl, movieData);
-      const statParts = [];
-      if (killCount !== null) statParts.push(`💀 ${killCount} on-screen kills`);
-      if (parentalGuide && parentalGuide.length) {
-        const PG_SEV_DOT = { Severe: "🔴", Moderate: "🟡", Mild: "🟢", None: "" };
-        const cssDots = needsEmojiFallback();
-        parentalGuide.forEach(({ category, severity }) => {
-          const dot = PG_SEV_DOT[severity] || "";
-          if (!dot) return;
-          if (cssDots) {
-            const sev = document.createElement("span");
-            sev.className = `sc-sev-dot sc-sev-${severity.toLowerCase()}`;
-            statParts.push([sev, ` ${category}`]);
-          } else {
-            statParts.push(`${dot} ${category}`);
-          }
-        });
-      }
-      const lastAired = getLastAired(cleanTitle || title, cleanYear || year);
-      if (lastAired) statParts.push(`📅 Last aired ${lastAired.dateStr}`);
-      const old = document.getElementById("sc-movie-stats");
-      if (old) old.remove();
-      if (statParts.length) {
-        const cardWillAutoShow = _npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt);
-        const revealDelay = cardWillAutoShow ? NP_AUTO_HIDE_MS : 0;
-        setTimeout(() => {
-          if (movieState.lastMovieTitle !== rawTitle) return;
-          const statsEl = document.createElement("div");
-          statsEl.id = "sc-movie-stats";
-          if (statParts.every((p) => typeof p === "string")) {
-            statsEl.textContent = statParts.join("  ·  ");
-          } else {
-            statParts.forEach((p, i) => {
-              if (i) statsEl.append("  ·  ");
-              statsEl.append(...[].concat(p));
-            });
-          }
-          document.body.appendChild(statsEl);
-          if (typeof chromeState.pinChromeVisible === "function") chromeState.pinChromeVisible();
-          setTimeout(() => {
-            if (statsEl.parentNode) statsEl.remove();
-            if (typeof chromeState.unpinChromeVisible === "function") chromeState.unpinChromeVisible();
-          }, 12e3);
-        }, revealDelay);
-      }
-    });
-  }
-  var _PLAYING_RE = /^\s*(currently|now)\s+playing\s*:?\s*/i;
-  function stripPlayingPrefix(el) {
-    el.querySelectorAll("strong, b, span, .label").forEach((c) => {
-      if (c.childElementCount === 0 && /^\s*(currently|now)\s+playing\s*:?\s*$/i.test(c.textContent)) {
-        c.style.display = "none";
-      }
-    });
-    el.childNodes.forEach((n) => {
-      if (n.nodeType === 3 && _PLAYING_RE.test(n.textContent)) {
-        n.textContent = n.textContent.replace(_PLAYING_RE, "");
-      }
-    });
-  }
-  function triggerTitleInject() {
-    for (const el of [
-      document.getElementById("currenttitle"),
-      document.querySelector("#videowrap-header .pull-left"),
-      document.querySelector("#videowrap-header span"),
-      document.querySelector(".video-title")
-    ]) {
-      if (el && el.textContent.trim()) {
-        stripPlayingPrefix(el);
-        injectMovieLinks(el);
-        return;
-      }
-    }
-  }
-  function watchMovieTitle() {
-    triggerTitleInject();
-    let tries = 0;
-    const poll = setInterval(() => {
-      triggerTitleInject();
-      if (++tries >= 14) clearInterval(poll);
-    }, 1500);
+  function hideUpNextCard() {
+    var _a;
+    (_a = document.getElementById("sc-upnext-card")) == null ? void 0 : _a.classList.remove("sc-upnext-visible");
   }
 
   // src/player/drm.js
@@ -7107,7 +5648,7 @@
   }
 
   // src/tvnav.js
-  var tvNavState = { setFocus: null, getFocus: null, clearFocus: null, overlayOpen: null };
+  var tvNavState = { setFocus: null, getFocus: null, clearFocus: null, overlayOpen: null, overlayClosed: null };
   function initLoginTvNav() {
     let isTv2 = false;
     try {
@@ -7245,7 +5786,7 @@
       const cs = getComputedStyle(el);
       return cs.visibility !== "hidden" && cs.display !== "none";
     };
-    const OVERLAY_IDS = ["sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card", "sc-upnext-card", "sc-lineup-screen", "sc-subtitles-picker", "sc-subtitles-manage", "sc-simkl-panel"];
+    const OVERLAY_IDS = ["sc-fix-overlay", "sc-settings-overlay", "sc-modal-overlay", "sc-trivia-card", "sc-users-panel", "sc-poll-panel", "sc-np-card", "sc-upnext-card", "sc-lineup-screen", "sc-subtitles-picker", "sc-subtitles-manage", "sc-simkl-panel"];
     const isOverlayOpen = (id, o) => !!(o && isVisible(o) && // Simkl card: counts from creation (it takes focus before its fade-in class lands) until
     // its fade-out starts.
     (id !== "sc-simkl-panel" || !o.classList.contains("sc-simkl-out")) && (id !== "sc-np-card" || o.classList.contains("sc-np-visible")) && (id !== "sc-upnext-card" || o.classList.contains("sc-upnext-visible")) && (id !== "sc-trivia-card" || o.classList.contains("sc-show")) && (id !== "sc-lineup-screen" || o.classList.contains("sc-lineup-visible")));
@@ -7366,6 +5907,7 @@
     tvNavState.getFocus = () => focusEl;
     tvNavState.clearFocus = clearFocus;
     tvNavState.overlayOpen = () => !!openOverlay();
+    tvNavState.overlayClosed = restoreFocusAfterOverlayClose;
     const SEEK_RAMP = [10, 10, 10, 10, 30, 30, 30, 60, 60, 120];
     function seekStepSeconds(repeatCount) {
       const i = Math.max(0, Math.min(SEEK_RAMP.length - 1, repeatCount | 0));
@@ -7609,7 +6151,7 @@
         return;
       }
       if (dir === "up" || dir === "down") {
-        const sc = scope.querySelector && scope.querySelector("#sc-trivia-list, #sc-settings-modal, #sc-upnext-body, #messagebuffer") || document.getElementById("messagebuffer");
+        const sc = scope.querySelector && scope.querySelector("#sc-trivia-list, #sc-settings-modal, #sc-upnext-body, #sc-fix-results, #messagebuffer") || document.getElementById("messagebuffer");
         if (sc && sc.scrollHeight > sc.clientHeight) sc.scrollTop += dir === "down" ? 140 : -140;
       }
     }
@@ -7671,6 +6213,12 @@
         }
         clearFocus();
         if (btn && isVisible(btn)) setFocus(btn);
+        return true;
+      }
+      const fix = document.getElementById("sc-fix-overlay");
+      if (fix) {
+        closeFixMatch();
+        restoreFocusAfterOverlayClose();
         return true;
       }
       const settings = document.getElementById("sc-settings-overlay");
@@ -7779,6 +6327,1812 @@
       }
     };
     armRingIdle();
+  }
+
+  // src/chrome/dock.js
+  var DOCK_ORDER = ["sc-chatmode-btn", "sc-settings-btn", "sc-subtitles-btn", "sc-desync-btn", "sc-cast-btn"];
+  function layoutDock() {
+    let slot = 0;
+    for (const id of DOCK_ORDER) {
+      const el = document.getElementById(id);
+      if (!el || el.classList.contains("sc-hidden")) continue;
+      el.style.setProperty("--sc-dock-slot", String(slot));
+      slot++;
+    }
+    document.body.style.setProperty("--sc-dock-count", String(slot));
+  }
+
+  // src/subtitles/ui.js
+  var SUBTITLE_CACHE_MAX_ENTRIES = 15;
+  var _subtitleCache = {};
+  function loadSubtitleCache() {
+    try {
+      const raw = localStorage.getItem(LS_SUBTITLE_CACHE);
+      if (raw) _subtitleCache = JSON.parse(raw);
+    } catch (e) {
+      _subtitleCache = {};
+    }
+  }
+  loadSubtitleCache();
+  function persistSubtitleCache() {
+    try {
+      const keys = Object.keys(_subtitleCache);
+      if (keys.length > SUBTITLE_CACHE_MAX_ENTRIES) {
+        const oldestFirst = keys.sort((a, b) => (_subtitleCache[a].ts || 0) - (_subtitleCache[b].ts || 0));
+        for (const k of oldestFirst.slice(0, keys.length - SUBTITLE_CACHE_MAX_ENTRIES)) delete _subtitleCache[k];
+      }
+      localStorage.setItem(LS_SUBTITLE_CACHE, JSON.stringify(_subtitleCache));
+    } catch (e) {
+    }
+  }
+  var _imdbId = null;
+  var _cues2 = null;
+  var _lastResults = [];
+  var _loading = false;
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function ensureButton() {
+    let btn = document.getElementById("sc-subtitles-btn");
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.id = "sc-subtitles-btn";
+      btn.className = "sc-dock-btn";
+      btn.type = "button";
+      btn.title = "Download subtitles for this movie";
+      btn.dataset.tvLabel = "Subtitles";
+      btn.addEventListener("click", onButtonClick);
+      document.body.appendChild(btn);
+    }
+    return btn;
+  }
+  function updateSubtitleButton(imdbId) {
+    if (imdbId !== _imdbId) {
+      _imdbId = imdbId;
+      _cues2 = null;
+      _lastResults = [];
+      closeSubtitlesPicker();
+      closeManageModal();
+      hideMovieSubtitles();
+      const cached = imdbId && _subtitleCache[imdbId];
+      if (cached) {
+        _cues2 = cached.cues;
+        setSubtitleOffset(cached.offset || 0);
+      }
+    }
+    const show = !!(imdbId && hasKey(LS_OPENSUBTITLES));
+    const btn = show ? ensureButton() : document.getElementById("sc-subtitles-btn");
+    if (btn) btn.classList.toggle("sc-hidden", !show);
+    layoutDock();
+  }
+  async function onButtonClick() {
+    if (_loading) return;
+    if (_cues2) {
+      openManageModal();
+      return;
+    }
+    _loading = true;
+    const btn = document.getElementById("sc-subtitles-btn");
+    btn.disabled = true;
+    btn.title = "Searching…";
+    _lastResults = await searchSubtitles(_imdbId);
+    btn.disabled = false;
+    btn.title = "Download subtitles for this movie";
+    _loading = false;
+    openSubtitlesPicker();
+  }
+  function resultBadges(r) {
+    const badges = [];
+    if (r.fromTrusted) badges.push('<span class="sc-subtitles-badge sc-subtitles-badge-trusted">✓ Trusted</span>');
+    if (r.hearingImpaired) badges.push('<span class="sc-subtitles-badge">SDH</span>');
+    if (r.machineTranslated) badges.push('<span class="sc-subtitles-badge sc-subtitles-badge-warn">Machine-translated</span>');
+    return badges.join("");
+  }
+  function openSubtitlesPicker() {
+    closeManageModal();
+    closeSubtitlesPicker();
+    const results = _lastResults;
+    const panel = document.createElement("div");
+    panel.id = "sc-subtitles-picker";
+    panel.innerHTML = `
+        <div id="sc-subtitles-picker-box">
+            <div id="sc-subtitles-picker-head">
+                <span>Choose Subtitles</span>
+                <button id="sc-subtitles-picker-close" type="button">✕</button>
+            </div>
+            <div id="sc-subtitles-picker-body">
+                ${results.length ? results.map((r, i) => `
+                    <button type="button" class="sc-subtitles-result" data-idx="${i}">
+                        <span class="sc-subtitles-result-release">${escapeHtml(r.release)}</span>
+                        <span class="sc-subtitles-result-meta">${escapeHtml(r.uploader)} · ${r.downloadCount.toLocaleString()} downloads</span>
+                        ${resultBadges(r) ? `<span class="sc-subtitles-result-badges">${resultBadges(r)}</span>` : ""}
+                    </button>`).join("") : '<div class="sc-subtitles-empty">No subtitles found for this movie.</div>'}
+            </div>
+            <div id="sc-subtitles-picker-status"></div>
+        </div>`;
+    document.body.appendChild(panel);
+    panel.querySelector("#sc-subtitles-picker-close").addEventListener("click", closeSubtitlesPicker);
+    panel.querySelectorAll(".sc-subtitles-result").forEach((el, i) => {
+      el.addEventListener("click", () => selectResult(results[i]));
+    });
+    const first = panel.querySelector(".sc-subtitles-result") || panel.querySelector("#sc-subtitles-picker-close");
+    if (first && tvNavState.setFocus) tvNavState.setFocus(first);
+  }
+  function closeSubtitlesPicker() {
+    const panel = document.getElementById("sc-subtitles-picker");
+    if (panel) panel.remove();
+  }
+  async function selectResult(result) {
+    const status = document.getElementById("sc-subtitles-picker-status");
+    if (status) status.textContent = "Downloading…";
+    const link = await downloadSubtitle(result.fileId);
+    if (!link) {
+      if (status) status.textContent = "Download failed — try another, or check your key/quota.";
+      return;
+    }
+    const srt = await fetchSrtText(link);
+    const cues = srt ? parseSrt(srt) : [];
+    if (!cues.length) {
+      if (status) status.textContent = "Couldn't read that subtitle file — try another.";
+      return;
+    }
+    _cues2 = cues;
+    resetSubtitleOffset();
+    _subtitleCache[_imdbId] = { cues, offset: 0, release: result.release, uploader: result.uploader, ts: Date.now() };
+    persistSubtitleCache();
+    closeSubtitlesPicker();
+    showMovieSubtitles(_cues2);
+  }
+  var OFFSET_STEP = 0.5;
+  function renderOffsetReadout(modal) {
+    const seconds = getSubtitleOffset();
+    const el = modal.querySelector("#sc-subtitles-offset-val");
+    if (el) el.textContent = (seconds > 0 ? "+" : "") + seconds.toFixed(1) + "s";
+  }
+  function openManageModal() {
+    closeSubtitlesPicker();
+    closeManageModal();
+    const modal = document.createElement("div");
+    modal.id = "sc-subtitles-manage";
+    modal.innerHTML = `
+        <div id="sc-subtitles-manage-box">
+            <div id="sc-subtitles-manage-head">
+                <span>Subtitles</span>
+                <button id="sc-subtitles-manage-close" type="button">✕</button>
+            </div>
+            <button id="sc-subtitles-manage-toggle" type="button" class="sc-settings-btn-wide"></button>
+            <div class="sc-subtitles-offset-row">
+                <span class="sc-subtitles-offset-label">Sync offset</span>
+                <div class="sc-subtitles-offset-controls">
+                    <button id="sc-subtitles-offset-minus" type="button" class="sc-settings-test">−0.5s</button>
+                    <span id="sc-subtitles-offset-val"></span>
+                    <button id="sc-subtitles-offset-plus" type="button" class="sc-settings-test">+0.5s</button>
+                </div>
+            </div>
+            <button id="sc-subtitles-offset-reset" type="button" class="sc-update-github-link">Reset offset</button>
+            <button id="sc-subtitles-manage-different" type="button" class="sc-settings-btn-wide">Download a different one</button>
+        </div>`;
+    document.body.appendChild(modal);
+    const toggleBtn = modal.querySelector("#sc-subtitles-manage-toggle");
+    const syncToggleLabel = () => {
+      toggleBtn.textContent = isMovieSubtitlesVisible() ? "Hide Subtitles" : "Show Subtitles";
+    };
+    syncToggleLabel();
+    toggleBtn.addEventListener("click", () => {
+      if (isMovieSubtitlesVisible()) hideMovieSubtitles();
+      else showMovieSubtitles(_cues2);
+      syncToggleLabel();
+    });
+    const applyOffset = (seconds) => {
+      setSubtitleOffset(seconds);
+      renderOffsetReadout(modal);
+      if (_subtitleCache[_imdbId]) {
+        _subtitleCache[_imdbId].offset = seconds;
+        persistSubtitleCache();
+      }
+    };
+    renderOffsetReadout(modal);
+    modal.querySelector("#sc-subtitles-offset-minus").addEventListener("click", () => applyOffset(getSubtitleOffset() - OFFSET_STEP));
+    modal.querySelector("#sc-subtitles-offset-plus").addEventListener("click", () => applyOffset(getSubtitleOffset() + OFFSET_STEP));
+    modal.querySelector("#sc-subtitles-offset-reset").addEventListener("click", () => applyOffset(0));
+    modal.querySelector("#sc-subtitles-manage-close").addEventListener("click", closeManageModal);
+    modal.querySelector("#sc-subtitles-manage-different").addEventListener("click", async (e) => {
+      if (!_lastResults.length) {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = "Searching…";
+        _lastResults = await searchSubtitles(_imdbId);
+        btn.disabled = false;
+        btn.textContent = "Download a different one";
+      }
+      openSubtitlesPicker();
+    });
+    if (tvNavState.setFocus) tvNavState.setFocus(toggleBtn);
+  }
+  function closeManageModal() {
+    const modal = document.getElementById("sc-subtitles-manage");
+    if (modal) modal.remove();
+  }
+
+  // src/cards/subtitles.js
+  var DEFAULT_OPACITY = 0.6;
+  var DEFAULT_FONTSIZE = 15;
+  var DEFAULT_LINES = 3;
+  var SUBTITLE_LINE_TTL_MS = 45 * 1e3;
+  function clampLines(n) {
+    const v = Math.round(Number(n));
+    return Number.isFinite(v) ? Math.min(3, Math.max(1, v)) : DEFAULT_LINES;
+  }
+  function clampOpacity(n) {
+    const v = Number(n);
+    return Number.isFinite(v) ? Math.min(0.9, Math.max(0.2, v)) : DEFAULT_OPACITY;
+  }
+  function clampFontSize(n) {
+    const v = Number(n);
+    return Number.isFinite(v) ? Math.min(24, Math.max(12, v)) : DEFAULT_FONTSIZE;
+  }
+  function getSubtitleOpacity() {
+    return clampOpacity(getKey(LS_SUBTITLE_OPACITY) || DEFAULT_OPACITY);
+  }
+  function getSubtitleFontSize() {
+    return clampFontSize(getKey(LS_SUBTITLE_FONTSIZE) || DEFAULT_FONTSIZE);
+  }
+  function getSubtitleLines() {
+    return clampLines(getKey(LS_SUBTITLE_LINES) || DEFAULT_LINES);
+  }
+  function applySubtitleOpacity(v) {
+    document.body.style.setProperty("--sc-subtitle-opacity", String(clampOpacity(v)));
+  }
+  function applySubtitleFontSize(px) {
+    document.body.style.setProperty("--sc-subtitle-fontsize", clampFontSize(px) + "px");
+  }
+  function _escHtml2(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function extractSubtitleLine(msgEl) {
+    const cls = [...msgEl.classList].find((c) => c.startsWith("chat-msg-"));
+    if (!cls) return null;
+    const username = cls.replace("chat-msg-", "");
+    const clone = msgEl.cloneNode(true);
+    clone.querySelectorAll(".timestamp, .username, .sc-img-embed").forEach((el) => el.remove());
+    const html = clone.innerHTML.trim();
+    if (!html) return null;
+    return { username, color: resolveUserColor(username), emoji: getExternalUserEmoji(username), html };
+  }
+  function renderSubtitleLine(line) {
+    const emojiHtml = line.emoji ? emojiSlotHtml(line.emoji, "sc-subtitle-emoji", _escHtml2(line.emoji)) : "";
+    return `<div class="sc-subtitle-pill">${emojiHtml}<span class="sc-subtitle-name" style="color:${line.color}">${_escHtml2(line.username)}:</span> <span class="sc-subtitle-text">${line.html}</span></div>`;
+  }
+  function ensureContainer2() {
+    let el = document.getElementById("sc-subtitles-overlay");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "sc-subtitles-overlay";
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+  var _triviaLines = [];
+  var _chatSeenAt = /* @__PURE__ */ new WeakMap();
+  var _chatExpiryTimer = null;
+  function _lastChatMsg() {
+    const buf2 = document.getElementById("messagebuffer");
+    const all = buf2 ? buf2.querySelectorAll('[class*="chat-msg-"]') : [];
+    return all.length ? all[all.length - 1] : null;
+  }
+  function addSubtitleTrivia(html, ttlMs) {
+    const entry = { html, anchor: _lastChatMsg(), timer: null };
+    entry.timer = setTimeout(() => {
+      _triviaLines = _triviaLines.filter((t) => t !== entry);
+      refreshSubtitles();
+    }, ttlMs);
+    _triviaLines.push(entry);
+    refreshSubtitles();
+  }
+  function clearSubtitleTrivia() {
+    if (!_triviaLines.length) return;
+    _triviaLines.forEach((t) => clearTimeout(t.timer));
+    _triviaLines = [];
+    refreshSubtitles();
+  }
+  function mergeSubtitleItems(chatEls, trivia, maxLines) {
+    const recent = chatEls.slice(-(maxLines + trivia.length));
+    const items = trivia.filter((t) => t.anchor === null).map((t) => ({ trivia: t }));
+    recent.forEach((el) => {
+      items.push({ el });
+      trivia.forEach((t) => {
+        if (t.anchor === el) items.push({ trivia: t });
+      });
+    });
+    return items.slice(-maxLines);
+  }
+  function inSubtitlesMode() {
+    try {
+      return localStorage.getItem("sc_chat_mode") === "subtitles";
+    } catch (e) {
+      return false;
+    }
+  }
+  function refreshSubtitles() {
+    if (!inSubtitlesMode()) return;
+    const container = ensureContainer2();
+    const buf2 = document.getElementById("messagebuffer");
+    if (!buf2) return;
+    const maxLines = getSubtitleLines();
+    const all = [...buf2.querySelectorAll('[class*="chat-msg-"]')];
+    const now = Date.now();
+    all.forEach((el) => {
+      if (!_chatSeenAt.has(el)) _chatSeenAt.set(el, now);
+    });
+    const items = mergeSubtitleItems(all, _triviaLines, maxLines).filter((item) => item.trivia || now - _chatSeenAt.get(item.el) < SUBTITLE_LINE_TTL_MS);
+    container.innerHTML = items.map((item) => {
+      if (item.trivia) return item.trivia.html;
+      const line = extractSubtitleLine(item.el);
+      return line ? renderSubtitleLine(line) : "";
+    }).join("");
+    clearTimeout(_chatExpiryTimer);
+    const ages = items.filter((i) => i.el).map((i) => _chatSeenAt.get(i.el));
+    if (ages.length) _chatExpiryTimer = setTimeout(refreshSubtitles, Math.min(...ages) + SUBTITLE_LINE_TTL_MS - now + 50);
+  }
+  function initSubtitles() {
+    ensureContainer2();
+    applySubtitleOpacity(getSubtitleOpacity());
+    applySubtitleFontSize(getSubtitleFontSize());
+    refreshSubtitles();
+  }
+  var _subtitlesObserverStarted = false;
+  function startSubtitlesObserver() {
+    const buf2 = document.getElementById("messagebuffer");
+    if (!buf2) return;
+    if (_subtitlesObserverStarted) {
+      refreshSubtitles();
+      return;
+    }
+    _subtitlesObserverStarted = true;
+    new MutationObserver(refreshSubtitles).observe(buf2, { childList: true, subtree: true });
+    refreshSubtitles();
+  }
+
+  // src/cards/driveincard.js
+  function _escHtml3(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  var CARD_MS = {
+    header: 1200,
+    line: 1500,
+    pause: 1200,
+    clear: 600,
+    starStart: 150,
+    star: 280,
+    says: 300,
+    hold: 6e3,
+    fade: 800,
+    // Academy Award slide: the verdict holds `verdictHold` first, then the
+    // header swaps; each nominee stays up long enough to read (`awardCharMs`
+    // per character, never less than `line`, at most `awardLineMax`), then
+    // the slide holds `awardHold`.
+    verdictHold: 4e3,
+    swap: 600,
+    awardCharMs: 55,
+    awardLineMax: 8e3,
+    awardHold: 1e4
+  };
+  var CARD_FONT_LINK_ID = "sc-tp-card-font";
+  var STAR_PATH2 = "M12 1.8l3.1 6.6 7.1.8-5.3 4.9 1.4 7.1L12 17.6l-6.3 3.6 1.4-7.1L1.8 9.2l7.1-.8z";
+  var _cardEl = null;
+  var _cardTimers = [];
+  var _onHidden = null;
+  var isDriveInCardUp = () => !!_cardEl;
+  function _ensureCardFont() {
+    if (document.getElementById(CARD_FONT_LINK_ID)) return;
+    const link = document.createElement("link");
+    link.id = CARD_FONT_LINK_ID;
+    link.rel = "stylesheet";
+    link.href = "https://fonts.googleapis.com/css2?family=Patua+One&display=swap";
+    document.head.appendChild(link);
+  }
+  function pictureRect() {
+    const v = document.querySelector("#videowrap video");
+    const r = v && v.getBoundingClientRect();
+    if (r && r.width > 0 && r.height > 0 && v.videoWidth > 0 && v.videoHeight > 0) {
+      const scale = Math.min(r.width / v.videoWidth, r.height / v.videoHeight);
+      const picW = v.videoWidth * scale, picH = v.videoHeight * scale;
+      return { left: r.left + (r.width - picW) / 2, top: r.top + (r.height - picH) / 2, width: picW, height: picH };
+    }
+    const wrap = document.getElementById("videowrap");
+    const wr = wrap && wrap.getBoundingClientRect();
+    if (wr && wr.width > 0 && wr.height > 0) return { left: wr.left, top: wr.top, width: wr.width, height: wr.height };
+    return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+  }
+  function _starSvg2(fill, k) {
+    const id = `sc-tp-star-clip-${k}`;
+    return `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><defs><clipPath id="${id}"><rect x="0" y="0" width="${24 * fill}" height="24"/></clipPath></defs><path d="${STAR_PATH2}" fill="rgba(20,20,20,.35)" stroke="#f5d76e" stroke-width="1.2"/><path d="${STAR_PATH2}" fill="#f5d76e" stroke="#7a5a10" stroke-width=".6" clip-path="url(#${id})"/></svg>`;
+  }
+  function _later(ms, fn) {
+    _cardTimers.push(setTimeout(fn, ms));
+  }
+  function showDriveInCard(card, onHidden) {
+    hideDriveInCard(true);
+    _ensureCardFont();
+    _onHidden = onHidden || null;
+    const P = pictureRect();
+    const el = document.createElement("div");
+    el.id = "sc-tp-card";
+    el.style.setProperty("left", P.left + P.width * 0.59 + "px", "important");
+    el.style.setProperty("top", P.top + P.height * 0.01 + "px", "important");
+    el.style.setProperty("width", P.width * 0.4 + "px", "important");
+    el.style.setProperty("--sc-tp-head", Math.max(18, P.height * 0.09) + "px");
+    el.style.setProperty("--sc-tp-line", Math.max(12, P.height * 0.046) + "px");
+    const awards = card.awards || [];
+    el.innerHTML = `
+        <div class="sc-tp-card-h">Drive-In<br>Totals</div>
+        <div class="sc-tp-card-rule"></div>
+        <div class="sc-tp-card-lines"><div class="sc-tp-card-track"></div></div>
+        <div class="sc-tp-card-verdict">
+            ${card.stars !== null ? `<div class="sc-tp-card-stars">${tpStarFills(card.stars).map(_starSvg2).join("")}</div>` : ""}
+            <div class="sc-tp-card-says">${_escHtml3(card.says)}</div>
+        </div>`;
+    document.body.appendChild(el);
+    _cardEl = el;
+    const linesEl = el.querySelector(".sc-tp-card-lines");
+    const track = el.querySelector(".sc-tp-card-track");
+    requestAnimationFrame(() => el.classList.add("sc-tp-card-on"));
+    const addLine = (text) => {
+      const line = document.createElement("div");
+      line.className = "sc-tp-card-line";
+      line.textContent = text;
+      track.appendChild(line);
+      requestAnimationFrame(() => line.classList.add("sc-tp-card-in"));
+      const over = track.offsetHeight - linesEl.clientHeight;
+      if (over > 0) {
+        linesEl.classList.add("sc-tp-card-scrolling");
+        track.style.setProperty("transform", `translateY(${-over}px)`, "important");
+      }
+    };
+    let t = CARD_MS.header;
+    for (const text of card.lines) {
+      _later(t, () => addLine(text));
+      t += CARD_MS.line;
+    }
+    if (card.stars !== null || card.says) {
+      t += CARD_MS.pause;
+      _later(t, () => linesEl.classList.add("sc-tp-card-gone"));
+      t += CARD_MS.clear;
+      const verdict = el.querySelector(".sc-tp-card-verdict");
+      _later(t, () => verdict.classList.add("sc-tp-card-on"));
+      const stars = el.querySelectorAll(".sc-tp-card-stars svg");
+      stars.forEach((s, k) => _later(t + CARD_MS.starStart + k * CARD_MS.star, () => s.classList.add("sc-tp-card-in")));
+      t += CARD_MS.starStart + stars.length * CARD_MS.star + CARD_MS.says;
+      const says = el.querySelector(".sc-tp-card-says");
+      _later(t, () => says.classList.add("sc-tp-card-on"));
+    }
+    if (awards.length) {
+      t += CARD_MS.verdictHold;
+      const head = el.querySelector(".sc-tp-card-h");
+      const verdict = el.querySelector(".sc-tp-card-verdict");
+      _later(t, () => {
+        head.classList.add("sc-tp-card-swap");
+        verdict.classList.remove("sc-tp-card-on");
+        linesEl.classList.add("sc-tp-card-gone");
+      });
+      t += CARD_MS.swap;
+      _later(t, () => {
+        head.innerHTML = "Drive-In Academy<br>Award Nominations";
+        el.classList.add("sc-tp-card-awards");
+        track.textContent = "";
+        track.style.setProperty("transform", "none", "important");
+        linesEl.classList.remove("sc-tp-card-scrolling", "sc-tp-card-gone");
+        head.classList.remove("sc-tp-card-swap");
+      });
+      t += CARD_MS.header;
+      for (const text of awards) {
+        _later(t, () => addLine(text));
+        t += Math.min(CARD_MS.awardLineMax, Math.max(CARD_MS.line, text.length * CARD_MS.awardCharMs));
+      }
+      t += CARD_MS.awardHold - CARD_MS.hold;
+    }
+    t += CARD_MS.hold;
+    _later(t, () => hideDriveInCard(false));
+  }
+  function hideDriveInCard(instant) {
+    _cardTimers.forEach(clearTimeout);
+    _cardTimers = [];
+    if (!_cardEl) return;
+    const el = _cardEl;
+    const done = () => {
+      el.remove();
+      if (_cardEl === el) {
+        _cardEl = null;
+        const cb = _onHidden;
+        _onHidden = null;
+        if (cb) cb();
+      }
+    };
+    if (instant) {
+      done();
+      return;
+    }
+    el.classList.add("sc-tp-card-out");
+    _cardTimers.push(setTimeout(done, CARD_MS.fade));
+  }
+
+  // src/cards/triviapopup.js
+  var TP_POLL_MS = 3e3;
+  var TP_GAP_TIERS = {
+    frequent: [45 * 1e3, 90 * 1e3],
+    occasional: [3 * 60 * 1e3, 6 * 60 * 1e3],
+    rare: [8 * 60 * 1e3, 15 * 60 * 1e3]
+  };
+  function _tpGapRange() {
+    return TP_GAP_TIERS[triviaPopupFrequency()] || TP_GAP_TIERS.occasional;
+  }
+  var TP_RETRY_MS = 20 * 1e3;
+  var TP_VISIBLE_MS = 20 * 1e3;
+  var TP_EXIT_ANIM_MS = 300;
+  var TP_MAX_FACT_LEN = 280;
+  var TP_PERSON_TRIVIA_CAP = 3;
+  function _escHtml4(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  var _tpLastImdbId = void 0;
+  var _tpQueue = [];
+  var _tpExhausted = false;
+  var _tpPopTimer = null;
+  var _tpBubbleEl = null;
+  var _tpDismissTimer = null;
+  var _tpTimeline = null;
+  var _tpDriveIn = null;
+  var _tpLastPopAt = 0;
+  var _tpCuratedRecheckAt = 0;
+  var LS_TRIVIA_SEEN = "sc_trivia_popup_seen";
+  var TRIVIA_SEEN_TTL_MS = 3 * 60 * 60 * 1e3;
+  function _tpLoadSeenTexts(id) {
+    let raw;
+    try {
+      raw = JSON.parse(localStorage.getItem(LS_TRIVIA_SEEN));
+    } catch (e) {
+      return [];
+    }
+    if (!raw || raw.id !== id) return [];
+    if (!raw.savedAt || Date.now() - raw.savedAt > TRIVIA_SEEN_TTL_MS) return [];
+    return Array.isArray(raw.texts) ? raw.texts : [];
+  }
+  function _tpMarkSeen(id, text) {
+    if (!id) return;
+    const texts = _tpLoadSeenTexts(id);
+    if (!texts.includes(text)) texts.push(text);
+    try {
+      localStorage.setItem(LS_TRIVIA_SEEN, JSON.stringify({ id, texts, savedAt: Date.now() }));
+    } catch (e) {
+    }
+  }
+  var _tpMuted = false;
+  var TP_RESUME_MS = 1500;
+  function _tpKnownForFact(person, knownFor) {
+    if (!knownFor) return null;
+    const titleYear = knownFor.year ? `${knownFor.title} (${knownFor.year})` : knownFor.title;
+    if (person.role === "director") return `${person.name} is also known for ${titleYear}.`;
+    const charPart = person.character ? ` (${person.character})` : "";
+    return `${person.name}${charPart} also starred in ${titleYear}.`;
+  }
+  async function _tpBuildCastCrewItems(people, excludeTconst, excludeSeriesTconst) {
+    const items = [];
+    await Promise.all(people.map(async (person) => {
+      const [trivia, knownFor] = await Promise.all([
+        fetchPersonTrivia(person.nconst),
+        fetchPersonKnownFor(person.nconst, excludeTconst, excludeSeriesTconst)
+      ]);
+      const byline = `${person.name} — ${person.role === "director" ? "Director" : person.character || "Cast"}`;
+      trivia.filter((t) => t.length <= TP_MAX_FACT_LEN).slice(0, TP_PERSON_TRIVIA_CAP).forEach((t) => items.push({ text: t, byline }));
+      const knownForFact = _tpKnownForFact(person, knownFor);
+      if (knownForFact) items.push({ text: knownForFact, byline: null });
+    }));
+    return items;
+  }
+  function _tpShuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+  function _tpResetForNewMovie(id) {
+    clearTimeout(_tpPopTimer);
+    _tpPopTimer = null;
+    _tpDismissBubble(true);
+    clearSubtitleTrivia();
+    hideDriveInCard(true);
+    _tpDriveIn = null;
+    _tpQueue = [];
+    _tpExhausted = false;
+    _tpTimeline = null;
+    _tpLastPopAt = Date.now();
+    _tpCuratedRecheckAt = Date.now() + CURATED_RECHECK_MS;
+    if (!id) return;
+    if (isTv) {
+      fetchDriveInCard(id).then((card) => {
+        if (id !== _tpLastImdbId) return;
+        _tpDriveIn = card;
+      });
+    }
+    fetchCuratedTrivia(id).then((curated) => {
+      if (id !== _tpLastImdbId) return;
+      if (curated) {
+        _tpTimeline = curated.facts;
+        return;
+      }
+      _tpStartImdbQueue(id);
+    });
+  }
+  function _tpStartImdbQueue(id) {
+    fetchImdbTrivia(id).then(async (items) => {
+      if (id !== _tpLastImdbId) return;
+      const seenTexts = _tpLoadSeenTexts(id);
+      const movieItems = (items || []).filter((text) => !seenTexts.includes(text)).map((text) => ({ text, byline: null }));
+      _tpQueue = _tpShuffle(movieItems);
+      _tpScheduleNextPop();
+      if (!triviaPopupEnabled()) return;
+      if (npState.data && npState.data.episode != null) return;
+      const result = await fetchCastAndDirector(id);
+      if (id !== _tpLastImdbId) return;
+      if (!result || !result.people.length) return;
+      if (result.seriesTconst) return;
+      const castCrewItems = await _tpBuildCastCrewItems(result.people, id, result.seriesTconst);
+      if (id !== _tpLastImdbId) return;
+      const seenTextsNow = _tpLoadSeenTexts(id);
+      const freshCastCrewItems = castCrewItems.filter((it) => !seenTextsNow.includes(it.text));
+      if (!freshCastCrewItems.length) return;
+      _tpQueue = _tpShuffle(_tpQueue.concat(freshCastCrewItems));
+      if (_tpExhausted) {
+        _tpExhausted = false;
+        _tpScheduleNextPop();
+      }
+    });
+  }
+  function _tpScheduleNextPop() {
+    clearTimeout(_tpPopTimer);
+    if (_tpTimeline || _tpExhausted || !_tpQueue.length) {
+      _tpExhausted = true;
+      return;
+    }
+    if (_tpMuted) return;
+    const [minGap, maxGap] = _tpGapRange();
+    const gap = minGap + Math.random() * (maxGap - minGap);
+    _tpPopTimer = setTimeout(_tpAttemptPop, gap);
+  }
+  function _tpMoviePlaying() {
+    if (isYouTubeMedia()) return false;
+    const v = document.querySelector("#videowrap video");
+    return !!v && !v.paused;
+  }
+  function _tpAttemptPop() {
+    const curId = npState.data && npState.data.imdbId;
+    if (curId !== _tpLastImdbId) return;
+    if (_tpMuted) return;
+    if (_tpTimeline) return;
+    if (!_tpCanPop() || isDriveInCardUp()) {
+      _tpPopTimer = setTimeout(_tpAttemptPop, TP_RETRY_MS);
+      return;
+    }
+    let fact = null;
+    while (_tpQueue.length) {
+      const candidate = _tpQueue.shift();
+      if (candidate.text.length <= TP_MAX_FACT_LEN) {
+        fact = candidate;
+        break;
+      }
+    }
+    if (!fact) {
+      _tpExhausted = true;
+      return;
+    }
+    showTriviaBubble(fact);
+    _tpMarkSeen(_tpLastImdbId, fact.text);
+    _tpLastPopAt = Date.now();
+    _tpScheduleNextPop();
+  }
+  function _tpCanPop() {
+    return triviaPopupEnabled() && !_tpMuted && _tpMoviePlaying() && !isMovieSubtitlesVisible();
+  }
+  var _tpCurrentTime = () => {
+    const v = document.querySelector("#videowrap video");
+    return v ? v.currentTime : NaN;
+  };
+  function _tpDriveInTick() {
+    const curId = npState.data && npState.data.imdbId;
+    if (!_tpDriveIn || curId !== _tpLastImdbId) return;
+    if (!_tpCanPop() || isDriveInCardUp() || _tpBubbleEl) return;
+    const seen = _tpLoadSeenTexts(_tpLastImdbId);
+    const sinceLastPop = (Date.now() - _tpLastPopAt) / 1e3;
+    if (!tpDriveInAction(_tpDriveIn, _tpCurrentTime(), seen, sinceLastPop)) return;
+    showDriveInCard(_tpDriveIn, () => {
+      _tpLastPopAt = Date.now();
+    });
+    _tpMarkSeen(_tpLastImdbId, TP_DRIVEIN_SEEN_KEY);
+  }
+  function _tpTimelineTick() {
+    const curId = npState.data && npState.data.imdbId;
+    if (!_tpTimeline || curId !== _tpLastImdbId) return;
+    if (!_tpCanPop() || isDriveInCardUp()) return;
+    if (_tpBubbleEl) return;
+    const t = _tpCurrentTime();
+    const tier = triviaPopupFrequency() || "occasional";
+    const seen = _tpLoadSeenTexts(_tpLastImdbId);
+    const sinceLastPop = (Date.now() - _tpLastPopAt) / 1e3;
+    const fact = tpDueFact(_tpTimeline, t, tier, seen) || tpCatchUpFact(_tpTimeline, t, tier, seen, sinceLastPop);
+    if (!fact) return;
+    showTriviaBubble(fact);
+    _tpMarkSeen(_tpLastImdbId, fact.text);
+    _tpLastPopAt = Date.now();
+  }
+  function _tpRecheckCurated(id) {
+    _tpCuratedRecheckAt = Date.now() + CURATED_RECHECK_MS;
+    fetchCuratedTrivia(id).then((curated) => {
+      if (!curated || id !== _tpLastImdbId || _tpTimeline) return;
+      clearTimeout(_tpPopTimer);
+      _tpPopTimer = null;
+      _tpQueue = [];
+      _tpExhausted = true;
+      _tpTimeline = curated.facts;
+    });
+  }
+  function _tpMoviePollTick() {
+    const curId = npState.data && npState.data.imdbId;
+    if (curId !== _tpLastImdbId) {
+      _tpLastImdbId = curId;
+      _tpResetForNewMovie(_tpLastImdbId);
+    }
+    if (!_tpTimeline && _tpLastImdbId && Date.now() >= _tpCuratedRecheckAt) _tpRecheckCurated(_tpLastImdbId);
+    _tpDriveInTick();
+    _tpTimelineTick();
+  }
+  function triviaPopupBoot() {
+    _tpMoviePollTick();
+    setInterval(_tpMoviePollTick, TP_POLL_MS);
+  }
+  var TP_ICON_SVGS = {
+    // Skull + blood drip
+    skull: `<path d="M30 10 C19 10 12 18 12 27 C12 33 15 38 19 41 L19 47 L24 47 L24 43 L27 43 L27 47 L33 47 L33 43 L36 43 L36 47 L41 47 L41 41 C45 38 48 33 48 27 C48 18 41 10 30 10 Z"
+          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <circle cx="22" cy="26" r="5" fill="#000"/>
+     <circle cx="38" cy="26" r="5" fill="#000"/>
+     <polygon points="30,30 27,36 33,36" fill="#000"/>
+     <path d="M39 16 C39 16 43 22 41 27 C40 30 36 30 35 27 C33 23 39 16 39 16 Z"
+          fill="#c81d25" stroke="#000" stroke-width="1.5" stroke-linejoin="round"/>`,
+    // Cracked tombstone
+    tombstone: `<path d="M14 54 V30 C14 16 22 8 30 8 C38 8 46 16 46 30 V54 Z"
+          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <path d="M30 12 L26 26 L34 30 L28 44 L33 54" stroke="#000" stroke-width="2" fill="none"/>
+     <line x1="30" y1="18" x2="30" y2="26" stroke="#000" stroke-width="2"/>
+     <line x1="26" y1="21" x2="34" y2="21" stroke="#000" stroke-width="2"/>`,
+    // Film reel
+    reel: `<circle cx="30" cy="30" r="18" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <circle cx="30" cy="30" r="4" fill="#000"/>
+     <circle cx="30" cy="16" r="4.5" fill="#000"/>
+     <circle cx="30" cy="44" r="4.5" fill="#000"/>
+     <circle cx="18" cy="23" r="4.5" fill="#000"/>
+     <circle cx="18" cy="37" r="4.5" fill="#000"/>
+     <circle cx="42" cy="23" r="4.5" fill="#000"/>
+     <circle cx="42" cy="37" r="4.5" fill="#000"/>`,
+    // --- Sci-fi (toxic-green #39d98a accent) ---
+    // Flying saucer
+    saucer: `<ellipse cx="30" cy="33" rx="22" ry="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <ellipse cx="30" cy="24" rx="11" ry="9" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <circle cx="18" cy="36" r="2.2" fill="#39d98a" stroke="#000" stroke-width="1.2"/>
+     <circle cx="30" cy="38" r="2.2" fill="#39d98a" stroke="#000" stroke-width="1.2"/>
+     <circle cx="42" cy="36" r="2.2" fill="#39d98a" stroke="#000" stroke-width="1.2"/>`,
+    // Bug-eyed alien head
+    alien: `<path d="M30 6 C14 6 6 20 8 32 C10 44 20 54 30 54 C40 54 50 44 52 32 C54 20 46 6 30 6 Z"
+          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <ellipse cx="20" cy="27" rx="7" ry="10" fill="#000" transform="rotate(-15 20 27)"/>
+     <ellipse cx="40" cy="27" rx="7" ry="10" fill="#000" transform="rotate(15 40 27)"/>
+     <circle cx="20" cy="27" r="1.8" fill="#39d98a"/>
+     <circle cx="40" cy="27" r="1.8" fill="#39d98a"/>`,
+    // Rocket ship
+    rocket: `<path d="M30 6 C24 6 20 14 20 24 V44 H40 V24 C40 14 36 6 30 6 Z"
+          fill="#f4f1ea" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <circle cx="30" cy="20" r="5" fill="#39d98a" stroke="#000" stroke-width="2"/>
+     <polygon points="20,38 10,50 20,50" fill="#d8d8d8" stroke="#000" stroke-width="2" stroke-linejoin="round"/>
+     <polygon points="40,38 50,50 40,50" fill="#d8d8d8" stroke="#000" stroke-width="2" stroke-linejoin="round"/>
+     <path d="M24 44 C24 44 22 54 30 58 C38 54 36 44 36 44 Z"
+          fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round"/>`,
+    // Robot head
+    robot: `<rect x="14" y="16" width="32" height="28" rx="4" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <line x1="30" y1="16" x2="30" y2="6" stroke="#000" stroke-width="2.5"/>
+     <circle cx="30" cy="5" r="3" fill="#39d98a" stroke="#000" stroke-width="1.5"/>
+     <circle cx="30" cy="28" r="7" fill="#000"/>
+     <circle cx="30" cy="28" r="3" fill="#39d98a"/>
+     <rect x="20" y="38" width="20" height="4" fill="#000"/>
+     <circle cx="16" cy="20" r="2" fill="#3a2a1a"/>
+     <circle cx="44" cy="20" r="2" fill="#3a2a1a"/>`,
+    // Radioactive trefoil
+    radioactive: `<circle cx="30" cy="30" r="20" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <path d="M30 30 L23 15 L37 15 Z" fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round" transform="rotate(0 30 30)"/>
+     <path d="M30 30 L23 15 L37 15 Z" fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round" transform="rotate(120 30 30)"/>
+     <path d="M30 30 L23 15 L37 15 Z" fill="#39d98a" stroke="#000" stroke-width="1.5" stroke-linejoin="round" transform="rotate(240 30 30)"/>
+     <circle cx="30" cy="30" r="5" fill="#000"/>`,
+    // --- Action (marquee-gold #e8b923 accent) ---
+    // Explosion burst
+    explosion: `<polygon points="30,4 35,19 48,12 41,25 56,30 41,35 48,48 35,41 30,56 25,41 12,48 19,35 4,30 19,25 12,12 25,19"
+             fill="#e8b923" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <polygon points="30,16 33,24 40,20 36,27 44,30 36,33 40,40 33,36 30,44 27,36 20,40 25,33 16,30 25,27 20,20 27,25"
+             fill="#c81d25" stroke="#000" stroke-width="1.5" stroke-linejoin="round"/>`,
+    // Crosshair scope
+    crosshair: `<circle cx="30" cy="30" r="21" fill="#f4f1ea" stroke="#c81d25" stroke-width="4"/>
+     <rect x="6" y="28" width="15" height="4" fill="#000"/>
+     <rect x="39" y="28" width="15" height="4" fill="#000"/>
+     <rect x="28" y="6" width="4" height="15" fill="#000"/>
+     <rect x="28" y="39" width="4" height="15" fill="#000"/>
+     <circle cx="30" cy="30" r="4" fill="#e8b923" stroke="#000" stroke-width="1.5"/>`,
+    // Brass knuckles
+    knuckles: `<circle cx="14" cy="20" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <circle cx="26" cy="18" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <circle cx="38" cy="18" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <circle cx="50" cy="20" r="8" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <rect x="10" y="26" width="44" height="8" rx="3" fill="#3a2a1a" stroke="#000" stroke-width="2.5"/>`,
+    // --- Comedy (marquee-gold #e8b923 accent) ---
+    // Disco ball
+    disco: `<circle cx="30" cy="30" r="20" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <path d="M12 30 H48 M13 20 H47 M13 40 H47 M20 12 V48 M30 10 V50 M40 12 V48"
+          stroke="#000" stroke-width="1.5" fill="none"/>
+     <polyline points="46,10 50,6" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>
+     <polyline points="50,14 55,12" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>
+     <polyline points="44,6 47,2" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>`,
+    // Boombox
+    boombox: `<rect x="6" y="18" width="48" height="30" rx="5" fill="#3a2a1a" stroke="#000" stroke-width="2.5"/>
+     <circle cx="18" cy="33" r="10" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <circle cx="18" cy="33" r="4" fill="#000"/>
+     <circle cx="42" cy="33" r="10" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <circle cx="42" cy="33" r="4" fill="#000"/>
+     <rect x="24" y="10" width="12" height="8" rx="2" fill="#e8b923" stroke="#000" stroke-width="2"/>`,
+    // Aviator sunglasses
+    sunglasses: `<ellipse cx="18" cy="30" rx="12" ry="10" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <ellipse cx="42" cy="30" rx="12" ry="10" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <rect x="27" y="27" width="6" height="4" fill="#000"/>
+     <line x1="6" y1="27" x2="0" y2="21" stroke="#000" stroke-width="3" stroke-linecap="round"/>
+     <line x1="54" y1="27" x2="60" y2="21" stroke="#000" stroke-width="3" stroke-linecap="round"/>
+     <polyline points="12,26 18,23" stroke="#e8b923" stroke-width="2.5" stroke-linecap="round"/>`,
+    // --- Curated-fact topics (named by the generator, not random-picked by genre) ---
+    // Drive-in window speaker -- Joe Bob / Drive-In Totals
+    joebob: `<path d="M22 14 V8 H38 V14" fill="none" stroke="#000" stroke-width="2.5"/>
+     <rect x="14" y="14" width="32" height="34" rx="5" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <circle cx="30" cy="31" r="10" fill="#3a2a1a" stroke="#000" stroke-width="2"/>
+     <path d="M22 31 H38 M24 26 H36 M24 36 H36" stroke="#000" stroke-width="1.5"/>
+     <rect x="24" y="48" width="12" height="5" fill="#c81d25" stroke="#000" stroke-width="1.5"/>`,
+    // Banknote -- budget / box office
+    money: `<rect x="8" y="16" width="44" height="28" rx="3" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <rect x="12" y="20" width="36" height="20" rx="2" fill="none" stroke="#000" stroke-width="1"/>
+     <circle cx="30" cy="30" r="9" fill="#e8b923" stroke="#000" stroke-width="2"/>
+     <text x="30" y="35" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-size="14" font-weight="900" fill="#000">$</text>`,
+    // Two-reel movie camera -- production / behind the scenes
+    camera: `<circle cx="20" cy="18" r="9" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <circle cx="38" cy="18" r="9" fill="#f4f1ea" stroke="#000" stroke-width="2.5"/>
+     <circle cx="20" cy="18" r="2.5" fill="#000"/>
+     <circle cx="38" cy="18" r="2.5" fill="#000"/>
+     <rect x="10" y="28" width="34" height="20" rx="3" fill="#3a2a1a" stroke="#000" stroke-width="2.5"/>
+     <polygon points="44,32 54,26 54,50 44,44" fill="#d8d8d8" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <circle cx="20" cy="38" r="3" fill="#c81d25"/>`,
+    // Walk-of-fame star -- cast
+    star: `<polygon points="30,6 36,22 53,22 39,32 44,49 30,39 16,49 21,32 7,22 24,22"
+             fill="#e8b923" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <circle cx="30" cy="28" r="4" fill="#c81d25" stroke="#000" stroke-width="1.5"/>`,
+    // Chain links -- ties to other movies
+    link: `<rect x="6" y="22" width="28" height="16" rx="8" fill="none" stroke="#000" stroke-width="7"/>
+     <rect x="6" y="22" width="28" height="16" rx="8" fill="none" stroke="#d8d8d8" stroke-width="3.5"/>
+     <rect x="26" y="22" width="28" height="16" rx="8" fill="none" stroke="#000" stroke-width="7"/>
+     <rect x="26" y="22" width="28" height="16" rx="8" fill="none" stroke="#e8b923" stroke-width="3.5"/>`,
+    // Ribbon microphone -- interview quotes
+    mic: `<rect x="20" y="6" width="20" height="28" rx="10" fill="#d8d8d8" stroke="#000" stroke-width="2.5"/>
+     <path d="M24 14 H36 M24 20 H36 M24 26 H36" stroke="#000" stroke-width="1.5"/>
+     <path d="M14 26 C14 38 22 42 30 42 C38 42 46 38 46 26" fill="none" stroke="#000" stroke-width="2.5"/>
+     <line x1="30" y1="42" x2="30" y2="52" stroke="#000" stroke-width="3"/>
+     <rect x="20" y="51" width="20" height="4" rx="1" fill="#c81d25" stroke="#000" stroke-width="1.5"/>`,
+    // "CUT" stamp -- censorship / banned / alternate versions
+    censor: `<g transform="rotate(-12 30 30)">
+       <rect x="7" y="17" width="46" height="26" rx="3" fill="#f4f1ea" stroke="#c81d25" stroke-width="3"/>
+       <text x="30" y="36" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-size="15" font-weight="900" fill="#c81d25">CUT</text>
+     </g>`,
+    // Trophy -- awards
+    trophy: `<path d="M18 12 H10 C10 22 14 24 18 24 M42 12 H50 C50 22 46 24 42 24" fill="none" stroke="#000" stroke-width="2.5"/>
+     <path d="M18 8 H42 V22 C42 30 36 36 30 36 C24 36 18 30 18 22 Z" fill="#e8b923" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+     <rect x="27" y="36" width="6" height="8" fill="#e8b923" stroke="#000" stroke-width="2"/>
+     <rect x="18" y="44" width="24" height="8" rx="1" fill="#3a2a1a" stroke="#000" stroke-width="2.5"/>`
+  };
+  var TP_ICON_KEYS = Object.keys(TP_ICON_SVGS);
+  function tpPickIconKey(iconKey) {
+    if (iconKey && TP_ICON_KEYS.includes(iconKey)) return iconKey;
+    return TP_ICON_KEYS[Math.floor(Math.random() * TP_ICON_KEYS.length)];
+  }
+  function _tpRandomPosition(boxWidthPx, boxHeightPx) {
+    const wrap = document.getElementById("videowrap");
+    const rect = wrap ? wrap.getBoundingClientRect() : { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight, width: window.innerWidth, height: window.innerHeight };
+    const marginPx = 14;
+    const halfW = boxWidthPx / 2;
+    let leftMinPx = rect.left + marginPx + halfW;
+    let leftMaxPx = rect.left + rect.width - marginPx - halfW;
+    if (leftMaxPx < leftMinPx) {
+      const mid = rect.left + rect.width / 2;
+      leftMinPx = leftMaxPx = mid;
+    }
+    const bottomThirdTopPx = rect.top + rect.height * (2 / 3);
+    let topMinPx = Math.max(rect.top + marginPx, bottomThirdTopPx);
+    let topMaxPx = rect.bottom - marginPx - boxHeightPx;
+    if (topMaxPx < topMinPx) topMinPx = topMaxPx = Math.max(rect.top + marginPx, rect.bottom - marginPx - boxHeightPx);
+    return {
+      leftPx: leftMinPx + Math.random() * (leftMaxPx - leftMinPx),
+      topPx: topMinPx + Math.random() * (topMaxPx - topMinPx)
+    };
+  }
+  var _tpAudioCtx = null;
+  function _tpGetAudioCtx() {
+    if (!_tpAudioCtx) {
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      _tpAudioCtx = new Ctor();
+    }
+    if (_tpAudioCtx.state === "suspended") _tpAudioCtx.resume();
+    return _tpAudioCtx;
+  }
+  function _tpNoiseBurst(ac, { start, dur, freq, q, peak }) {
+    const size = Math.max(1, Math.floor(ac.sampleRate * dur));
+    const buffer = ac.createBuffer(1, size, ac.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < size; i++) data[i] = Math.random() * 2 - 1;
+    const src = ac.createBufferSource();
+    src.buffer = buffer;
+    const bp = ac.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = freq;
+    bp.Q.value = q;
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(peak, start + 3e-3);
+    gain.gain.exponentialRampToValueAtTime(1e-4, start + dur);
+    src.connect(bp).connect(gain).connect(ac.destination);
+    src.start(start);
+    src.stop(start + dur + 0.01);
+  }
+  function _tpBubbleTone(ac, { start, dur, freqStart, freqPeak, freqEnd, lpStart, lpEnd, q, peak }) {
+    const osc = ac.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freqStart, start);
+    osc.frequency.exponentialRampToValueAtTime(freqPeak, start + dur * 0.4);
+    osc.frequency.exponentialRampToValueAtTime(freqEnd, start + dur);
+    const lp = ac.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.Q.value = q;
+    lp.frequency.setValueAtTime(lpStart, start);
+    lp.frequency.exponentialRampToValueAtTime(lpEnd, start + dur);
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(peak, start + 6e-3);
+    gain.gain.exponentialRampToValueAtTime(1e-4, start + dur);
+    osc.connect(lp).connect(gain).connect(ac.destination);
+    osc.start(start);
+    osc.stop(start + dur + 0.02);
+  }
+  function _tpPlayPopSound() {
+    try {
+      const ac = _tpGetAudioCtx();
+      const t = ac.currentTime;
+      _tpNoiseBurst(ac, { start: t, dur: 0.02, freq: 1800, q: 2.5, peak: 0.55 });
+      _tpBubbleTone(ac, { start: t, dur: 0.13, freqStart: 220, freqPeak: 600, freqEnd: 380, lpStart: 2600, lpEnd: 600, q: 8, peak: 0.3 });
+    } catch (e) {
+    }
+  }
+  function _tpAddHeadshot(svg, url) {
+    if (!svg) return;
+    const NS = "http://www.w3.org/2000/svg";
+    const clip = document.createElementNS(NS, "clipPath");
+    clip.setAttribute("id", "sc-tp-headshot-clip");
+    const disc = document.createElementNS(NS, "circle");
+    disc.setAttribute("cx", "30");
+    disc.setAttribute("cy", "30");
+    disc.setAttribute("r", "25.5");
+    clip.appendChild(disc);
+    const img = document.createElementNS(NS, "image");
+    img.setAttribute("href", url);
+    img.setAttribute("x", "4.5");
+    img.setAttribute("y", "4.5");
+    img.setAttribute("width", "51");
+    img.setAttribute("height", "51");
+    img.setAttribute("preserveAspectRatio", "xMidYMid slice");
+    img.setAttribute("clip-path", "url(#sc-tp-headshot-clip)");
+    img.addEventListener("error", () => img.remove());
+    svg.insertBefore(clip, svg.firstChild);
+    svg.appendChild(img);
+    const ring = svg.querySelector("circle[stroke]");
+    if (ring) svg.appendChild(ring);
+  }
+  function _tpShowSubtitleTrivia(fact) {
+    const bylineHtml = fact.byline ? `<span class="sc-subtitle-trivia-byline">${_escHtml4(fact.byline)}</span>` : "";
+    addSubtitleTrivia(`<div class="sc-subtitle-pill sc-subtitle-trivia">${_escHtml4(fact.text)}${bylineHtml}</div>`, SUBTITLE_LINE_TTL_MS);
+  }
+  function showTriviaBubble(fact) {
+    _tpDismissBubble(true);
+    if (inSubtitlesMode()) {
+      _tpShowSubtitleTrivia(fact);
+      return;
+    }
+    _tpPlayPopSound();
+    _tpBubbleEl = document.createElement("div");
+    _tpBubbleEl.id = "sc-tp-bubble";
+    const icon = TP_ICON_SVGS[tpPickIconKey(fact.icon)];
+    const bylineHtml = fact.byline ? `<div id="sc-tp-byline">${_escHtml4(fact.byline)}</div>` : "";
+    _tpBubbleEl.innerHTML = `
+        <svg id="sc-tp-tail" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="30" cy="30" r="27" fill="#000"/>
+            <circle cx="30" cy="30" r="27" fill="none" stroke="#c81d25" stroke-width="3"/>
+            ${icon}
+        </svg>
+        <div id="sc-tp-text">${_escHtml4(fact.text)}${bylineHtml}</div>`;
+    if (tpSafeImageUrl(fact.image)) _tpAddHeadshot(_tpBubbleEl.querySelector("#sc-tp-tail"), fact.image);
+    document.body.appendChild(_tpBubbleEl);
+    const pos = _tpRandomPosition(_tpBubbleEl.offsetWidth, _tpBubbleEl.offsetHeight);
+    _tpBubbleEl.style.setProperty("left", pos.leftPx + "px", "important");
+    _tpBubbleEl.style.setProperty("top", pos.topPx + "px", "important");
+    requestAnimationFrame(() => _tpBubbleEl && _tpBubbleEl.classList.add("sc-tp-in"));
+    _tpBubbleEl.addEventListener("click", () => _tpDismissBubble(false));
+    _tpBubbleEl.addEventListener("mouseenter", () => clearTimeout(_tpDismissTimer));
+    _tpBubbleEl.addEventListener("mouseleave", _tpArmDismissTimer);
+    _tpArmDismissTimer();
+  }
+  function _tpArmDismissTimer() {
+    clearTimeout(_tpDismissTimer);
+    _tpDismissTimer = setTimeout(() => _tpDismissBubble(false), TP_VISIBLE_MS);
+  }
+  function _tpDismissBubble(instant) {
+    clearTimeout(_tpDismissTimer);
+    _tpDismissTimer = null;
+    if (!_tpBubbleEl) return;
+    const el = _tpBubbleEl;
+    _tpBubbleEl = null;
+    if (instant) {
+      el.remove();
+      return;
+    }
+    el.classList.add("sc-tp-out");
+    setTimeout(() => el.remove(), TP_EXIT_ANIM_MS);
+  }
+  var TP_BTN_ID = "sc-trivia-popup-btn";
+  function _tpApplyMute() {
+    if (_tpMuted) {
+      clearTimeout(_tpPopTimer);
+      _tpPopTimer = null;
+      _tpDismissBubble(true);
+      clearSubtitleTrivia();
+      hideDriveInCard(false);
+    } else if (!_tpTimeline && !_tpExhausted && _tpQueue.length) {
+      clearTimeout(_tpPopTimer);
+      _tpPopTimer = setTimeout(_tpAttemptPop, TP_RESUME_MS);
+    }
+    _tpSyncButton();
+  }
+  function _tpToggleMute() {
+    _tpMuted = !_tpMuted;
+    _tpApplyMute();
+  }
+  function _tpSyncButton() {
+    const btn = document.getElementById(TP_BTN_ID);
+    if (!btn) return;
+    btn.innerHTML = `<span class="sc-tp-dot">${_tpMuted ? "○" : "●"}</span>Pop-ups`;
+    btn.title = _tpMuted ? "Pop-up trivia muted for this session — tap to resume" : "Mute pop-up trivia bubbles for this session";
+    btn.setAttribute("aria-pressed", _tpMuted ? "true" : "false");
+  }
+  function renderTriviaPopupButton() {
+    const shouldShow = triviaPopupEnabled() && !!(npState.data && npState.data.imdbId);
+    let btn = document.getElementById(TP_BTN_ID);
+    if (!shouldShow) {
+      if (btn) btn.remove();
+      return;
+    }
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.id = TP_BTN_ID;
+      btn.type = "button";
+      btn.dataset.noTvCaption = "1";
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        _tpToggleMute();
+      });
+      const header = document.getElementById("videowrap-header");
+      const anchor = document.getElementById("sc-up-next-btn") || document.getElementById("sc-poster-toggle");
+      if (header && anchor && anchor.parentNode === header) header.insertBefore(btn, anchor);
+      else (header || document.body).appendChild(btn);
+    }
+    _tpSyncButton();
+  }
+
+  // src/titleinject.js
+  var NP_AUTO_HIDE_MS = isTv ? 1e4 : 8e3;
+  var NP_AUTO_MIN_SECONDS = 45 * 60;
+  function _npShouldAutoAnnounce(isYt) {
+    return !isYt && getCurrentMediaSeconds() >= NP_AUTO_MIN_SECONDS;
+  }
+  function isYouTubeMedia() {
+    try {
+      const p = window.PLAYER || window.player;
+      if (p && p.type === "yt") return true;
+      if (p && p.mediaType === "yt") return true;
+    } catch (e) {
+    }
+    if (document.querySelector('#ytapiplayer iframe[src*="youtube.com"]')) return true;
+    if (document.querySelector('#ytapiplayer[src*="youtube.com"]')) return true;
+    return false;
+  }
+  function _domYtVideoId() {
+    const el = document.querySelector('#ytapiplayer iframe[src*="youtube.com"]');
+    if (!el) return "";
+    const src = el.getAttribute("src") || "";
+    const m = src.match(/[?&]v=([\w-]{11})/) || src.match(/\/embed\/([\w-]{11})/);
+    return m ? m[1] : "";
+  }
+  function fetchYtOembed(videoId) {
+    if (!videoId) return Promise.resolve(null);
+    const watchUrl = "https://www.youtube.com/watch?v=" + encodeURIComponent(videoId);
+    const url = "https://www.youtube.com/oembed?url=" + encodeURIComponent(watchUrl) + "&format=json";
+    return nativeHttpGet(url).then((res) => {
+      if (!res || res.status !== 200) return null;
+      try {
+        return JSON.parse(res.body);
+      } catch (e) {
+        return null;
+      }
+    }).catch(() => null);
+  }
+  function applyCleanTitleDom(titleEl, movieData, rawTitle) {
+    const { cleanTitle, cleanYear, season, episode, episodeName } = movieData;
+    if (!cleanTitle || !titleEl) return;
+    const epTag = episodeTag(season, episode);
+    const newText = cleanTitle + (cleanYear ? ` (${cleanYear})` : "") + (epTag ? ` · ${epTag}` : "") + (episodeName ? ` — ${episodeName}` : "");
+    let span = titleEl.querySelector(":scope > #sc-title-text") || document.getElementById("sc-title-text");
+    if (!span) {
+      span = document.createElement("span");
+      span.id = "sc-title-text";
+      span.style.cursor = "pointer";
+      span.title = "Movie info";
+      span.dataset.noTvCaption = "1";
+      span.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
+      });
+      const textNode = [...titleEl.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
+      if (textNode) textNode.parentNode.replaceChild(span, textNode);
+      else titleEl.insertBefore(span, titleEl.firstChild);
+    }
+    span.textContent = newText;
+    if (rawTitle) span.dataset.rawTitle = rawTitle;
+  }
+  function rawTitleOf(titleEl) {
+    const span = titleEl.querySelector("#sc-title-text");
+    if (span && span.dataset.rawTitle) return span.dataset.rawTitle;
+    return titleEl.textContent.trim().replace(/^currently\s+playing[:\s]*/i, "").replace(/^now\s+playing[:\s]*/i, "").trim();
+  }
+  function parsedTitleFor(rawTitle) {
+    if (!rawTitle) return "";
+    const parsed = isYouTubeMedia() ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
+    return parsed && parsed.title || rawTitle;
+  }
+  function injectMovieLinks(titleEl, opts = {}) {
+    const rawTitle = rawTitleOf(titleEl);
+    if (!rawTitle || rawTitle.length < 2) return;
+    if (rawTitle === movieState.lastMovieTitle) {
+      if (npState.data && !titleEl.querySelector("#sc-title-text")) {
+        applyCleanTitleDom(titleEl, npState.data, rawTitle);
+      }
+      renderTriviaPopupButton();
+      return;
+    }
+    movieState.lastMovieTitle = rawTitle;
+    ["sc-movie-stats"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.remove();
+    });
+    npState.data = null;
+    updateSubtitleButton(null);
+    renderTriviaPopupButton();
+    const isYt = isYouTubeMedia();
+    const pinned = !!getMovieOverride(rawTitle);
+    let ytSeconds = 0;
+    if (isYt && !pinned) {
+      ytSeconds = getCurrentMediaSeconds();
+      if (ytSeconds < 3600) {
+        const videoId = mediaState.currentYtVideoId || _domYtVideoId();
+        if (videoId) {
+          fetchYtOembed(videoId).then((info) => {
+            if (!info || !info.title) return;
+            if (movieState.lastMovieTitle !== rawTitle) return;
+            const movieData = {
+              cleanTitle: info.title,
+              cleanYear: null,
+              poster: info.thumbnail_url || null,
+              backdrop: info.thumbnail_url || null,
+              overview: info.author_name ? `Uploaded by ${info.author_name}` : null,
+              rating: null,
+              runtime: null,
+              genres: [],
+              parentalGuide: null,
+              killCount: null,
+              imdbId: null,
+              links: {},
+              season: null,
+              episode: null,
+              episodeName: null
+            };
+            npState.data = movieData;
+            if (opts.showCard) showNowPlayingCard(movieData, { autoHide: false });
+            applyCleanTitleDom(titleEl, movieData, rawTitle);
+            renderTriviaPopupButton();
+          });
+        }
+        return;
+      }
+    }
+    const parsed = isYt ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
+    const { year, season, episode } = parsed;
+    const title = parsed.title && parsed.title.length >= 2 ? parsed.title : pinned ? rawTitle : "";
+    if (!title) return;
+    lookupMovie(title, year, season, episode, rawTitle).then((movieData) => {
+      if (movieState.lastMovieTitle !== rawTitle) return;
+      const { killCount, parentalGuide, cleanTitle, cleanYear } = movieData;
+      if (isYt && movieData.matchSource !== "pinned") {
+        if (!cleanTitle) return;
+        if (movieData.runtime && ytSeconds) {
+          const diff = Math.abs(movieData.runtime - ytSeconds / 60);
+          if (diff > 30) return;
+        }
+      }
+      npState.data = movieData;
+      updateSubtitleButton(movieData.imdbId);
+      renderTriviaPopupButton();
+      if (opts.showCard) showNowPlayingCard(movieData, { autoHide: false });
+      else if (_npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt)) showNowPlayingCard(movieData, { autoHide: true, autoHideMs: NP_AUTO_HIDE_MS });
+      applyCleanTitleDom(titleEl, movieData, rawTitle);
+      const statParts = [];
+      if (killCount !== null) statParts.push(`💀 ${killCount} on-screen kills`);
+      if (parentalGuide && parentalGuide.length) {
+        const PG_SEV_DOT = { Severe: "🔴", Moderate: "🟡", Mild: "🟢", None: "" };
+        const cssDots = needsEmojiFallback();
+        parentalGuide.forEach(({ category, severity }) => {
+          const dot = PG_SEV_DOT[severity] || "";
+          if (!dot) return;
+          if (cssDots) {
+            const sev = document.createElement("span");
+            sev.className = `sc-sev-dot sc-sev-${severity.toLowerCase()}`;
+            statParts.push([sev, ` ${category}`]);
+          } else {
+            statParts.push(`${dot} ${category}`);
+          }
+        });
+      }
+      const lastAired = getLastAired(cleanTitle || title, cleanYear || year);
+      if (lastAired) statParts.push(`📅 Last aired ${lastAired.dateStr}`);
+      const old = document.getElementById("sc-movie-stats");
+      if (old) old.remove();
+      if (statParts.length) {
+        const cardWillAutoShow = opts.showCard || _npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt);
+        const revealDelay = cardWillAutoShow ? NP_AUTO_HIDE_MS : 0;
+        setTimeout(() => {
+          if (movieState.lastMovieTitle !== rawTitle) return;
+          const statsEl = document.createElement("div");
+          statsEl.id = "sc-movie-stats";
+          if (statParts.every((p) => typeof p === "string")) {
+            statsEl.textContent = statParts.join("  ·  ");
+          } else {
+            statParts.forEach((p, i) => {
+              if (i) statsEl.append("  ·  ");
+              statsEl.append(...[].concat(p));
+            });
+          }
+          document.body.appendChild(statsEl);
+          if (typeof chromeState.pinChromeVisible === "function") chromeState.pinChromeVisible();
+          setTimeout(() => {
+            if (statsEl.parentNode) statsEl.remove();
+            if (typeof chromeState.unpinChromeVisible === "function") chromeState.unpinChromeVisible();
+          }, 12e3);
+        }, revealDelay);
+      }
+    });
+  }
+  var _PLAYING_RE = /^\s*(currently|now)\s+playing\s*:?\s*/i;
+  function stripPlayingPrefix(el) {
+    el.querySelectorAll("strong, b, span, .label").forEach((c) => {
+      if (c.childElementCount === 0 && /^\s*(currently|now)\s+playing\s*:?\s*$/i.test(c.textContent)) {
+        c.style.display = "none";
+      }
+    });
+    el.childNodes.forEach((n) => {
+      if (n.nodeType === 3 && _PLAYING_RE.test(n.textContent)) {
+        n.textContent = n.textContent.replace(_PLAYING_RE, "");
+      }
+    });
+  }
+  function triggerTitleInject(opts) {
+    for (const el of [
+      document.getElementById("currenttitle"),
+      document.querySelector("#videowrap-header .pull-left"),
+      document.querySelector("#videowrap-header span"),
+      document.querySelector(".video-title")
+    ]) {
+      if (el && el.textContent.trim()) {
+        stripPlayingPrefix(el);
+        injectMovieLinks(el, opts);
+        return;
+      }
+    }
+  }
+  function rematchCurrentTitle() {
+    movieState.lastMovieTitle = "";
+    triggerTitleInject({ showCard: true });
+  }
+  function watchMovieTitle() {
+    triggerTitleInject();
+    let tries = 0;
+    const poll = setInterval(() => {
+      triggerTitleInject();
+      if (++tries >= 14) clearInterval(poll);
+    }, 1500);
+  }
+
+  // src/cards/fixmatch.js
+  var ROW_LIMIT = 10;
+  var _imdbPosterCache = {};
+  var esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  function closeFixMatch() {
+    const el = document.getElementById("sc-fix-overlay");
+    if (el) el.remove();
+  }
+  function openFixMatch(rawTitle) {
+    if (!rawTitle) return;
+    closeFixMatch();
+    const pinned = !!getMovieOverride(rawTitle);
+    const cur = npState.data;
+    const curText = cur && cur.cleanTitle ? cur.cleanTitle + (cur.cleanYear ? ` (${cur.cleanYear})` : "") : "";
+    const overlay = document.createElement("div");
+    overlay.id = "sc-fix-overlay";
+    overlay.innerHTML = `
+        <div id="sc-fix-box">
+            <div id="sc-fix-head">
+                <span>Fix match</span>
+                <button id="sc-fix-close" type="button">✕</button>
+            </div>
+            <div id="sc-fix-file"></div>
+            ${curText ? `<div id="sc-fix-current">Showing as: <b>${esc(curText)}</b>${pinned ? ' · <span class="sc-fix-pinned">pinned</span>' : ""}</div>` : ""}
+            <input id="sc-fix-search" type="text" autocomplete="off" spellcheck="false" enterkeyhint="search"
+                   placeholder="Search a title, or paste an IMDb link / tt-id" />
+            <div id="sc-fix-results"></div>
+            <div id="sc-fix-status"></div>
+            ${pinned ? '<div id="sc-fix-actions"><button id="sc-fix-reset" type="button">↺ Reset to auto-match</button></div>' : ""}
+        </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector("#sc-fix-file").textContent = rawTitle;
+    const input = overlay.querySelector("#sc-fix-search");
+    const resultsEl = overlay.querySelector("#sc-fix-results");
+    const statusEl = overlay.querySelector("#sc-fix-status");
+    input.value = parsedTitleFor(rawTitle);
+    let seq = 0;
+    let debounce = null;
+    let busy = false;
+    function finish() {
+      clearTimeout(debounce);
+      setTimeout(() => {
+        if (!overlay.isConnected) return;
+        overlay.remove();
+        if (tvNavState.overlayClosed) tvNavState.overlayClosed();
+      }, 0);
+    }
+    function setStatus(text) {
+      statusEl.textContent = text || "";
+    }
+    function renderRows(rows) {
+      resultsEl.innerHTML = "";
+      rows.forEach((r) => {
+        const meta = [r.year, r.type, r.votes != null ? `${r.votes.toLocaleString()} votes` : null].filter(Boolean).join(" · ");
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "sc-fix-row";
+        row.innerHTML = `
+                <span class="sc-fix-thumb"${r.poster ? ` style="background-image:url('${esc(r.poster)}')"` : ""}></span>
+                <span class="sc-fix-rowtext">
+                    <span class="sc-fix-rowtitle">${esc(r.title)}</span>
+                    <span class="sc-fix-rowmeta">${esc(meta)}</span>
+                </span>`;
+        row.addEventListener("click", () => pick(r));
+        resultsEl.appendChild(row);
+        r._el = row;
+      });
+    }
+    function fillImdbPosters(rows, mySeq) {
+      rows.filter((r) => r.source === "imdb" && !r.poster && r.imdbId).forEach((r) => {
+        const paint = (url) => {
+          const t = url && r._el && r._el.querySelector(".sc-fix-thumb");
+          if (t) t.style.backgroundImage = `url('${url}')`;
+        };
+        if (r.imdbId in _imdbPosterCache) {
+          paint(_imdbPosterCache[r.imdbId]);
+          return;
+        }
+        fetchImdbTitleFields(r.imdbId).then((f) => {
+          _imdbPosterCache[r.imdbId] = f && f.poster || null;
+          if (mySeq === seq) paint(_imdbPosterCache[r.imdbId]);
+        });
+      });
+    }
+    async function runSearch({ focusFirst = false } = {}) {
+      clearTimeout(debounce);
+      const term = input.value.trim();
+      const mySeq = ++seq;
+      const tconst = detectTconst(term);
+      if (tconst) {
+        const rows2 = [{ source: "imdb", imdbId: tconst, title: `Use ${tconst}`, year: null, type: null, votes: null, poster: null }];
+        renderRows(rows2);
+        setStatus("");
+        fillImdbPosters(rows2, mySeq);
+        if (focusFirst) focusRow(rows2);
+        return;
+      }
+      if (term.length < 2) {
+        renderRows([]);
+        setStatus("Type at least 2 letters.");
+        return;
+      }
+      const useTmdb = hasKey(LS_TMDB);
+      setStatus(`Searching ${useTmdb ? "TMDB" : "IMDb"}…`);
+      let rows = useTmdb ? await searchTmdbCandidates(term, ROW_LIMIT) : [];
+      let note = "";
+      if (!rows.length) {
+        rows = await searchImdbCandidates(term, ROW_LIMIT);
+        if (useTmdb && rows.length) note = "Nothing on TMDB — showing IMDb results.";
+      }
+      if (mySeq !== seq || !overlay.isConnected) return;
+      renderRows(rows);
+      setStatus(rows.length ? note : "No matches — try a different spelling, or paste an IMDb tt-id.");
+      fillImdbPosters(rows, mySeq);
+      if (focusFirst) focusRow(rows);
+    }
+    function focusRow(rows) {
+      if (!isTv || !tvNavState.setFocus || !overlay.isConnected) return;
+      if (document.activeElement === input) return;
+      const target = rows[0] && rows[0]._el || input;
+      tvNavState.setFocus(target);
+    }
+    async function pick(r) {
+      var _a, _b;
+      if (busy) return;
+      busy = true;
+      let imdbId = r.imdbId;
+      if (r.source === "tmdb") {
+        setStatus("Saving…");
+        const details = await fetchTmdbDetails(r.tmdbType, r.tmdbId);
+        imdbId = details && details.imdbId;
+        if (!imdbId) {
+          busy = false;
+          if (overlay.isConnected) setStatus("TMDB has no IMDb link for that one — try another row.");
+          return;
+        }
+      }
+      if (!overlay.isConnected) return;
+      setMovieOverride(rawTitle, { imdbId, tmdbId: (_a = r.tmdbId) != null ? _a : null, tmdbType: (_b = r.tmdbType) != null ? _b : null });
+      applyAndClose();
+    }
+    function applyAndClose() {
+      forgetCachedLookup(overrideCacheKey(rawTitle));
+      const eyebrow = document.getElementById("sc-np-eyebrow");
+      if (eyebrow) eyebrow.textContent = "Updating match…";
+      finish();
+      rematchCurrentTitle();
+    }
+    input.addEventListener("input", () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => runSearch(), 500);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        try {
+          input.blur();
+        } catch (err) {
+        }
+        runSearch({ focusFirst: true });
+      }
+    });
+    overlay.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        finish();
+      }
+    });
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) finish();
+    });
+    overlay.querySelector("#sc-fix-close").addEventListener("click", finish);
+    const resetBtn = overlay.querySelector("#sc-fix-reset");
+    if (resetBtn) resetBtn.addEventListener("click", () => {
+      clearMovieOverride(rawTitle);
+      applyAndClose();
+    });
+    runSearch({ focusFirst: true });
+  }
+
+  // src/cards/nowplaying.js
+  var NP_PG_SHORT = {
+    "Sex & Nudity": "Sex/Nudity",
+    "Violence & Gore": "Violence",
+    "Profanity": "Profanity",
+    "Alcohol, Drugs & Smoking": "Drugs",
+    "Frightening & Intense Scenes": "Frightening"
+  };
+  var npState = {
+    data: null,
+    // latest movie data for the card
+    introDone: false
+    // startup intro card has run (see initIntroSequence)
+  };
+  var _npHideTimer = null;
+  var _npProgTimer = null;
+  var _npWatcherInit = false;
+  function _renderNpProgress() {
+    const card = document.getElementById("sc-np-card");
+    if (!card) {
+      clearInterval(_npProgTimer);
+      return;
+    }
+    const wrap = card.querySelector("#sc-np-progress");
+    const fill = card.querySelector("#sc-np-prog-fill");
+    const elapsedEl = card.querySelector("#sc-np-prog-elapsed");
+    const totalEl = card.querySelector("#sc-np-prog-total");
+    const remainEl = card.querySelector("#sc-np-prog-remain");
+    if (!wrap || !fill) return;
+    const dur = getCurrentMediaSeconds();
+    if (dur > 0) {
+      const elapsed = Math.min(getCurrentPlaybackSeconds(), dur);
+      const pct = Math.max(0, Math.min(100, elapsed / dur * 100));
+      fill.style.setProperty("width", pct + "%", "important");
+      elapsedEl.textContent = formatHMS(elapsed);
+      totalEl.textContent = formatHMS(dur);
+      remainEl.textContent = "−" + formatHMS(dur - elapsed) + " left";
+      wrap.style.display = "";
+    } else {
+      wrap.style.display = "none";
+    }
+  }
+  function _npCardEnabled() {
+    return true;
+  }
+  function _npTitleFontSize(text) {
+    const base = isTv ? 52 : document.body.classList.contains("sc-vertical") ? 30 : 44;
+    let scale = 1;
+    if (text.length > 60) scale = 0.5;
+    else if (text.length > 40) scale = 0.65;
+    else if (text.length > 25) scale = 0.8;
+    return Math.round(base * scale);
+  }
+  var _NP_TOP_MARGIN = 0.05;
+  function _npFitToScreen(titleEl, startPx) {
+    const content = document.getElementById("sc-np-content");
+    const info = document.getElementById("sc-np-info");
+    const ov = document.getElementById("sc-np-overview");
+    if (!content || !info || !ov) return;
+    ov.style.removeProperty("max-height");
+    const avail = () => content.getBoundingClientRect().bottom - window.innerHeight * _NP_TOP_MARGIN;
+    const fits = () => info.getBoundingClientRect().height <= avail();
+    for (let px = startPx; !fits() && px > startPx * 0.6; px -= 2) {
+      titleEl.style.setProperty("font-size", px - 2 + "px", "important");
+    }
+    for (const em of [4.5, 3]) {
+      if (fits()) break;
+      ov.style.setProperty("max-height", em + "em", "important");
+    }
+  }
+  var _npScrollTimer = null;
+  var _npScrollRaf = null;
+  var _NP_SCROLL_DELAY = 3500;
+  function _autoScrollOverview() {
+    clearTimeout(_npScrollTimer);
+    cancelAnimationFrame(_npScrollRaf);
+    const card = document.getElementById("sc-np-card");
+    const ov = card && card.querySelector("#sc-np-overview");
+    if (!ov) return 0;
+    ov.scrollTop = 0;
+    const dist = ov.scrollHeight - ov.clientHeight;
+    if (dist <= 4) return 0;
+    const dur = Math.min(12e3, Math.max(2500, dist / 24 * 1e3));
+    _npScrollTimer = setTimeout(() => {
+      const start = ov.scrollTop;
+      const span = ov.scrollHeight - ov.clientHeight - start;
+      if (span <= 0) return;
+      const t0 = performance.now();
+      const step = (now) => {
+        const c = document.getElementById("sc-np-card");
+        if (!c || !c.classList.contains("sc-np-visible")) return;
+        const p = Math.min(1, (now - t0) / dur);
+        const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+        ov.scrollTop = start + span * e;
+        if (p < 1) _npScrollRaf = requestAnimationFrame(step);
+      };
+      _npScrollRaf = requestAnimationFrame(step);
+    }, _NP_SCROLL_DELAY);
+    return _NP_SCROLL_DELAY + dur;
+  }
+  function showNowPlayingCard(data, opts = {}) {
+    if (!data || !data.cleanTitle && !data.backdrop) return;
+    let card = document.getElementById("sc-np-card");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "sc-np-card";
+      card.innerHTML = `
+            <div id="sc-np-backdrop"></div>
+            <div id="sc-np-scrim"></div>
+            <div id="sc-np-content">
+                <img id="sc-np-poster" alt="" />
+                <div id="sc-np-info">
+                    <div id="sc-np-eyebrow">Now Playing</div>
+                    <div id="sc-np-title"></div>
+                    <div id="sc-np-meta"></div>
+                    <div id="sc-np-overview"></div>
+                    <div id="sc-np-chips"></div>
+                    <div id="sc-np-progress">
+                        <div id="sc-np-prog-bar"><div id="sc-np-prog-fill"></div></div>
+                        <div id="sc-np-prog-times">
+                            <span id="sc-np-prog-elapsed">0:00</span>
+                            <span id="sc-np-prog-remain"></span>
+                            <span id="sc-np-prog-total">0:00</span>
+                        </div>
+                    </div>
+                    <div id="sc-np-actions">
+                        <div id="sc-np-links"></div>
+                        <button id="sc-np-trivia-btn" type="button">Trivia</button>
+                        <button id="sc-np-fix-btn" type="button">✎ Wrong match?</button>
+                    </div>
+                </div>
+            </div>`;
+      document.body.appendChild(card);
+      card.addEventListener("click", hideNowPlayingCard);
+      card.querySelector("#sc-np-trivia-btn").addEventListener("click", (e) => {
+        e.stopPropagation();
+        showTriviaCard();
+      });
+      card.querySelector("#sc-np-fix-btn").addEventListener("click", (e) => {
+        e.stopPropagation();
+        clearTimeout(_npHideTimer);
+        openFixMatch(movieState.lastMovieTitle);
+      });
+    }
+    const title = data.cleanTitle || movieState.lastMovieTitle || "";
+    const year = data.cleanYear ? ` (${data.cleanYear})` : "";
+    const bd = card.querySelector("#sc-np-backdrop");
+    const poster = card.querySelector("#sc-np-poster");
+    const meta = card.querySelector("#sc-np-meta");
+    const chips = card.querySelector("#sc-np-chips");
+    bd.style.backgroundImage = data.backdrop ? `url(${data.backdrop})` : "none";
+    if (data.poster) {
+      poster.src = data.poster;
+      poster.style.display = "";
+    } else poster.style.display = "none";
+    const eyebrow = card.querySelector("#sc-np-eyebrow");
+    eyebrow.style.display = opts.showProgress !== false ? "" : "none";
+    eyebrow.textContent = "Now Playing";
+    const triviaBtn = card.querySelector("#sc-np-trivia-btn");
+    const showTrivia = opts.showProgress !== false && !!(npState.data && npState.data.imdbId);
+    triviaBtn.style.display = showTrivia ? "" : "none";
+    const fixBtn = card.querySelector("#sc-np-fix-btn");
+    fixBtn.style.setProperty("display", opts.showProgress !== false && movieState.lastMovieTitle ? "inline-flex" : "none", "important");
+    const linksRow = card.querySelector("#sc-np-links");
+    linksRow.innerHTML = "";
+    if (!isTv && data.links) {
+      LINK_DEFS.forEach(({ key, label, color, fg, char }) => {
+        const url = data.links[key];
+        if (!url) return;
+        const a = document.createElement("a");
+        a.href = url;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.title = `${label}: "${title}"`;
+        a.className = "sc-np-link";
+        a.style.background = color;
+        a.style.color = fg;
+        a.textContent = char;
+        a.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (window.CytubeNative && typeof CytubeNative.openInApp === "function") {
+            e.preventDefault();
+            CytubeNative.openInApp(url);
+          }
+        });
+        linksRow.appendChild(a);
+      });
+    }
+    const titleEl = card.querySelector("#sc-np-title");
+    const epTag = episodeTag(data.season, data.episode);
+    const titleText = title + year + (epTag ? ` · ${epTag}` : "") + (data.episodeName ? ` — ${data.episodeName}` : "");
+    titleEl.textContent = titleText;
+    const titlePx = _npTitleFontSize(titleText);
+    titleEl.style.setProperty("font-size", titlePx + "px", "important");
+    card.querySelector("#sc-np-overview").textContent = data.overview || "";
+    const metaParts = [];
+    if (data.rating) metaParts.push(`⭐ ${data.rating}`);
+    if (data.runtime) metaParts.push(`${Math.floor(data.runtime / 60)}h ${data.runtime % 60}m`);
+    if (data.genres && data.genres.length) metaParts.push(data.genres.slice(0, 3).join(" · "));
+    const lastAired = getLastAired(title, data.cleanYear);
+    if (lastAired) metaParts.push(`📅 Last aired ${lastAired.dateStr}`);
+    meta.textContent = metaParts.join("     ");
+    const chipHtml = [];
+    (data.parentalGuide || []).forEach((pg) => {
+      const sev = String(pg.severity || "").toLowerCase();
+      const label = NP_PG_SHORT[pg.category] || pg.category;
+      chipHtml.push(`<span class="sc-np-chip sc-sev-${sev}">${label}: ${pg.severity}</span>`);
+    });
+    if (data.killCount !== null && data.killCount !== void 0) {
+      chipHtml.push(`<span class="sc-np-chip">💀 ${data.killCount} kills</span>`);
+    }
+    chips.innerHTML = chipHtml.join("");
+    card.classList.add("sc-np-visible");
+    const progWrap = card.querySelector("#sc-np-progress");
+    if (opts.showProgress !== false) {
+      _renderNpProgress();
+      clearInterval(_npProgTimer);
+      _npProgTimer = setInterval(_renderNpProgress, 500);
+    } else {
+      clearInterval(_npProgTimer);
+      if (progWrap) progWrap.style.display = "none";
+    }
+    _npFitToScreen(titleEl, titlePx);
+    _autoScrollOverview();
+    clearTimeout(_npHideTimer);
+    if (opts.autoHide) {
+      _npHideTimer = setTimeout(hideNowPlayingCard, opts.autoHideMs || 2e4);
+    }
+  }
+  function hideNowPlayingCard() {
+    const card = document.getElementById("sc-np-card");
+    if (card) card.classList.remove("sc-np-visible");
+    clearTimeout(_npHideTimer);
+    clearInterval(_npProgTimer);
+    clearTimeout(_npScrollTimer);
+    cancelAnimationFrame(_npScrollRaf);
+  }
+  function initNowPlayingWatcher() {
+    if (_npWatcherInit) return;
+    _npWatcherInit = true;
+    const toggle = () => {
+      const card = document.getElementById("sc-np-card");
+      if (card && card.classList.contains("sc-np-visible")) hideNowPlayingCard();
+      else if (npState.data) showNowPlayingCard(npState.data, { autoHide: false });
+    };
+    document.addEventListener("keydown", (e) => {
+      const t = e.target;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
+      if (e.key === "i" || e.key === "I") toggle();
+      else if (e.key === "t" || e.key === "T") toggleTriviaCard();
+    });
+  }
+
+  // src/lineup/sectionThemes.js
+  var THEMES = {
+    "funky-cheese-friday": { font: "Boogaloo", color: "#e0a92a", wash: "#2b210a" },
+    "friday-grindhouse-a-go-go": { font: "Chewy", color: "#ec4899", wash: "#2a0e1c" },
+    "friday-night-freak-show": { font: "Creepster", color: "#52c41a", wash: "#0f2109" },
+    "psychedelic-saturday": { font: "'Rubik Wet Paint'", color: "#a855f7", wash: "#200c2b" },
+    "saturday-prime-time-drive-in": { font: "Monoton", color: "#22d3ee", wash: "#06232a" },
+    "red-light-saturday-night": { font: "'Vast Shadow'", color: "#ef4444", wash: "#2b0a0a" },
+    "the-sunday-classics": { font: "Cinzel", color: "#b8b8b8", wash: "#1c1c1c" },
+    "sunday-slop-o-rama": { font: "Eater", color: "#a3b125", wash: "#1c1f08" },
+    "last-call-sunday-night": { font: "'Bungee Shade'", color: "#6366f1", wash: "#12102b" }
+  };
+  var DEFAULT_THEME = { font: null, color: "#9aa0a8", wash: "#14141a" };
+  function getSectionTheme(slug) {
+    return THEMES[slug] || DEFAULT_THEME;
+  }
+  var FONT_FAMILIES = ["Boogaloo", "Chewy", "Creepster", "Rubik+Wet+Paint", "Monoton", "Vast+Shadow", "Cinzel", "Eater", "Bungee+Shade", "Bebas+Neue", "Alfa+Slab+One"];
+  var FONTS_LINK_ID = "sc-lineup-theme-fonts";
+  function ensureThemeFontsLoaded() {
+    if (document.getElementById(FONTS_LINK_ID)) return;
+    const link = document.createElement("link");
+    link.id = FONTS_LINK_ID;
+    link.rel = "stylesheet";
+    link.href = `https://fonts.googleapis.com/css2?${FONT_FAMILIES.map((f) => `family=${f}`).join("&")}&display=swap`;
+    document.head.appendChild(link);
   }
 
   // src/lineup/screen.js
@@ -10855,6 +11209,95 @@
             body.sc-tv .sc-subtitles-result-meta { font-size: 13px !important; }
             body.sc-tv .sc-subtitles-badge { font-size: 12px !important; padding: 3px 9px !important; }
 
+            /* ===== FIX MATCH PICKER (cards/fixmatch.js) — opened from the Now-Playing
+               card's "Wrong match?" button; same centered-dialog language as the
+               subtitles picker above. Rows are real <button>s so the TV remote's focus
+               ring steps through them. ===== */
+            #sc-fix-overlay {
+                position: fixed !important; inset: 0 !important;
+                background: rgba(0,0,0,0.8) !important; z-index: 99997 !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                font-family: system-ui, sans-serif !important;
+            }
+            #sc-fix-box {
+                background: #13131f !important; border: 1px solid rgba(255,255,255,0.15) !important;
+                border-radius: 12px !important; padding: 18px 20px !important;
+                max-width: 560px !important; width: 94vw !important; color: white !important;
+                box-shadow: 0 12px 40px rgba(0,0,0,0.7) !important; max-height: 90vh !important;
+                display: flex !important; flex-direction: column !important; gap: 8px !important;
+                box-sizing: border-box !important;
+            }
+            #sc-fix-head {
+                display: flex !important; align-items: center !important; justify-content: space-between !important;
+                font-size: 16px !important; font-weight: 700 !important; color: #c0b0ff !important;
+                padding-bottom: 8px !important;
+                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+            }
+            #sc-fix-close {
+                background: rgba(255,255,255,0.08) !important; color: rgba(255,255,255,0.7) !important;
+                border: none !important; border-radius: 50% !important;
+                width: 26px !important; height: 26px !important; font-size: 12px !important;
+                cursor: pointer !important; line-height: 1 !important;
+            }
+            #sc-fix-file {
+                font-size: 11px !important; color: rgba(255,255,255,0.45) !important;
+                word-break: break-all !important;
+            }
+            #sc-fix-current { font-size: 13px !important; color: rgba(255,255,255,0.75) !important; }
+            #sc-fix-current .sc-fix-pinned { color: #ffd080 !important; }
+            #sc-fix-search {
+                width: 100% !important; box-sizing: border-box !important;
+                background: rgba(255,255,255,0.07) !important; color: white !important;
+                border: 1px solid rgba(255,255,255,0.18) !important; border-radius: 8px !important;
+                padding: 9px 12px !important; font-size: 15px !important; font-family: inherit !important;
+                outline: none !important;
+            }
+            #sc-fix-search:focus { border-color: rgba(192,176,255,0.7) !important; }
+            #sc-fix-results {
+                display: flex !important; flex-direction: column !important; gap: 6px !important;
+                overflow-y: auto !important; min-height: 0 !important; flex: 1 1 auto !important;
+                padding: 4px !important; /* room for the focus ring on the first/last row */
+            }
+            .sc-fix-row {
+                display: flex !important; align-items: center !important; gap: 12px !important;
+                text-align: left !important; width: 100% !important; box-sizing: border-box !important;
+                background: rgba(255,255,255,0.06) !important; border: 1px solid rgba(255,255,255,0.12) !important;
+                border-radius: 8px !important; padding: 6px 10px !important; cursor: pointer !important;
+                color: white !important; font-family: inherit !important; flex-shrink: 0 !important;
+            }
+            .sc-fix-row:hover { background: rgba(255,255,255,0.12) !important; }
+            .sc-fix-thumb {
+                width: 36px !important; height: 54px !important; flex-shrink: 0 !important;
+                border-radius: 4px !important; background-color: rgba(255,255,255,0.08) !important;
+                background-size: cover !important; background-position: center !important;
+            }
+            .sc-fix-rowtext { display: flex !important; flex-direction: column !important; gap: 2px !important; min-width: 0 !important; }
+            .sc-fix-rowtitle { font-size: 14px !important; font-weight: 600 !important; word-break: break-word !important; }
+            .sc-fix-rowmeta { font-size: 11px !important; color: rgba(255,255,255,0.5) !important; }
+            #sc-fix-status {
+                font-size: 12px !important; color: #ffd080 !important;
+                text-align: center !important; min-height: 14px !important;
+            }
+            #sc-fix-actions { display: flex !important; justify-content: center !important; }
+            #sc-fix-reset {
+                background: rgba(255,255,255,0.1) !important; color: rgba(255,255,255,0.85) !important;
+                border: none !important; border-radius: 8px !important; padding: 8px 16px !important;
+                font-size: 13px !important; font-weight: 600 !important; cursor: pointer !important;
+                font-family: inherit !important;
+            }
+            body.sc-tv #sc-fix-box { max-width: 720px !important; padding: 22px 26px !important; }
+            body.sc-tv #sc-fix-head { font-size: 20px !important; }
+            body.sc-tv #sc-fix-close { width: 34px !important; height: 34px !important; font-size: 15px !important; }
+            body.sc-tv #sc-fix-file { font-size: 13px !important; }
+            body.sc-tv #sc-fix-current { font-size: 16px !important; }
+            body.sc-tv #sc-fix-search { font-size: 18px !important; padding: 11px 14px !important; }
+            body.sc-tv .sc-fix-row { padding: 8px 14px !important; }
+            body.sc-tv .sc-fix-thumb { width: 44px !important; height: 66px !important; }
+            body.sc-tv .sc-fix-rowtitle { font-size: 18px !important; }
+            body.sc-tv .sc-fix-rowmeta { font-size: 14px !important; }
+            body.sc-tv #sc-fix-status { font-size: 15px !important; }
+            body.sc-tv #sc-fix-reset { font-size: 16px !important; padding: 10px 20px !important; }
+
             /* ===== SUBTITLES MANAGE MODAL — shown instead of the picker once a file is
                already downloaded (subtitles/ui.js's openManageModal): hide/show, sync
                offset, or hop back to the picker to try a different release without
@@ -11426,6 +11869,21 @@
             }
             #sc-np-trivia-btn:hover { background: rgba(255,255,255,0.22) !important; filter: brightness(1.15) !important; }
             #sc-np-trivia-btn:active { transform: scale(0.92) !important; }
+            /* Fix-match entry point -- quieter than Trivia (it's a correction, not a feature),
+               same 48px height so the row stays even. */
+            #sc-np-fix-btn {
+                display: inline-flex !important; align-items: center !important; justify-content: center !important;
+                height: 48px !important; padding: 0 16px !important;
+                border-radius: 12px !important;
+                font-size: 14px !important; font-weight: 600 !important;
+                color: rgba(255,255,255,0.7) !important;
+                background: rgba(255,255,255,0.07) !important;
+                border: 1px solid rgba(255,255,255,0.14) !important;
+                cursor: pointer !important;
+                transition: transform 0.15s ease, background 0.2s ease !important;
+            }
+            #sc-np-fix-btn:hover { background: rgba(255,255,255,0.16) !important; }
+            #sc-np-fix-btn:active { transform: scale(0.92) !important; }
             body.sc-tv #sc-np-prog-bar { height: 8px !important; }
             body.sc-tv #sc-np-prog-times { font-size: 18px !important; }
             body.sc-tv #sc-np-prog-remain { font-size: 16px !important; }

@@ -643,6 +643,95 @@
             body.sc-tv .sc-subtitles-result-meta { font-size: 13px !important; }
             body.sc-tv .sc-subtitles-badge { font-size: 12px !important; padding: 3px 9px !important; }
 
+            /* ===== FIX MATCH PICKER (cards/fixmatch.js) — opened from the Now-Playing
+               card's "Wrong match?" button; same centered-dialog language as the
+               subtitles picker above. Rows are real <button>s so the TV remote's focus
+               ring steps through them. ===== */
+            #sc-fix-overlay {
+                position: fixed !important; inset: 0 !important;
+                background: rgba(0,0,0,0.8) !important; z-index: 99997 !important;
+                display: flex !important; align-items: center !important; justify-content: center !important;
+                font-family: system-ui, sans-serif !important;
+            }
+            #sc-fix-box {
+                background: #13131f !important; border: 1px solid rgba(255,255,255,0.15) !important;
+                border-radius: 12px !important; padding: 18px 20px !important;
+                max-width: 560px !important; width: 94vw !important; color: white !important;
+                box-shadow: 0 12px 40px rgba(0,0,0,0.7) !important; max-height: 90vh !important;
+                display: flex !important; flex-direction: column !important; gap: 8px !important;
+                box-sizing: border-box !important;
+            }
+            #sc-fix-head {
+                display: flex !important; align-items: center !important; justify-content: space-between !important;
+                font-size: 16px !important; font-weight: 700 !important; color: #c0b0ff !important;
+                padding-bottom: 8px !important;
+                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+            }
+            #sc-fix-close {
+                background: rgba(255,255,255,0.08) !important; color: rgba(255,255,255,0.7) !important;
+                border: none !important; border-radius: 50% !important;
+                width: 26px !important; height: 26px !important; font-size: 12px !important;
+                cursor: pointer !important; line-height: 1 !important;
+            }
+            #sc-fix-file {
+                font-size: 11px !important; color: rgba(255,255,255,0.45) !important;
+                word-break: break-all !important;
+            }
+            #sc-fix-current { font-size: 13px !important; color: rgba(255,255,255,0.75) !important; }
+            #sc-fix-current .sc-fix-pinned { color: #ffd080 !important; }
+            #sc-fix-search {
+                width: 100% !important; box-sizing: border-box !important;
+                background: rgba(255,255,255,0.07) !important; color: white !important;
+                border: 1px solid rgba(255,255,255,0.18) !important; border-radius: 8px !important;
+                padding: 9px 12px !important; font-size: 15px !important; font-family: inherit !important;
+                outline: none !important;
+            }
+            #sc-fix-search:focus { border-color: rgba(192,176,255,0.7) !important; }
+            #sc-fix-results {
+                display: flex !important; flex-direction: column !important; gap: 6px !important;
+                overflow-y: auto !important; min-height: 0 !important; flex: 1 1 auto !important;
+                padding: 4px !important; /* room for the focus ring on the first/last row */
+            }
+            .sc-fix-row {
+                display: flex !important; align-items: center !important; gap: 12px !important;
+                text-align: left !important; width: 100% !important; box-sizing: border-box !important;
+                background: rgba(255,255,255,0.06) !important; border: 1px solid rgba(255,255,255,0.12) !important;
+                border-radius: 8px !important; padding: 6px 10px !important; cursor: pointer !important;
+                color: white !important; font-family: inherit !important; flex-shrink: 0 !important;
+            }
+            .sc-fix-row:hover { background: rgba(255,255,255,0.12) !important; }
+            .sc-fix-thumb {
+                width: 36px !important; height: 54px !important; flex-shrink: 0 !important;
+                border-radius: 4px !important; background-color: rgba(255,255,255,0.08) !important;
+                background-size: cover !important; background-position: center !important;
+            }
+            .sc-fix-rowtext { display: flex !important; flex-direction: column !important; gap: 2px !important; min-width: 0 !important; }
+            .sc-fix-rowtitle { font-size: 14px !important; font-weight: 600 !important; word-break: break-word !important; }
+            .sc-fix-rowmeta { font-size: 11px !important; color: rgba(255,255,255,0.5) !important; }
+            #sc-fix-status {
+                font-size: 12px !important; color: #ffd080 !important;
+                text-align: center !important; min-height: 14px !important;
+            }
+            #sc-fix-actions { display: flex !important; justify-content: center !important; }
+            #sc-fix-reset {
+                background: rgba(255,255,255,0.1) !important; color: rgba(255,255,255,0.85) !important;
+                border: none !important; border-radius: 8px !important; padding: 8px 16px !important;
+                font-size: 13px !important; font-weight: 600 !important; cursor: pointer !important;
+                font-family: inherit !important;
+            }
+            body.sc-tv #sc-fix-box { max-width: 720px !important; padding: 22px 26px !important; }
+            body.sc-tv #sc-fix-head { font-size: 20px !important; }
+            body.sc-tv #sc-fix-close { width: 34px !important; height: 34px !important; font-size: 15px !important; }
+            body.sc-tv #sc-fix-file { font-size: 13px !important; }
+            body.sc-tv #sc-fix-current { font-size: 16px !important; }
+            body.sc-tv #sc-fix-search { font-size: 18px !important; padding: 11px 14px !important; }
+            body.sc-tv .sc-fix-row { padding: 8px 14px !important; }
+            body.sc-tv .sc-fix-thumb { width: 44px !important; height: 66px !important; }
+            body.sc-tv .sc-fix-rowtitle { font-size: 18px !important; }
+            body.sc-tv .sc-fix-rowmeta { font-size: 14px !important; }
+            body.sc-tv #sc-fix-status { font-size: 15px !important; }
+            body.sc-tv #sc-fix-reset { font-size: 16px !important; padding: 10px 20px !important; }
+
             /* ===== SUBTITLES MANAGE MODAL — shown instead of the picker once a file is
                already downloaded (subtitles/ui.js's openManageModal): hide/show, sync
                offset, or hop back to the picker to try a different release without

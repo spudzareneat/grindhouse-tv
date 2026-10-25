@@ -9,6 +9,7 @@ import { chromeState } from './chrome/state.js';
 import { updateSubtitleButton } from './subtitles/ui.js';
 import { renderTriviaPopupButton } from './cards/triviapopup.js';
 import { needsEmojiFallback } from './emojisupport.js';
+import { getMovieOverride } from './metadata/overrides.js';
 
 // Auto-announce hold time for the Now-Playing card (see showNowPlayingCard's opts.autoHideMs).
 const NP_AUTO_HIDE_MS = isTv ? 10000 : 8000;
@@ -70,7 +71,9 @@ function fetchYtOembed(videoId) {
 // Shared by the fresh-lookup path below and the cache-reapply path (same movie, but CyTube
 // reset the title header's DOM out from under us -- see the reapply branch in
 // injectMovieLinks for why that happens).
-function applyCleanTitleDom(titleEl, movieData) {
+// rawTitle is stashed on the span so a forced re-lookup (Settings save, a fix-match pin)
+// can still recover the real filename once the visible text has become the clean title.
+function applyCleanTitleDom(titleEl, movieData, rawTitle) {
     const { cleanTitle, cleanYear, season, episode, episodeName } = movieData;
     if (!cleanTitle || !titleEl) return;
     const epTag = episodeTag(season, episode);
@@ -92,12 +95,30 @@ function applyCleanTitleDom(titleEl, movieData) {
         else titleEl.insertBefore(span, titleEl.firstChild);
     }
     span.textContent = newText;
+    if (rawTitle) span.dataset.rawTitle = rawTitle;
 }
 
-function injectMovieLinks(titleEl) {
-    const rawTitle = titleEl.textContent.trim()
+// The raw CyTube title (filename) for titleEl. Once our clean-title span has replaced the
+// header text, textContent is the CLEAN title -- read the stashed raw one instead.
+function rawTitleOf(titleEl) {
+    const span = titleEl.querySelector('#sc-title-text');
+    if (span && span.dataset.rawTitle) return span.dataset.rawTitle;
+    return titleEl.textContent.trim()
         .replace(/^currently\s+playing[:\s]*/i, '')
         .replace(/^now\s+playing[:\s]*/i, '').trim();
+}
+
+// Search seed for the fix-match picker: the same parse the auto lookup searched with.
+export function parsedTitleFor(rawTitle) {
+    if (!rawTitle) return '';
+    const parsed = isYouTubeMedia() ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
+    return (parsed && parsed.title) || rawTitle;
+}
+
+// opts.showCard: open the Now-Playing card with the result once it resolves (a fix-match
+// pin re-runs the lookup this way so the corrected card appears right away).
+function injectMovieLinks(titleEl, opts = {}) {
+    const rawTitle = rawTitleOf(titleEl);
 
     if (!rawTitle || rawTitle.length < 2) return;
 
@@ -108,7 +129,7 @@ function injectMovieLinks(titleEl) {
         // raw filename even though nothing about the movie changed. Reapply it from the
         // cached lookup: cheap, synchronous, no network call, no re-announcing the card.
         if (npState.data && !titleEl.querySelector('#sc-title-text')) {
-            applyCleanTitleDom(titleEl, npState.data);
+            applyCleanTitleDom(titleEl, npState.data, rawTitle);
         }
         // CyTube's header re-render (see above) also wipes the Pop-ups button, which
         // lives in that header — re-add it from the still-current npState.data.
@@ -134,8 +155,11 @@ function injectMovieLinks(titleEl) {
     // Only attempt a lookup when the video runs an hour+ (likely a real film),
     // and parse the messy YouTube title differently from a filename.
     const isYt = isYouTubeMedia();
+    // A user pin for this exact title wins over every heuristic below (the short-YouTube
+    // oEmbed path, the unparseable-title bail-out, the YouTube runtime sanity check).
+    const pinned = !!getMovieOverride(rawTitle);
     let ytSeconds = 0;
-    if (isYt) {
+    if (isYt && !pinned) {
         ytSeconds = getCurrentMediaSeconds();
         if (ytSeconds < 3600) {
             // Short clip -- most are trailers/bumpers/ads with no real IMDb match, but
@@ -159,9 +183,10 @@ function injectMovieLinks(titleEl) {
                         season: null, episode: null, episodeName: null,
                     };
                     npState.data = movieData;
+                    if (opts.showCard) showNowPlayingCard(movieData, { autoHide: false }); // a pin was reset
                     // No auto-card for YouTube (see _npShouldAutoAnnounce) -- this path is
                     // YT-only. The title stays clickable / summonable via applyCleanTitleDom.
-                    applyCleanTitleDom(titleEl, movieData);
+                    applyCleanTitleDom(titleEl, movieData, rawTitle);
                     renderTriviaPopupButton(); // imdbId is null on this path -> stays hidden
                 });
             }
@@ -169,15 +194,18 @@ function injectMovieLinks(titleEl) {
         }
     }
 
-    const { title, year, season, episode } = isYt ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
-    if (!title || title.length < 2) return;
+    const parsed = isYt ? parseYouTubeTitle(rawTitle) : parseMovieFilename(rawTitle);
+    const { year, season, episode } = parsed;
+    const title = (parsed.title && parsed.title.length >= 2) ? parsed.title : (pinned ? rawTitle : '');
+    if (!title) return;
 
-    lookupMovie(title, year, season, episode).then((movieData) => {
+    lookupMovie(title, year, season, episode, rawTitle).then((movieData) => {
+        if (movieState.lastMovieTitle !== rawTitle) return; // superseded by a newer title
         const { killCount, parentalGuide, cleanTitle, cleanYear } = movieData;
 
         // For YouTube guesses, sanity-check the match against the real runtime.
         // If TMDB's runtime is wildly off from the video length, it's probably wrong.
-        if (isYt) {
+        if (isYt && movieData.matchSource !== 'pinned') {
             if (!cleanTitle) return;
             if (movieData.runtime && ytSeconds) {
                 const diff = Math.abs(movieData.runtime - ytSeconds / 60);
@@ -193,11 +221,12 @@ function injectMovieLinks(titleEl) {
         npState.data = movieData;
         updateSubtitleButton(movieData.imdbId);
         renderTriviaPopupButton(); // (re-)show the Pop-ups button iff feature on + imdbId matched
-        if (_npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt)) showNowPlayingCard(movieData, { autoHide: true, autoHideMs: NP_AUTO_HIDE_MS });
+        if (opts.showCard) showNowPlayingCard(movieData, { autoHide: false });
+        else if (_npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt)) showNowPlayingCard(movieData, { autoHide: true, autoHideMs: NP_AUTO_HIDE_MS });
         // Update the title element with the clean TMDB title, wrapped in a
         // dedicated clickable span so ONLY the title (not the rest of the
         // header) opens the now-playing card.
-        applyCleanTitleDom(titleEl, movieData);
+        applyCleanTitleDom(titleEl, movieData, rawTitle);
 
         // ── Stats bar (kill count, parent guide, last aired) ───────────────
         // Stats go in a fixed floating bar over the bottom of the video,
@@ -234,7 +263,7 @@ function injectMovieLinks(titleEl) {
             // meant most of it ticked away unseen behind the card. Delay creation until the
             // card is done (or 0ms if it won't show at all -- before intro/on a device where
             // it's disabled) so the full 12s is actually visible.
-            const cardWillAutoShow = _npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt);
+            const cardWillAutoShow = opts.showCard || (_npCardEnabled() && npState.introDone && _npShouldAutoAnnounce(isYt));
             const revealDelay = cardWillAutoShow ? NP_AUTO_HIDE_MS : 0;
             setTimeout(() => {
                 if (movieState.lastMovieTitle !== rawTitle) return; // superseded by a newer title
@@ -278,15 +307,22 @@ function stripPlayingPrefix(el) {
     });
 }
 
-export function triggerTitleInject() {
+export function triggerTitleInject(opts) {
     for (const el of [
         document.getElementById('currenttitle'),
         document.querySelector('#videowrap-header .pull-left'),
         document.querySelector('#videowrap-header span'),
         document.querySelector('.video-title'),
     ]) {
-        if (el && el.textContent.trim()) { stripPlayingPrefix(el); injectMovieLinks(el); return; }
+        if (el && el.textContent.trim()) { stripPlayingPrefix(el); injectMovieLinks(el, opts); return; }
     }
+}
+
+// Re-run the lookup for the current title (after a fix-match pin / reset) and open the
+// Now-Playing card with the new result.
+export function rematchCurrentTitle() {
+    movieState.lastMovieTitle = '';
+    triggerTitleInject({ showCard: true });
 }
 
 // Reactive title updates come from player/resync.js's onSocket('changeMedia', ...)

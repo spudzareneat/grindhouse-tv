@@ -132,15 +132,20 @@ async function imdbSearchTitle(title, year) {
 // All 5 fields (rating, runtime, overview, poster, genres) via a single GraphQL
 // round-trip. Field paths and the `titleGenres.genres[].genre.text` nesting
 // match the parental-guide/trivia queries above exactly (same endpoint/shape).
-const IMDB_TITLE_FIELDS_QUERY = 'query GHCombined($id: ID!){ title(id:$id){ id ratingsSummary{ aggregateRating voteCount } runtime{ seconds } plot{ plotText{ plainText } } primaryImage{ url width height } titleGenres{ genres{ genre{ text } } } } }';
+const IMDB_TITLE_FIELDS_QUERY = 'query GHCombined($id: ID!){ title(id:$id){ id titleText{ text } releaseYear{ year } ratingsSummary{ aggregateRating voteCount } runtime{ seconds } plot{ plotText{ plainText } } primaryImage{ url width height } titleGenres{ genres{ genre{ text } } } } }';
 
-async function fetchImdbTitleFields(tconst) {
+// titleText/releaseYear are named apart from fetchImdbMovieByTitle's own title/year
+// (which it spreads these fields over) -- only the pinned-override path in lookupMovie
+// reads them, since it has no search match to take a canonical title from.
+export async function fetchImdbTitleFields(tconst) {
     if (!tconst) return null;
     try {
         const data = await imdbQuery('GHCombined', IMDB_TITLE_FIELDS_QUERY, { id: tconst });
         const t = data?.data?.title;
         if (!t) return null;
         return {
+            titleText:   t.titleText?.text ?? null,
+            releaseYear: t.releaseYear?.year ?? null,
             rating:   t.ratingsSummary?.aggregateRating ?? null,
             runtime:  t.runtime?.seconds != null ? Math.round(t.runtime.seconds / 60) : null,
             overview: t.plot?.plotText?.plainText ?? null,
@@ -148,6 +153,35 @@ async function fetchImdbTitleFields(tconst) {
             genres:   t.titleGenres?.genres?.map(g => g.genre?.text).filter(Boolean) ?? null,
         };
     } catch (e) { return null; }
+}
+
+// Fix-match picker list: the same MainSearch query, but every result is returned as a
+// candidate row (no title-match/year pick) -- the user is the one choosing. Podcast
+// episodes are dropped; they're never what a room is playing. Never throws.
+export async function searchImdbCandidates(term, limit = 10) {
+    if (!term) return [];
+    try {
+        const data = await imdbQuery('MainSearch', IMDB_MAIN_SEARCH_QUERY, { term });
+        const edges = data?.data?.mainSearch?.edges || [];
+        return normalizeImdbCandidates(edges.map(e => e?.node?.entity), limit);
+    } catch (e) { return []; }
+}
+
+export function normalizeImdbCandidates(entities, limit = 10) {
+    return (entities || [])
+        .filter(r => r && r.id && r.titleText?.text && r.titleType?.id !== 'podcastEpisode')
+        .slice(0, limit)
+        .map(r => ({
+            source:   'imdb',
+            imdbId:   r.id,
+            tmdbId:   null,
+            tmdbType: null,
+            title:    r.titleText.text,
+            year:     r.releaseYear?.year ?? null,
+            type:     r.titleType?.text ?? null,
+            votes:    r.ratingsSummary?.voteCount ?? null,
+            poster:   null, // filled lazily by the picker via fetchImdbTitleFields
+        }));
 }
 
 // Combined entry point: resolves title+year to a tconst, then pulls its

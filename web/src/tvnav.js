@@ -6,6 +6,7 @@ import { hideNowPlayingCard } from './cards/nowplaying.js';
 import { hideLineupScreen, stepLineupSection } from './lineup/screen.js';
 import { hideUpNextCard } from './cards/upnext.js';
 import { simklDismiss } from './cards/simkl.js';
+import { closeFixMatch } from './cards/fixmatch.js';
 import { pickDirectional } from './tvnav/geometry.js';
 import { getDesyncLiveSeconds } from './mediatime.js';
 
@@ -13,8 +14,10 @@ import { getDesyncLiveSeconds } from './mediatime.js';
 // settings.js reads tvNavState.setFocus instead of a bare reassignable binding.
 // getFocus / clearFocus / overlayOpen let a card that pops up on its own (the
 // Simkl scrobble card) take the ring, hand it back, and avoid popping over
-// another overlay.
-export const tvNavState = { setFocus: null, getFocus: null, clearFocus: null, overlayOpen: null };
+// another overlay. overlayClosed lets an overlay that closes itself asynchronously
+// (the fix-match picker after a pick) hand focus back to whatever opened it, the
+// same way Back would.
+export const tvNavState = { setFocus: null, getFocus: null, clearFocus: null, overlayOpen: null, overlayClosed: null };
 
 // Self-contained D-pad navigation for the /login page. None of the channel UI
 // (or its CSS, or the module-level isTv) runs here, so this re-detects TV and
@@ -147,7 +150,8 @@ export function initTvNav() {
     };
 
     // Topmost interactive overlay (poster strip excluded so its toggle stays reachable)
-    const OVERLAY_IDS = ['sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card', 'sc-upnext-card', 'sc-lineup-screen', 'sc-subtitles-picker', 'sc-subtitles-manage', 'sc-simkl-panel'];
+    // 'sc-fix-overlay' first: it opens on top of the Now-Playing card, so it must win.
+    const OVERLAY_IDS = ['sc-fix-overlay', 'sc-settings-overlay', 'sc-modal-overlay', 'sc-trivia-card', 'sc-users-panel', 'sc-poll-panel', 'sc-np-card', 'sc-upnext-card', 'sc-lineup-screen', 'sc-subtitles-picker', 'sc-subtitles-manage', 'sc-simkl-panel'];
     const isOverlayOpen = (id, o) => !!(o && isVisible(o) &&
         // Simkl card: counts from creation (it takes focus before its fade-in class lands) until
         // its fade-out starts.
@@ -310,6 +314,7 @@ export function initTvNav() {
     tvNavState.getFocus = () => focusEl;
     tvNavState.clearFocus = clearFocus;
     tvNavState.overlayOpen = () => !!openOverlay();
+    tvNavState.overlayClosed = restoreFocusAfterOverlayClose;
 
     // Ramped seek step: index = native Android key-repeat count (0 on a fresh press,
     // auto-incrementing while Left/Right is held — see MainActivity.kt's dispatchKeyEvent).
@@ -578,7 +583,7 @@ export function initTvNav() {
         if (idx !== -1) { setFocus(list[idx]); return; }
         // No neighbour that way — scroll a scrollable region if we're in one
         if (dir === 'up' || dir === 'down') {
-            const sc = (scope.querySelector && scope.querySelector('#sc-trivia-list, #sc-settings-modal, #sc-upnext-body, #messagebuffer')) ||
+            const sc = (scope.querySelector && scope.querySelector('#sc-trivia-list, #sc-settings-modal, #sc-upnext-body, #sc-fix-results, #messagebuffer')) ||
                        document.getElementById('messagebuffer');
             if (sc && sc.scrollHeight > sc.clientHeight) sc.scrollTop += (dir === 'down' ? 140 : -140);
         }
@@ -642,6 +647,8 @@ export function initTvNav() {
             if (btn && isVisible(btn)) setFocus(btn); // keep our place on the control bar
             return true;
         }
+        const fix = document.getElementById('sc-fix-overlay');
+        if (fix) { closeFixMatch(); restoreFocusAfterOverlayClose(); return true; }
         const settings = document.getElementById('sc-settings-overlay');
         if (settings && isVisible(settings)) {
             const c = document.getElementById('sc-settings-cancel');

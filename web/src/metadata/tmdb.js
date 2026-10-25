@@ -1,6 +1,7 @@
 import { nativeHttpGet } from '../native.js';
 import { hasKey, getKey, LS_TMDB } from '../store.js';
-import { fetchImdbParentalGuide, fetchImdbMovieByTitle, fetchImdbEpisodeInfo, titlesMatch } from './imdb.js';
+import { fetchImdbParentalGuide, fetchImdbMovieByTitle, fetchImdbEpisodeInfo, fetchImdbTitleFields, titlesMatch } from './imdb.js';
+import { getMovieOverride } from './overrides.js';
 
 /* ==========================================================
    MOVIE LINKS — TMDB-primary when a key is configured, else IMDb-
@@ -218,10 +219,20 @@ async function fetchTmdbPrimary(title, year) {
             if (yearMatch) best = yearMatch;
         }
 
-        const mediaType = best.media_type;
+        return await fetchTmdbDetails(best.media_type, best.id);
+    } catch (e) { return null; }
+}
+
+// Full metadata for one known TMDB id ('movie' | 'tv'). Shared by fetchTmdbPrimary's
+// auto-match and a user-pinned TMDB pick (see lookupMovie's override path). Resolves
+// null on any failure, or when TMDB has no linked IMDb id for it (see above for why
+// that counts as a miss).
+export async function fetchTmdbDetails(mediaType, tmdbId) {
+    if (tmdbId == null || (mediaType !== 'movie' && mediaType !== 'tv') || !hasKey(LS_TMDB)) return null;
+    try {
         const detailsRes = await fetch(
-            `https://api.themoviedb.org/3/${mediaType}/${best.id}` +
-            `?append_to_response=external_ids&api_key=${encodeURIComponent(apiKey)}`
+            `https://api.themoviedb.org/3/${mediaType}/${tmdbId}` +
+            `?append_to_response=external_ids&api_key=${encodeURIComponent(getKey(LS_TMDB))}`
         );
         if (!detailsRes.ok) return null;
         const d = await detailsRes.json();
@@ -230,15 +241,15 @@ async function fetchTmdbPrimary(title, year) {
         if (!imdbId) return null;
 
         let killCount = null;
-        if (mediaType === 'movie' && best.id != null) {
+        if (mediaType === 'movie') {
             const db = await getKillCountDb();
-            const count = db[String(best.id)];
+            const count = db[String(tmdbId)];
             if (count !== undefined && count !== null) killCount = count;
         }
 
         return {
             imdbId,
-            tmdbId:   best.id ?? null,
+            tmdbId,
             title:    mediaType === 'movie' ? (d.title ?? null) : (d.name ?? null),
             year:     (d.release_date || d.first_air_date || '').slice(0, 4) || null,
             rating:   d.vote_average ? Math.round(d.vote_average * 10) / 10 : null,
@@ -252,12 +263,65 @@ async function fetchTmdbPrimary(title, year) {
     } catch (e) { return null; }
 }
 
-export async function lookupMovie(title, year, season, episode) {
+// Fix-match picker list (TMDB flavor, used when a key is set): /search/multi results as
+// candidate rows. No IMDb id yet -- the picker resolves it via fetchTmdbDetails only for
+// the row actually chosen, rather than one details call per row. Never throws.
+export async function searchTmdbCandidates(term, limit = 10) {
+    if (!term || !hasKey(LS_TMDB)) return [];
+    try {
+        const res = await fetch(
+            `https://api.themoviedb.org/3/search/multi?query=${encodeURIComponent(term)}` +
+            `&include_adult=false&api_key=${encodeURIComponent(getKey(LS_TMDB))}`
+        );
+        if (!res.ok) return [];
+        const data = await res.json();
+        return normalizeTmdbCandidates(data.results, limit);
+    } catch (e) { return []; }
+}
+
+export function normalizeTmdbCandidates(results, limit = 10) {
+    return (results || [])
+        .filter(r => r && r.id != null && (r.media_type === 'movie' || r.media_type === 'tv'))
+        .map(r => ({
+            source:   'tmdb',
+            imdbId:   null,
+            tmdbId:   r.id,
+            tmdbType: r.media_type,
+            title:    (r.media_type === 'movie' ? r.title : r.name) || '',
+            year:     (r.release_date || r.first_air_date || '').slice(0, 4) || null,
+            type:     r.media_type === 'movie' ? 'Movie' : 'TV Series',
+            votes:    r.vote_count ?? null,
+            poster:   r.poster_path ? `https://image.tmdb.org/t/p/w92${r.poster_path}` : null,
+        }))
+        .filter(r => r.title)
+        .slice(0, limit);
+}
+
+// Cache slot for a pinned lookup -- a separate namespace from the parsed-title key, so
+// clearing a pin re-exposes the normal auto-match entry and a stale wrong auto entry can
+// never shadow a live pin (same scheme as the PC userscript).
+export function overrideCacheKey(rawTitle) { return 'override:' + rawTitle; }
+
+// Drop one cached lookup (in memory + persisted) -- used when a pin changes, so the next
+// lookupMovie() for that file re-resolves instead of serving the previous pin's result.
+export function forgetCachedLookup(cacheKey) {
+    if (!(cacheKey in movieState.movieLinkCache)) return;
+    delete movieState.movieLinkCache[cacheKey];
+    delete _movieCacheTimestamps[cacheKey];
+    persistMovieCache();
+}
+
+// rawTitle: the exact raw CyTube title (filename). Only titleinject.js passes it; other
+// callers (Tonight's Lineup) omit it, so no pin can apply and they behave as before.
+export async function lookupMovie(title, year, season, episode, rawTitle) {
+    const override = rawTitle ? getMovieOverride(rawTitle) : null;
     // Extend the key with season/episode so two episodes sharing an identical
     // cleaned title don't collide in the cache. Additive-only: when episode is
     // null (the movie case) the key is byte-identical to before, so existing
     // cached movie entries stay valid with no migration.
-    const cacheKey = title + (year || '') + (episode != null ? `S${season ?? ''}E${episode}` : '');
+    const cacheKey = override
+        ? overrideCacheKey(rawTitle)
+        : title + (year || '') + (episode != null ? `S${season ?? ''}E${episode}` : '');
     if (movieState.movieLinkCache[cacheKey] !== undefined) return movieState.movieLinkCache[cacheKey];
 
     // TMDB-primary and Wikipedia start together (independent of each other).
@@ -265,7 +329,8 @@ export async function lookupMovie(title, year, season, episode) {
     // `result`, so it runs in the background the whole time either branch
     // below takes instead of serializing after the TMDB-primary await.
     let wikiUrl = null;
-    const tmdbPrimaryPromise = fetchTmdbPrimary(title, year);
+    // A pin skips the TMDB *search* entirely -- the pinned id is authoritative.
+    const tmdbPrimaryPromise = override ? Promise.resolve(null) : fetchTmdbPrimary(title, year);
     const wikiPromise = (async () => {
         try {
             const searchTitle = title + (year ? ' ' + year : '') + ' film';
@@ -282,13 +347,27 @@ export async function lookupMovie(title, year, season, episode) {
     })();
 
     const rawTmdbPrimary = await tmdbPrimaryPromise;
-    const tmdbPrimary = (rawTmdbPrimary && titlesMatch(rawTmdbPrimary.title, title)) ? rawTmdbPrimary : null;
+    let tmdbPrimary = (rawTmdbPrimary && titlesMatch(rawTmdbPrimary.title, title)) ? rawTmdbPrimary : null;
 
     let imdbResult = null;
     let tmdbSupplemental = null;
     let imdbId;
 
-    if (tmdbPrimary) {
+    if (override) {
+        // User-pinned match: trust override.imdbId verbatim, no titlesMatch guard. A TMDB
+        // pick (with a key still set) gets the same full TMDB details an auto TMDB match
+        // does; otherwise -- or if that fetch fails -- IMDb's own fields plus the usual
+        // TMDB supplemental art, exactly like the IMDb-primary branch below.
+        imdbId = override.imdbId;
+        if (override.tmdbId != null && override.tmdbType) {
+            tmdbPrimary = await fetchTmdbDetails(override.tmdbType, override.tmdbId);
+        }
+        if (!tmdbPrimary) {
+            const fields = await fetchImdbTitleFields(imdbId);
+            imdbResult = fields ? { ...fields, tconst: imdbId, title: fields.titleText, year: fields.releaseYear } : null;
+            tmdbSupplemental = await fetchTmdbSupplemental(imdbId);
+        }
+    } else if (tmdbPrimary) {
         // TMDB found a confidently-linked match -- use it directly, skip the
         // IMDb-primary lookup (and its TMDB-supplemental enrichment, which
         // fetchTmdbPrimary already made redundant by resolving its own tmdb id).
@@ -334,7 +413,11 @@ export async function lookupMovie(title, year, season, episode) {
             letterboxd: imdbId ? `https://letterboxd.com/imdb/${imdbId}` : null,
             wiki:       wikiUrl,
         },
-        resolved:   !!(tmdbPrimary || imdbResult),
+        // A pin resolves even if its detail fetch failed -- the pin itself is the answer.
+        resolved:   !!(tmdbPrimary || imdbResult || (override && imdbId)),
+        // Which path produced this entry -- the fix-match picker offers "Reset to auto-match"
+        // only on 'pinned'.
+        matchSource: override ? 'pinned' : (tmdbPrimary ? 'tmdb' : (imdbResult ? 'imdb' : null)),
         killCount:  tmdbPrimary?.killCount ?? tmdbSupplemental?.killCount ?? null,
         parentalGuide,
         imdbId:     imdbId || null,
@@ -363,7 +446,9 @@ export async function lookupMovie(title, year, season, episode) {
     // transient IMDb GraphQL failure) would permanently poison future lookups
     // for this title. An unresolved result is still returned to the caller
     // this time, just not cached.
-    if (result.resolved) {
+    // A pin whose detail fetch failed (resolved, but no data behind it) is shown once but
+    // not cached, so the next play retries instead of serving a bare card forever.
+    if (result.resolved && !(override && !tmdbPrimary && !imdbResult)) {
         movieState.movieLinkCache[cacheKey] = result;
         _movieCacheTimestamps[cacheKey] = Date.now();
         persistMovieCache();

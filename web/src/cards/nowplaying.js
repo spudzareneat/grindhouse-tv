@@ -4,6 +4,7 @@ import { movieState, LINK_DEFS } from '../metadata/tmdb.js';
 import { isTv } from '../tvdetect.js';
 import { showTriviaCard, toggleTriviaCard } from './trivia.js';
 import { getLastAired } from '../metadata/lastaired.js';
+import { openFixMatch } from './fixmatch.js';
 
 /* ==========================================================
    NOW-PLAYING HERO CARD (cinematic shell)
@@ -165,6 +166,7 @@ export function showNowPlayingCard(data, opts = {}) {
                     <div id="sc-np-actions">
                         <div id="sc-np-links"></div>
                         <button id="sc-np-trivia-btn" type="button">Trivia</button>
+                        <button id="sc-np-fix-btn" type="button">✎ Wrong match?</button>
                     </div>
                 </div>
             </div>`;
@@ -174,6 +176,11 @@ export function showNowPlayingCard(data, opts = {}) {
         card.querySelector('#sc-np-trivia-btn').addEventListener('click', (e) => {
             e.stopPropagation(); // don't let it bubble to the card's own click-to-dismiss handler
             showTriviaCard();
+        });
+        card.querySelector('#sc-np-fix-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            clearTimeout(_npHideTimer); // an auto-announced card must not fade out under the picker
+            openFixMatch(movieState.lastMovieTitle);
         });
     }
 
@@ -194,6 +201,7 @@ export function showNowPlayingCard(data, opts = {}) {
     // started yet.
     const eyebrow = card.querySelector('#sc-np-eyebrow');
     eyebrow.style.display = opts.showProgress !== false ? '' : 'none';
+    eyebrow.textContent = 'Now Playing'; // the fix-match picker swaps in "Updating match…"
 
     // Trivia is keyed off the actual now-playing item's IMDb id (npState.data), never the
     // `data` this card happens to be rendering -- showTriviaCard() always reads
@@ -202,6 +210,13 @@ export function showNowPlayingCard(data, opts = {}) {
     const triviaBtn = card.querySelector('#sc-np-trivia-btn');
     const showTrivia = opts.showProgress !== false && !!(npState.data && npState.data.imdbId);
     triviaBtn.style.display = showTrivia ? '' : 'none';
+
+    // "Wrong match?" -- same now-playing-only gating as Trivia (a Lineup preview isn't the
+    // file playing, so there's no filename to pin a correction to), but shown even with no
+    // imdbId: an unmatched or badly-matched title is exactly when it's needed.
+    const fixBtn = card.querySelector('#sc-np-fix-btn');
+    // setProperty + important: tv.css declares this button's display !important.
+    fixBtn.style.setProperty('display', (opts.showProgress !== false && movieState.lastMovieTitle) ? 'inline-flex' : 'none', 'important');
 
     // IMDb/Letterboxd/Wikipedia links -- phone/tablet only, never on TV (2026-08-28: was a
     // user setting, now just hardcoded by device -- a TV remote has no real use for a link
